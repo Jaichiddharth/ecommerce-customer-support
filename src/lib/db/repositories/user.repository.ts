@@ -64,7 +64,7 @@ export class UserRepository {
     firebaseIdToken: string;
     firebaseGcmToken?: string;
   }): Promise<User> {
-    const [created] = await db
+    const [upserted] = await db
       .insert(users)
       .values({
         organizationId: data.organizationId,
@@ -77,9 +77,21 @@ export class UserRepository {
         firebaseIdToken: data.firebaseIdToken,
         firebaseGcmToken: data.firebaseGcmToken || "pending_fcm_token",
       })
+      .onConflictDoUpdate({
+        target: [users.organizationId, users.email],
+        set: {
+          // Link the (possibly new) Firebase UID and refresh mutable fields
+          firebaseIdToken: data.firebaseIdToken,
+          ...(data.name ? { name: data.name } : {}),
+          ...(data.avatarUrl !== undefined ? { avatarUrl: data.avatarUrl || null } : {}),
+          ...(data.firebaseGcmToken ? { firebaseGcmToken: data.firebaseGcmToken } : {}),
+          isOnline: data.isOnline ?? true,
+          updatedAt: new Date(),
+        },
+      })
       .returning();
 
-    return created;
+    return upserted;
   }
 
   /**

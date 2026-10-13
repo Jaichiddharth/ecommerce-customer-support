@@ -10,6 +10,7 @@ import {
   signOut,
   onAuthStateChanged,
   updateProfile,
+  sendEmailVerification,
 } from 'firebase/auth';
 import axios from 'axios';
 import { auth, googleProvider } from '../lib/firebase/config';
@@ -40,6 +41,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
   syncDbUser: (currentUser: User) => Promise<DbUser | null>;
+  resendVerificationEmail: (email: string, password: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -74,7 +76,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Force refresh the token so custom claims (organizationId, userId) are immediately available in the token
         try {
           await currentUser.getIdToken(true);
-        } catch {}
+        } catch { }
         return response.data.user;
       }
       return null;
@@ -91,6 +93,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(
       auth,
       async (currentUser) => {
+        if (currentUser && !currentUser.emailVerified) {
+          const isEmailPasswordUser = currentUser.providerData.some(
+            (p) => p.providerId === 'password'
+          );
+          if (isEmailPasswordUser) {
+            await signOut(auth);
+            setUser(null);
+            setDbUser(null);
+            setLoading(false);
+            return;
+          }
+        }
+
         setUser(currentUser);
         if (currentUser && currentUser.email) {
           await syncDbUser(currentUser);
@@ -117,16 +132,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const loginWithEmail = async (email: string, password: string) => {
     try {
       const result = await signInWithEmailAndPassword(auth, email, password);
+      if (!result.user.emailVerified) {
+        await signOut(auth);
+        const err: any = new Error('Please verify your email before signing in. Check your inbox for the verification link.');
+        err.code = 'auth/email-not-verified';
+        throw err;
+      }
       if (result.user) {
         await syncDbUser(result.user);
       }
       return result;
     } catch (err: any) {
-      const msg = getFirebaseAuthErrorMessage(err);
+      const msg = err.code === 'auth/email-not-verified'
+        ? err.message
+        : getFirebaseAuthErrorMessage(err);
       clientLogger.warn('AuthContext.loginWithEmail', msg, { code: err?.code });
-      gooeyToast.error('Login failed', {
-        description: msg,
-      });
+      if (err.code !== 'auth/email-not-verified') {
+        gooeyToast.error('Login failed', { description: msg });
+      }
       throw err;
     }
   };
@@ -136,18 +159,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const result = await createUserWithEmailAndPassword(auth, email, password);
       if (displayName && result.user) {
         await updateProfile(result.user, { displayName });
-        setUser({ ...result.user, displayName });
       }
-      if (result.user) {
-        await syncDbUser(result.user);
-      }
-      return result;
+      await sendEmailVerification(result.user);
+      await signOut(auth);
+      const signal: any = new Error('EMAIL_VERIFICATION_SENT');
+      signal.code = 'auth/email-verification-sent';
+      throw signal;
     } catch (err: any) {
+      if (err.code === 'auth/email-verification-sent') {
+        throw err;
+      }
       const msg = getFirebaseAuthErrorMessage(err);
       clientLogger.warn('AuthContext.signupWithEmail', msg, { code: err?.code });
-      gooeyToast.error('Sign up failed', {
-        description: msg,
-      });
+      gooeyToast.error('Sign up failed', { description: msg });
+      throw err;
+    }
+  };
+
+  const resendVerificationEmail = async (email: string, password: string) => {
+    try {
+      const result = await signInWithEmailAndPassword(auth, email, password);
+      if (!result.user.emailVerified) {
+        await sendEmailVerification(result.user);
+        await signOut(auth);
+        gooeyToast.success('Email sent', { description: 'A new verification link has been sent to your inbox.' });
+      }
+    } catch (err: any) {
+      const msg = getFirebaseAuthErrorMessage(err);
+      clientLogger.warn('AuthContext.resendVerificationEmail', msg, { code: err?.code });
+      gooeyToast.error('Could not resend email', { description: msg });
       throw err;
     }
   };
@@ -207,6 +247,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logout,
         getIdToken,
         syncDbUser,
+        resendVerificationEmail,
         clearError,
       }}
     >

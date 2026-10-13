@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
-import { Eye, EyeOff, Loader2, AlertCircle, MessageCircle, Sparkles } from 'lucide-react';
+import { Eye, EyeOff, Loader2, AlertCircle, MessageCircle, Sparkles, Mail, CheckCircle2 } from 'lucide-react';
 
 // lucide-react v1 dropped brand icons, so these two are drawn inline
 const InstagramIcon = ({ className }: { className?: string }) => (
@@ -28,9 +28,11 @@ const labelClass = 'block text-sm text-slate-700 mb-1.5';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, loading: authLoading, error, loginWithEmail, signupWithEmail, loginWithGoogle, clearError } = useAuth();
+  const { user, loading: authLoading, error, loginWithEmail, signupWithEmail, loginWithGoogle, resendVerificationEmail, clearError } = useAuth();
 
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [mode, setMode] = useState<'signin' | 'signup' | 'verify'>('signin');
+  const [signupEmail, setSignupEmail] = useState('');  // remembered for resend
+  const [signupPassword, setSignupPassword] = useState(''); // remembered for resend
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -40,14 +42,14 @@ export default function LoginPage() {
   const [googleSubmitting, setGoogleSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
-  // If already authenticated, redirect to main dashboard
+  // If already authenticated AND email is verified, redirect to main dashboard
   useEffect(() => {
-    if (!authLoading && user) {
+    if (!authLoading && user && user.emailVerified) {
       router.replace('/');
     }
   }, [user, authLoading, router]);
 
-  const handleModeChange = (newMode: 'signin' | 'signup') => {
+  const handleModeChange = (newMode: 'signin' | 'signup' | 'verify') => {
     setMode(newMode);
     setLocalError(null);
     clearError();
@@ -77,14 +79,32 @@ export default function LoginPage() {
     try {
       if (mode === 'signin') {
         await loginWithEmail(email.trim(), password);
+        router.replace('/');
       } else {
+        // Remember credentials so the resend button can re-authenticate
+        setSignupEmail(email.trim());
+        setSignupPassword(password);
         await signupWithEmail(email.trim(), password, name.trim());
+        router.replace('/');
       }
-      router.replace('/');
     } catch (err: any) {
-      // Error handled by AuthContext
+      if (err.code === 'auth/email-verification-sent') {
+        // Expected path — show the verify screen
+        setMode('verify');
+      } else if (err.code === 'auth/email-not-verified') {
+        setLocalError(err.message);
+      }
+      // All other errors are already handled by AuthContext (toast + error state)
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleResend = async () => {
+    try {
+      await resendVerificationEmail(signupEmail, signupPassword);
+    } catch {
+      // Error already toasted by AuthContext
     }
   };
 
@@ -104,6 +124,7 @@ export default function LoginPage() {
 
   const activeError = localError || error;
   const isSignin = mode === 'signin';
+  const isVerify = mode === 'verify';
 
   return (
     <div className="h-full w-full flex bg-white font-sans text-slate-900">
@@ -202,169 +223,210 @@ export default function LoginPage() {
               <span className="text-lg font-bold tracking-tight text-slate-900">UnoCX</span>
             </div>
 
-            {/* Title & Subtitle */}
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-              {isSignin ? 'Sign in' : 'Create your account'}
-            </h1>
-            <p className="mt-2 text-[15px] text-slate-500">
-              {isSignin ? 'Welcome back. Use your work email.' : 'Start your 14-day trial. Use your work email.'}
-            </p>
-
-            {/* Error Message Box */}
-            {activeError && (
-              <div className="mt-6 p-3 bg-rose-50 border border-rose-200 rounded-md flex items-start gap-2 text-sm text-rose-700 animate-in fade-in duration-150">
-                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-                <div className="flex-1">{activeError}</div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLocalError(null);
-                    clearError();
-                  }}
-                  className="text-rose-400 hover:text-rose-700 font-bold ml-1 cursor-pointer"
-                  aria-label="Dismiss error"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-
-            {/* Auth Form */}
-            <form onSubmit={handleEmailSubmit} className="mt-7 space-y-5">
-              {!isSignin && (
-                <div>
-                  <label htmlFor="name" className={labelClass}>
-                    Full name
-                  </label>
-                  <input
-                    id="name"
-                    type="text"
-                    required
-                    placeholder='noctylle'
-                    autoComplete="name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className={inputClass}
-                  />
+            {/* ── VERIFY EMAIL SCREEN ─────────────────────────────── */}
+            {isVerify ? (
+              <div className="text-center">
+                <div className="mx-auto mb-6 w-16 h-16 rounded-full bg-indigo-50 flex items-center justify-center">
+                  <Mail className="w-8 h-8 text-[#3440a8]" />
                 </div>
-              )}
+                <h1 className="text-2xl font-bold tracking-tight text-slate-900">Check your inbox</h1>
+                <p className="mt-3 text-[15px] text-slate-500 leading-relaxed">
+                  We sent a verification link to{' '}
+                  <span className="font-semibold text-slate-700">{signupEmail}</span>.
+                  Click the link in the email to activate your account.
+                </p>
 
-              <div>
-                <label htmlFor="email" className={labelClass}>
-                  Work email
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  placeholder='example@noctyle.com'
-                  required
-                  autoComplete="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className={inputClass}
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label htmlFor="password" aria-placeholder="password" className="text-sm text-slate-700">
-                    Password
-                  </label>
-                  {isSignin && (
-                    <button
-                      type="button"
-                      onClick={() => alert('Please contact administrator to reset credentials.')}
-                      className="text-sm font-semibold text-[#3440a8] hover:text-[#283388] transition-colors cursor-pointer"
-                    >
-                      Forgot password?
-                    </button>
-                  )}
+                <div className="mt-8 p-4 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-3 text-left">
+                  <CheckCircle2 className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <p className="text-[13px] text-amber-800">
+                    Once verified, come back here and sign in with your email and password.
+                  </p>
                 </div>
-                <div className="relative">
-                  <input
-                    id="password"
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    autoComplete={isSignin ? 'current-password' : 'new-password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className={`${inputClass} pr-10`}
-                  />
+
+                <div className="mt-6 space-y-3">
                   <button
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="p-1 text-slate-400 hover:text-slate-600 absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer transition-colors"
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    onClick={() => handleModeChange('signin')}
+                    className="w-full h-11 bg-[#3440a8] hover:bg-[#2c3794] active:bg-[#283388] text-white font-semibold text-base rounded-md transition-colors cursor-pointer flex items-center justify-center"
                   >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    Go to Sign in
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResend}
+                    className="w-full h-11 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-800 font-medium text-[15px] rounded-md border border-slate-200 transition-colors cursor-pointer"
+                  >
+                    Resend verification email
                   </button>
                 </div>
               </div>
+            ) : (
+              <>
+                {/* Title & Subtitle */}
+                <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+                  {isSignin ? 'Sign in' : 'Create your account'}
+                </h1>
+                <p className="mt-2 text-[15px] text-slate-500">
+                  {isSignin ? 'Welcome back. Use your work email.' : 'Start your 14-day trial. Use your work email.'}
+                </p>
 
-              {isSignin && (
-                <label className="flex items-center gap-3 cursor-pointer w-fit">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="w-[18px] h-[18px] accent-[#3440a8] cursor-pointer"
-                  />
-                  <span className="text-[15px] text-slate-800">Keep me signed in on this device</span>
-                </label>
-              )}
-
-              {/* Submit Button */}
-              <button
-                type="submit"
-                disabled={submitting || googleSubmitting}
-                className="w-full h-11 bg-[#3440a8] hover:bg-[#2c3794] active:bg-[#283388] text-white font-semibold text-base rounded-md transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin text-white" />
-                    <span>{isSignin ? 'Signing in...' : 'Creating account...'}</span>
-                  </>
-                ) : (
-                  <span>{isSignin ? 'Sign in' : 'Create account'}</span>
+                {/* Error Message Box */}
+                {activeError && (
+                  <div className="mt-6 p-3 bg-rose-50 border border-rose-200 rounded-md flex items-start gap-2 text-sm text-rose-700 animate-in fade-in duration-150">
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                    <div className="flex-1">{activeError}</div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLocalError(null);
+                        clearError();
+                      }}
+                      className="text-rose-400 hover:text-rose-700 font-bold ml-1 cursor-pointer"
+                      aria-label="Dismiss error"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 )}
-              </button>
-            </form>
 
-            {/* OR Divider */}
-            <div className="flex items-center gap-6 py-7">
-              <div className="flex-1 border-t border-slate-200" />
-              <span className="text-sm text-slate-500">or</span>
-              <div className="flex-1 border-t border-slate-200" />
-            </div>
+                {/* Auth Form */}
+                <form onSubmit={handleEmailSubmit} className="mt-7 space-y-5">
+                  {!isSignin && (
+                    <div>
+                      <label htmlFor="name" className={labelClass}>
+                        Full name
+                      </label>
+                      <input
+                        id="name"
+                        type="text"
+                        required
+                        placeholder='noctylle'
+                        autoComplete="name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        className={inputClass}
+                      />
+                    </div>
+                  )}
 
-            {/* Continue with Google */}
-            <button
-              type="button"
-              onClick={handleGoogleSignIn}
-              disabled={googleSubmitting || submitting}
-              className="w-full h-11 flex items-center justify-center gap-4 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-900 rounded-md text-base font-semibold border border-slate-300 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
-            >
-              {googleSubmitting ? (
-                <Loader2 className="w-5 h-5 animate-spin text-[#3440a8]" />
-              ) : (
-                <span className="w-5 h-5 rounded-full border border-slate-300 flex items-center justify-center text-[11px] font-bold text-[#4285f4] leading-none">
-                  G
-                </span>
-              )}
-              <span>{googleSubmitting ? 'Signing in with Google...' : 'Continue with Google'}</span>
-            </button>
+                  <div>
+                    <label htmlFor="email" className={labelClass}>
+                      Work email
+                    </label>
+                    <input
+                      id="email"
+                      type="email"
+                      placeholder='example@noctyle.com'
+                      required
+                      autoComplete="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className={inputClass}
+                    />
+                  </div>
 
-            {/* Mode Switch */}
-            <p className="mt-9 text-[15px] text-slate-700">
-              {isSignin ? 'New to UnoCX?' : 'Already have an account?'}
-              <button
-                type="button"
-                onClick={() => handleModeChange(isSignin ? 'signup' : 'signin')}
-                className="ml-2 font-bold text-[#3440a8] hover:text-[#283388] hover:underline cursor-pointer"
-              >
-                {isSignin ? 'Start a 14-day trial' : 'Sign in'}
-              </button>
-            </p>
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label htmlFor="password" aria-placeholder="password" className="text-sm text-slate-700">
+                        Password
+                      </label>
+                      {isSignin && (
+                        <button
+                          type="button"
+                          onClick={() => alert('Please contact administrator to reset credentials.')}
+                          className="text-sm font-semibold text-[#3440a8] hover:text-[#283388] transition-colors cursor-pointer"
+                        >
+                          Forgot password?
+                        </button>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <input
+                        id="password"
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        autoComplete={isSignin ? 'current-password' : 'new-password'}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className={`${inputClass} pr-10`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="p-1 text-slate-400 hover:text-slate-600 absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer transition-colors"
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {isSignin && (
+                    <label className="flex items-center gap-3 cursor-pointer w-fit">
+                      <input
+                        type="checkbox"
+                        checked={rememberMe}
+                        onChange={(e) => setRememberMe(e.target.checked)}
+                        className="w-[18px] h-[18px] accent-[#3440a8] cursor-pointer"
+                      />
+                      <span className="text-[15px] text-slate-800">Keep me signed in on this device</span>
+                    </label>
+                  )}
+
+                  {/* Submit Button */}
+                  <button
+                    type="submit"
+                    disabled={submitting || googleSubmitting}
+                    className="w-full h-11 bg-[#3440a8] hover:bg-[#2c3794] active:bg-[#283388] text-white font-semibold text-base rounded-md transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    {submitting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" />
+                        <span>{isSignin ? 'Signing in...' : 'Creating account...'}</span>
+                      </>
+                    ) : (
+                      <span>{isSignin ? 'Sign in' : 'Create account'}</span>
+                    )}
+                  </button>
+                </form>
+
+                {/* OR Divider */}
+                <div className="flex items-center gap-6 py-7">
+                  <div className="flex-1 border-t border-slate-200" />
+                  <span className="text-sm text-slate-500">or</span>
+                  <div className="flex-1 border-t border-slate-200" />
+                </div>
+
+                {/* Continue with Google */}
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  disabled={googleSubmitting || submitting}
+                  className="w-full h-11 flex items-center justify-center gap-4 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-900 rounded-md text-base font-semibold border border-slate-300 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {googleSubmitting ? (
+                    <Loader2 className="w-5 h-5 animate-spin text-[#3440a8]" />
+                  ) : (
+                    <span className="w-5 h-5 rounded-full border border-slate-300 flex items-center justify-center text-[11px] font-bold text-[#4285f4] leading-none">
+                      G
+                    </span>
+                  )}
+                  <span>{googleSubmitting ? 'Signing in with Google...' : 'Continue with Google'}</span>
+                </button>
+
+                {/* Mode Switch */}
+                <p className="mt-9 text-[15px] text-slate-700">
+                  {isSignin ? 'New to UnoCX?' : 'Already have an account?'}
+                  <button
+                    type="button"
+                    onClick={() => handleModeChange(isSignin ? 'signup' : 'signin')}
+                    className="ml-2 font-bold text-[#3440a8] hover:text-[#283388] hover:underline cursor-pointer"
+                  >
+                    {isSignin ? 'Create an account' : 'Sign in'}
+                  </button>
+                </p>
+              </>
+            )}
           </div>
         </div>
 
