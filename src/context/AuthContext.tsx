@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import {
   User,
   UserCredential,
@@ -10,6 +10,7 @@ import {
   signOut,
   onAuthStateChanged,
   updateProfile,
+  sendEmailVerification,
 } from 'firebase/auth';
 import axios from 'axios';
 import { auth, googleProvider } from '../lib/firebase/config';
@@ -34,12 +35,13 @@ interface AuthContextType {
   dbUser: DbUser | null;
   loading: boolean;
   error: string | null;
-  loginWithEmail: (email: string, password: string) => Promise<UserCredential>;
-  signupWithEmail: (email: string, password: string, displayName?: string) => Promise<UserCredential>;
-  loginWithGoogle: () => Promise<UserCredential>;
+  loginWithEmail: (email: string, password: string, workspaceSlug?: string) => Promise<UserCredential>;
+  signupWithEmail: (email: string, password: string, displayName?: string, workspaceSlug?: string) => Promise<UserCredential>;
+  loginWithGoogle: (workspaceSlug?: string) => Promise<UserCredential>;
   logout: () => Promise<void>;
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
-  syncDbUser: (currentUser: User) => Promise<DbUser | null>;
+  syncDbUser: (currentUser: User, workspaceSlug?: string) => Promise<DbUser | null>;
+  resendVerificationEmail: (email: string, password: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -51,35 +53,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-
+  /**
+   * Guards onAuthStateChanged from signing out an unverified user while
+   * signupWithEmail is mid-flight creating the org + DB record.
+   */
+  const isSigningUp = useRef(false);
 
   /**
-   * Syncs the authenticated Firebase user with the PostgreSQL `users` table
+   * Syncs the authenticated Firebase user with the PostgreSQL `users` table.
+   * Pass workspaceSlug to scope the user to a specific workspace.
    */
-  const syncDbUser = useCallback(async (currentUser: User): Promise<DbUser | null> => {
+  const syncDbUser = useCallback(async (currentUser: User, workspaceSlug?: string): Promise<DbUser | null> => {
     try {
-      // Identity, organization and role are resolved server-side from the verified ID token
       const idToken = await currentUser.getIdToken();
       const response = await axios.post(
         '/api/auth/sync',
         {
           name: currentUser.displayName || currentUser.email?.split('@')[0] || 'Team Member',
           avatarUrl: currentUser.photoURL || null,
+          ...(workspaceSlug ? { workspaceSlug } : {}),
         },
         { headers: { Authorization: `Bearer ${idToken}` } }
       );
 
       if (response.data?.success && response.data?.user) {
         setDbUser(response.data.user);
-        // Force refresh the token so custom claims (organizationId, userId) are immediately available in the token
         try {
           await currentUser.getIdToken(true);
-        } catch {}
+        } catch { }
         return response.data.user;
       }
       return null;
     } catch (syncErr) {
-      // Without a synced DB user every API call would fail — tell the user why
       const apiError = notifyError(syncErr, { where: 'AuthContext.syncDbUser', title: "Couldn't load your account" });
       setError(apiError.message);
       return null;
@@ -91,6 +96,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(
       auth,
       async (currentUser) => {
+        if (currentUser && !currentUser.emailVerified && !isSigningUp.current) {
+          const isEmailPasswordUser = currentUser.providerData.some(
+            (p) => p.providerId === 'password'
+          );
+          if (isEmailPasswordUser) {
+            await signOut(auth);
+            setUser(null);
+            setDbUser(null);
+            setLoading(false);
+            return;
+          }
+        }
+
         setUser(currentUser);
         if (currentUser && currentUser.email) {
           await syncDbUser(currentUser);
@@ -114,57 +132,89 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const clearError = () => setError(null);
 
-  const loginWithEmail = async (email: string, password: string) => {
+  const loginWithEmail = async (email: string, password: string, workspaceSlug?: string) => {
     try {
       const result = await signInWithEmailAndPassword(auth, email, password);
+      if (!result.user.emailVerified) {
+        await signOut(auth);
+        const err: any = new Error('Please verify your email before signing in. Check your inbox for the verification link.');
+        err.code = 'auth/email-not-verified';
+        throw err;
+      }
       if (result.user) {
-        await syncDbUser(result.user);
+        await syncDbUser(result.user, workspaceSlug);
       }
       return result;
     } catch (err: any) {
-      const msg = getFirebaseAuthErrorMessage(err);
+      const msg = err.code === 'auth/email-not-verified'
+        ? err.message
+        : getFirebaseAuthErrorMessage(err);
       clientLogger.warn('AuthContext.loginWithEmail', msg, { code: err?.code });
-      gooeyToast.error('Login failed', {
-        description: msg,
-      });
+      if (err.code !== 'auth/email-not-verified') {
+        gooeyToast.error('Login failed', { description: msg });
+      }
       throw err;
     }
   };
 
-  const signupWithEmail = async (email: string, password: string, displayName?: string) => {
+  const signupWithEmail = async (email: string, password: string, displayName?: string, workspaceSlug?: string) => {
+    isSigningUp.current = true;
     try {
       const result = await createUserWithEmailAndPassword(auth, email, password);
       if (displayName && result.user) {
         await updateProfile(result.user, { displayName });
-        setUser({ ...result.user, displayName });
       }
-      if (result.user) {
-        await syncDbUser(result.user);
-      }
-      return result;
+
+      // Create the org + DB user NOW while the token is valid.
+      // workspaceSlug tells syncUser to create a new workspace (signup path).
+      // isSigningUp = true suppresses onAuthStateChanged from kicking the user out mid-flight.
+      await syncDbUser(result.user, workspaceSlug);
+
+      await sendEmailVerification(result.user);
+      await signOut(auth);
+      const signal: any = new Error('EMAIL_VERIFICATION_SENT');
+      signal.code = 'auth/email-verification-sent';
+      throw signal;
     } catch (err: any) {
+      if (err.code === 'auth/email-verification-sent') {
+        throw err;
+      }
       const msg = getFirebaseAuthErrorMessage(err);
       clientLogger.warn('AuthContext.signupWithEmail', msg, { code: err?.code });
-      gooeyToast.error('Sign up failed', {
-        description: msg,
-      });
+      gooeyToast.error('Sign up failed', { description: msg });
+      throw err;
+    } finally {
+      isSigningUp.current = false;
+    }
+  };
+
+  const resendVerificationEmail = async (email: string, password: string) => {
+    try {
+      const result = await signInWithEmailAndPassword(auth, email, password);
+      if (!result.user.emailVerified) {
+        await sendEmailVerification(result.user);
+        await signOut(auth);
+        gooeyToast.success('Email sent', { description: 'A new verification link has been sent to your inbox.' });
+      }
+    } catch (err: any) {
+      const msg = getFirebaseAuthErrorMessage(err);
+      clientLogger.warn('AuthContext.resendVerificationEmail', msg, { code: err?.code });
+      gooeyToast.error('Could not resend email', { description: msg });
       throw err;
     }
   };
 
-  const loginWithGoogle = async () => {
+  const loginWithGoogle = async (workspaceSlug?: string) => {
     try {
       const result = await signInWithPopup(auth, googleProvider);
       if (result.user) {
-        await syncDbUser(result.user);
+        await syncDbUser(result.user, workspaceSlug);
       }
       return result;
     } catch (err: any) {
       const msg = getFirebaseAuthErrorMessage(err);
       clientLogger.warn('AuthContext.loginWithGoogle', msg, { code: err?.code });
-      gooeyToast.error('Google sign-in failed', {
-        description: msg,
-      });
+      gooeyToast.error('Google sign-in failed', { description: msg });
       throw err;
     }
   };
@@ -207,6 +257,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logout,
         getIdToken,
         syncDbUser,
+        resendVerificationEmail,
         clearError,
       }}
     >

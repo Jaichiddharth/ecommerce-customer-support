@@ -11,7 +11,7 @@ const log = createLogger("auth.sync");
  * POST /api/auth/sync
  * Registers / refreshes the signed-in Firebase user in PostgreSQL.
  * Identity (uid, email) comes from the verified ID token; organization and role are decided by the server.
- * Body (optional): { name, avatarUrl, firebaseGcmToken }
+ * Body (optional): { name, avatarUrl, firebaseGcmToken, workspaceSlug }
  */
 export const POST = apiHandler(async (req: NextRequest) => {
   // Throws AUTH_TOKEN_MISSING / AUTH_TOKEN_EXPIRED / AUTH_TOKEN_INVALID (401)
@@ -19,13 +19,18 @@ export const POST = apiHandler(async (req: NextRequest) => {
 
   // The body is optional, so a missing/invalid one is treated as empty
   const body = await req.json().catch(() => ({}));
-  const { name, avatarUrl, firebaseGcmToken } = body ?? {};
+  const { name, avatarUrl, firebaseGcmToken, workspaceSlug } = body ?? {};
 
-  const user = await userService.syncUser(decodedToken, {
-    name: typeof name === "string" ? name.trim() : undefined,
-    avatarUrl: typeof avatarUrl === "string" ? avatarUrl : avatarUrl === null ? null : undefined,
-    firebaseGcmToken: typeof firebaseGcmToken === "string" ? firebaseGcmToken : undefined,
-  });
+  const user = await userService.syncUser(
+    decodedToken,
+    {
+      name: typeof name === "string" ? name.trim() : undefined,
+      avatarUrl: typeof avatarUrl === "string" ? avatarUrl : avatarUrl === null ? null : undefined,
+      firebaseGcmToken: typeof firebaseGcmToken === "string" ? firebaseGcmToken : undefined,
+    },
+    typeof workspaceSlug === "string" ? workspaceSlug.trim().toLowerCase() : undefined,
+  );
+
   setRequestContext({ userId: user.id, orgId: user.organizationId });
 
   // Set custom user claims in Firebase so every token automatically carries organizationId and userId
