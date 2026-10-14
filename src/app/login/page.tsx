@@ -6,7 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import {
   Eye, EyeOff, Loader2, AlertCircle,
   MessageCircle, Sparkles, Mail, CheckCircle2,
-  Building2, ArrowLeft, CheckCheck,
+  Building2, ArrowLeft, CheckCheck, RefreshCw,
 } from 'lucide-react';
 
 // ─── Inline brand icons ────────────────────────────────────────────────────
@@ -25,19 +25,25 @@ const MessengerIcon = ({ className }: { className?: string }) => (
 );
 
 // ─── Shared styles ─────────────────────────────────────────────────────────
-const inp = 'w-full h-10 px-3 text-[15px] bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-[#3440a8] focus:ring-1 focus:ring-[#3440a8] transition-colors';
-const lbl = 'block text-[13px] font-medium text-slate-600 mb-1';
+const inp = 'w-full h-9 px-3 text-[14px] bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-[#3440a8] focus:ring-1 focus:ring-[#3440a8] transition-colors';
+const lbl = 'block text-[12px] font-medium text-slate-600 mb-0.5';
 
 function toSlug(s: string) {
   return s.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 }
 
+/** Returns true if password has ≥8 chars, ≥1 letter, ≥1 digit */
+function validatePassword(pw: string): { ok: boolean; msg: string } {
+  if (pw.length < 8) return { ok: false, msg: 'Password must be at least 8 characters.' };
+  if (!/[a-zA-Z]/.test(pw)) return { ok: false, msg: 'Password must contain at least one letter.' };
+  if (!/[0-9]/.test(pw)) return { ok: false, msg: 'Password must contain at least one number.' };
+  return { ok: true, msg: '' };
+}
+
 type Mode = 'signin' | 'signup-ws' | 'signup-creds' | 'verify';
-// For sign-up, workspace is NEW — we only need the slug (org doesn't exist yet)
 interface WorkspaceInfo { slug: string; displayName: string }
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
-
 function BrandPanel() {
   return (
     <div className="hidden lg:flex lg:w-[44%] shrink-0 flex-col bg-[#3440a8] text-white px-10 pt-10 pb-10">
@@ -104,7 +110,7 @@ function BrandPanel() {
 function GoogleBtn({ onClick, loading, label }: { onClick: () => void; loading: boolean; label: string }) {
   return (
     <button type="button" onClick={onClick} disabled={loading}
-      className="w-full h-10 flex items-center justify-center gap-3 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-800 rounded-lg text-[14px] font-semibold border border-slate-300 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer">
+      className="w-full h-10 flex items-center justify-center gap-3 bg-white hover:bg-slate-50 text-slate-800 rounded-lg text-[14px] font-semibold border border-slate-300 transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer">
       {loading
         ? <Loader2 className="w-4 h-4 animate-spin text-[#3440a8]" />
         : <span className="w-[18px] h-[18px] rounded-full border border-slate-200 bg-white flex items-center justify-center text-[10px] font-bold text-[#4285f4] leading-none shadow-sm">G</span>
@@ -116,7 +122,7 @@ function GoogleBtn({ onClick, loading, label }: { onClick: () => void; loading: 
 
 function OrDivider() {
   return (
-    <div className="flex items-center gap-4 my-4">
+    <div className="flex items-center gap-4 my-2">
       <div className="flex-1 border-t border-slate-200" />
       <span className="text-[12px] text-slate-400 font-medium">or</span>
       <div className="flex-1 border-t border-slate-200" />
@@ -134,21 +140,46 @@ function ErrorBanner({ msg, onDismiss }: { msg: string; onDismiss: () => void })
   );
 }
 
-/** Step indicator dots shown during signup flow */
 function SignupSteps({ step }: { step: 1 | 2 }) {
   return (
-    <div className="flex items-center gap-2 mb-6">
+    <div className="flex items-center gap-2 mb-5">
       {[1, 2].map(n => (
         <React.Fragment key={n}>
           <div className={`flex items-center justify-center w-6 h-6 rounded-full text-[11px] font-bold transition-colors ${n < step ? 'bg-emerald-500 text-white' : n === step ? 'bg-[#3440a8] text-white' : 'bg-slate-200 text-slate-500'}`}>
             {n < step ? <CheckCheck className="w-3.5 h-3.5" /> : n}
           </div>
           <span className={`text-[12px] font-medium ${n === step ? 'text-slate-800' : 'text-slate-400'}`}>
-            {n === 1 ? 'Workspace' : 'Your details'}
+            {n === 1 ? 'Company' : 'Your details'}
           </span>
           {n < 2 && <div className="flex-1 h-px bg-slate-200 mx-1" />}
         </React.Fragment>
       ))}
+    </div>
+  );
+}
+
+/** Password strength indicator bar */
+function PwStrengthBar({ pw }: { pw: string }) {
+  if (!pw) return null;
+  const hasLen = pw.length >= 8;
+  const hasLetter = /[a-zA-Z]/.test(pw);
+  const hasNum = /[0-9]/.test(pw);
+  const score = [hasLen, hasLetter, hasNum].filter(Boolean).length;
+  const colors = ['bg-rose-400', 'bg-amber-400', 'bg-emerald-500'];
+  const labels = ['Weak', 'Almost', 'Strong'];
+  return (
+    <div className="mt-1.5">
+      <div className="flex gap-1">
+        {[0, 1, 2].map(i => (
+          <div key={i} className={`h-1 flex-1 rounded-full transition-colors ${i < score ? colors[score - 1] : 'bg-slate-200'}`} />
+        ))}
+      </div>
+      <p className={`mt-0.5 text-[11px] font-medium ${score === 3 ? 'text-emerald-600' : score === 2 ? 'text-amber-600' : 'text-rose-500'}`}>
+        {pw.length > 0 ? labels[score - 1] || 'Weak' : ''}
+        {!hasLen && pw.length > 0 && ' · 8+ chars required'}
+        {hasLen && !hasLetter && ' · add a letter'}
+        {hasLen && !hasNum && ' · add a number'}
+      </p>
     </div>
   );
 }
@@ -170,16 +201,20 @@ export default function LoginPage() {
   const [showPw, setShowPw] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
 
-  // Sign-up — workspace step
-  const [wsInput, setWsInput] = useState('');
+  // Sign-up — company step
+  const [companyInput, setCompanyInput] = useState('');
   const [wsInfo, setWsInfo] = useState<WorkspaceInfo | null>(null);
   const [wsChecking, setWsChecking] = useState(false);
+  const [suggestNote, setSuggestNote] = useState<string | null>(null); // inline amber hint
 
   // Sign-up — credentials step
-  const [suName, setSuName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [suEmail, setSuEmail] = useState('');
   const [suPassword, setSuPassword] = useState('');
+  const [suConfirm, setSuConfirm] = useState('');
   const [showSuPw, setShowSuPw] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   // Verify state
   const [verifyEmail, setVerifyEmail] = useState('');
@@ -190,20 +225,29 @@ export default function LoginPage() {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
-  const wsRef = useRef<HTMLInputElement>(null);
+  const companyRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!authLoading && user && user.emailVerified) router.replace('/');
   }, [user, authLoading, router]);
 
   useEffect(() => {
-    if (mode === 'signup-ws') setTimeout(() => wsRef.current?.focus(), 50);
+    if (mode === 'signup-ws') setTimeout(() => companyRef.current?.focus(), 50);
   }, [mode]);
 
   const resetErr = () => { setLocalError(null); clearError(); };
-  const go = (m: Mode) => { setMode(m); resetErr(); };
+  const go = (m: Mode) => { setMode(m); resetErr(); setSuggestNote(null); };
 
-  // ── Sign in ────────────────────────────────────────────────────────────────
+  // ─── Fetch availability of a single slug ──────────────────────────────────
+  const checkSlug = async (slug: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/auth/workspace?slug=${encodeURIComponent(slug)}`);
+      const data = await res.json();
+      return !!data.available;
+    } catch { return false; }
+  };
+
+  // ─── Sign in ───────────────────────────────────────────────────────────────
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     resetErr();
@@ -224,51 +268,66 @@ export default function LoginPage() {
     catch { } finally { setGoogleLoading(false); }
   };
 
-  // ── Sign-up step 1: check workspace is AVAILABLE (must not exist yet) ────
-  const handleWorkspaceContinue = async (e: React.FormEvent) => {
+  // ─── Sign-up step 1: company name → slug → availability check ─────────────
+  const handleCompanyContinue = async (e: React.FormEvent) => {
     e.preventDefault();
     resetErr();
-    const slug = toSlug(wsInput);
-    if (!slug) return setLocalError('Please enter a workspace name.');
+    setSuggestNote(null);
+    const slug = toSlug(companyInput);
+    if (!slug) return setLocalError('Please enter your company name.');
     setWsChecking(true);
     try {
-      const res = await fetch(`/api/auth/workspace?slug=${encodeURIComponent(slug)}`);
-      const data = await res.json();
-      if (!data.available) {
-        // Slug already exists in DB — cannot use it for a new workspace
-        setLocalError(`"${slug}" is already taken. Please choose a different workspace name.`);
+      const available = await checkSlug(slug);
+      if (available) {
+        setWsInfo({ slug, displayName: companyInput.trim() });
+        go('signup-creds');
         return;
       }
-      // Slug is free — derive a display name from it
-      const displayName = slug.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-      setWsInfo({ slug, displayName });
-      go('signup-creds');
+
+      // Slug is taken — find the first available alternative (-1, -2, -3)
+      for (let n = 1; n <= 3; n++) {
+        const candidate = `${slug}-${n}`;
+        const candidateAvailable = await checkSlug(candidate);
+        if (candidateAvailable) {
+          // Put the suggestion directly in the input field
+          setCompanyInput(candidate);
+          setSuggestNote(`"${slug}" was taken — we suggested a unique name. Edit it or click Continue.`);
+          return;
+        }
+      }
+      // All three taken too
+      setLocalError(`"${slug}" and similar names are taken. Please try a different company name.`);
     } catch {
       setLocalError('Could not reach the server. Please try again.');
     } finally { setWsChecking(false); }
   };
 
-  // ── Sign-up step 2: create account (email/password) ───────────────────────
+  // ─── Sign-up step 2: create account (email/password) ──────────────────────
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     resetErr();
-    if (!suName.trim()) return setLocalError('Please enter your full name.');
+    if (!firstName.trim()) return setLocalError('Please enter your first name.');
+    if (!lastName.trim()) return setLocalError('Please enter your last name.');
     if (!suEmail.trim()) return setLocalError('Please enter your work email.');
-    if (suPassword.length < 6) return setLocalError('Password must be at least 6 characters.');
+
+    const pwCheck = validatePassword(suPassword);
+    if (!pwCheck.ok) return setLocalError(pwCheck.msg);
+    if (suPassword !== suConfirm) return setLocalError('Passwords do not match.');
     if (!wsInfo) return go('signup-ws');
 
+    const displayName = `${firstName.trim()} ${lastName.trim()}`;
     setSubmitting(true);
     try {
       setVerifyEmail(suEmail.trim());
       setVerifyPassword(suPassword);
-      await signupWithEmail(suEmail.trim(), suPassword, suName.trim(), wsInfo.slug);
+      await signupWithEmail(suEmail.trim(), suPassword, displayName, wsInfo.slug);
       router.replace('/');
     } catch (err: any) {
       if (err.code === 'auth/email-verification-sent') go('verify');
     } finally { setSubmitting(false); }
   };
 
-  // ── Sign-up step 2: Google ─────────────────────────────────────────────────
+  // ─── Sign-up step 2: Google ────────────────────────────────────────────────
   const handleGoogleSignUp = async () => {
     resetErr();
     if (!wsInfo) return go('signup-ws');
@@ -290,11 +349,11 @@ export default function LoginPage() {
 
       {/* Right panel */}
       <div className="flex-1 flex flex-col px-6 sm:px-12 h-full overflow-hidden">
-        <div className="flex-1 flex items-center justify-center">
-          <div className="w-full max-w-[360px]">
+        <div className="flex-1 flex items-center justify-center py-4">
+          <div className="w-full max-w-[380px]">
 
             {/* Mobile logo */}
-            <div className="lg:hidden flex items-center gap-2.5 mb-8">
+            <div className="lg:hidden flex items-center gap-2.5 mb-7">
               <div className="relative w-8 h-8 rounded-lg bg-[#3440a8] flex items-center justify-center">
                 <span className="text-white text-lg font-extrabold leading-none">U</span>
                 <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-emerald-400" />
@@ -362,10 +421,9 @@ export default function LoginPage() {
               </>
             )}
 
-            {/* ══ SIGN-UP STEP 1: Workspace ═════════════════════════════════ */}
+            {/* ══ SIGN-UP STEP 1: Company name ══════════════════════════════ */}
             {mode === 'signup-ws' && (
               <>
-                {/* Back button */}
                 <button type="button" onClick={() => go('signin')}
                   className="flex items-center gap-1.5 text-[13px] text-slate-500 hover:text-slate-800 cursor-pointer mb-5 transition-colors">
                   <ArrowLeft className="w-3.5 h-3.5" /> Back to sign in
@@ -373,35 +431,41 @@ export default function LoginPage() {
 
                 <SignupSteps step={1} />
 
-                <h1 className="text-[24px] font-bold tracking-tight leading-tight">Find your workspace</h1>
-                <p className="mt-1 text-[14px] text-slate-500">Enter the workspace name your team uses.</p>
+                <h1 className="text-[24px] font-bold tracking-tight leading-tight">What's your company name?</h1>
+                <p className="mt-1 text-[14px] text-slate-500">This will be your workspace on UnoCX.</p>
 
-                <form onSubmit={handleWorkspaceContinue} className="mt-5 space-y-4">
+                <form onSubmit={handleCompanyContinue} className="mt-5 space-y-4">
                   <div>
-                    <label htmlFor="ws-name" className={lbl}>Workspace name</label>
+                    <label htmlFor="co-name" className={lbl}>Company name</label>
                     <div className="relative">
                       <Building2 className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                       <input
-                        ref={wsRef}
-                        id="ws-name"
+                        ref={companyRef}
+                        id="co-name"
                         type="text"
                         required
-                        placeholder="your-company"
+                        placeholder="Acme Inc."
                         autoComplete="organization"
-                        value={wsInput}
-                        onChange={e => setWsInput(e.target.value)}
+                        value={companyInput}
+                        onChange={e => { setCompanyInput(e.target.value); setSuggestNote(null); resetErr(); }}
                         className={`${inp} pl-9`}
                       />
                     </div>
-                    {wsInput && (
+                    {companyInput && (
                       <p className="mt-1 text-[11px] text-slate-400">
-                        Will be created as: <span className="font-semibold text-slate-500">{toSlug(wsInput)}</span>
+                        Workspace slug: <span className="font-semibold text-slate-500">{toSlug(companyInput)}</span>
+                      </p>
+                    )}
+                    {/* Inline amber note when field was auto-filled with a suggestion */}
+                    {suggestNote && (
+                      <p className="mt-1.5 text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5 leading-snug">
+                        ✦ {suggestNote}
                       </p>
                     )}
                   </div>
 
                   <button type="submit" disabled={wsChecking}
-                    className="w-full h-10 bg-[#3440a8] hover:bg-[#2c3794] active:bg-[#283388] text-white font-semibold text-[14px] rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2">
+                    className="w-full h-10 bg-[#3440a8] hover:bg-[#2c3794] text-white font-semibold text-[14px] rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2">
                     {wsChecking
                       ? <><Loader2 className="w-4 h-4 animate-spin" /><span>Checking...</span></>
                       : 'Continue'}
@@ -418,44 +482,60 @@ export default function LoginPage() {
               </>
             )}
 
-            {/* ══ SIGN-UP STEP 2: Credentials ══════════════════════════════ */}
+            {/* ══ SIGN-UP STEP 2: Credentials ═══════════════════════════════ */}
             {mode === 'signup-creds' && wsInfo && (
               <>
-                {/* Back to workspace step */}
                 <button type="button" onClick={() => go('signup-ws')}
                   className="flex items-center gap-1.5 text-[13px] text-slate-500 hover:text-slate-800 cursor-pointer mb-5 transition-colors">
-                  <ArrowLeft className="w-3.5 h-3.5" /> Change workspace
+                  <ArrowLeft className="w-3.5 h-3.5" /> Change company
                 </button>
 
                 <SignupSteps step={2} />
 
-                {/* Workspace badge — green to signal it's available/new */}
-                <div className="flex items-center gap-2 mb-4 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg">
+                {/* Company badge */}
+                <div className="flex items-center gap-2 mb-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-lg">
                   <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span className="text-[13px] font-semibold text-emerald-700">{wsInfo.displayName}</span>
+                  <span className="text-[12px] font-semibold text-emerald-700">{wsInfo.displayName}</span>
                   <span className="ml-auto text-[11px] text-emerald-500 font-medium">{wsInfo.slug}</span>
                   <CheckCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                 </div>
 
-                <h1 className="text-[22px] font-bold tracking-tight leading-tight">Create your account</h1>
-                <p className="mt-0.5 text-[13px] text-slate-500">You'll be the admin of <span className="font-semibold text-slate-700">{wsInfo.displayName}</span>.</p>
+                <h1 className="text-[20px] font-bold tracking-tight leading-tight">Create your account</h1>
+                <p className="mt-0.5 text-[12px] text-slate-500">
+                  You'll be the admin of <span className="font-semibold text-slate-700">{wsInfo.displayName}</span>.
+                </p>
 
-                <form onSubmit={handleSignUp} className="mt-4 space-y-3">
-                  <div>
-                    <label htmlFor="su-name" className={lbl}>Full name</label>
-                    <input id="su-name" type="text" required autoComplete="name" placeholder="Jane Smith"
-                      value={suName} onChange={e => setSuName(e.target.value)} className={inp} />
+                <form onSubmit={handleSignUp} className="mt-3 space-y-2">
+                  {/* Name row */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label htmlFor="su-fn" className={lbl}>First name</label>
+                      <input id="su-fn" type="text" required autoComplete="given-name" placeholder="Jane"
+                        value={firstName} onChange={e => setFirstName(e.target.value)} className={inp} />
+                    </div>
+                    <div>
+                      <label htmlFor="su-ln" className={lbl}>Last name</label>
+                      <input id="su-ln" type="text" required autoComplete="family-name" placeholder="Smith"
+                        value={lastName} onChange={e => setLastName(e.target.value)} className={inp} />
+                    </div>
                   </div>
+
+                  {/* Email */}
                   <div>
                     <label htmlFor="su-email" className={lbl}>Work email</label>
                     <input id="su-email" type="email" required autoComplete="email" placeholder="you@company.com"
                       value={suEmail} onChange={e => setSuEmail(e.target.value)} className={inp} />
                   </div>
+
+                  {/* Password */}
                   <div>
-                    <label htmlFor="su-pw" className={lbl}>Password</label>
+                    <label htmlFor="su-pw" className={lbl}>
+                      Password
+                      <span className="ml-1.5 font-normal text-slate-400">(8+ chars, letters &amp; numbers)</span>
+                    </label>
                     <div className="relative">
                       <input id="su-pw" type={showSuPw ? 'text' : 'password'} required autoComplete="new-password"
-                        placeholder="Min. 6 characters"
+                        placeholder="e.g. Hello123"
                         value={suPassword} onChange={e => setSuPassword(e.target.value)} className={`${inp} pr-10`} />
                       <button type="button" onClick={() => setShowSuPw(!showSuPw)}
                         className="p-1 text-slate-400 hover:text-slate-600 absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer"
@@ -463,9 +543,35 @@ export default function LoginPage() {
                         {showSuPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
+                    <PwStrengthBar pw={suPassword} />
                   </div>
+
+                  {/* Confirm password */}
+                  <div>
+                    <label htmlFor="su-confirm" className={lbl}>Confirm password</label>
+                    <div className="relative">
+                      <input id="su-confirm" type={showConfirm ? 'text' : 'password'} required autoComplete="new-password"
+                        placeholder="Re-enter password"
+                        value={suConfirm} onChange={e => setSuConfirm(e.target.value)}
+                        className={`${inp} pr-10 ${suConfirm && suPassword !== suConfirm ? 'border-rose-400 focus:border-rose-400 focus:ring-rose-300' : suConfirm && suPassword === suConfirm ? 'border-emerald-400 focus:border-emerald-400 focus:ring-emerald-300' : ''}`} />
+                      <button type="button" onClick={() => setShowConfirm(!showConfirm)}
+                        className="p-1 text-slate-400 hover:text-slate-600 absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer"
+                        aria-label={showConfirm ? 'Hide' : 'Show'}>
+                        {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    {suConfirm && suPassword !== suConfirm && (
+                      <p className="mt-0.5 text-[11px] text-rose-500 font-medium">Passwords do not match</p>
+                    )}
+                    {suConfirm && suPassword === suConfirm && (
+                      <p className="mt-0.5 text-[11px] text-emerald-600 font-medium flex items-center gap-1">
+                        <CheckCheck className="w-3 h-3" /> Passwords match
+                      </p>
+                    )}
+                  </div>
+
                   <button type="submit" disabled={submitting || googleLoading}
-                    className="w-full h-10 bg-[#3440a8] hover:bg-[#2c3794] active:bg-[#283388] text-white font-semibold text-[14px] rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2">
+                    className="w-full h-9 bg-[#3440a8] hover:bg-[#2c3794] text-white font-semibold text-[14px] rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2 !mt-3">
                     {submitting
                       ? <><Loader2 className="w-4 h-4 animate-spin" /><span>Creating account...</span></>
                       : 'Create account'}
@@ -475,7 +581,7 @@ export default function LoginPage() {
                 <OrDivider />
                 <GoogleBtn onClick={handleGoogleSignUp} loading={googleLoading} label="Continue with Google" />
 
-                <p className="mt-4 text-[13px] text-slate-600 text-center">
+                <p className="mt-2 text-[12px] text-slate-600 text-center">
                   Already have an account?{' '}
                   <button type="button" onClick={() => go('signin')}
                     className="font-bold text-[#3440a8] hover:underline cursor-pointer">
@@ -519,7 +625,7 @@ export default function LoginPage() {
         </div>
 
         {/* Footer */}
-        <div className="py-4 text-center text-[12px] text-slate-400 space-x-3">
+        <div className="py-2 text-center text-[12px] text-slate-400 space-x-3">
           <a href="#" className="hover:text-slate-600">Terms</a>
           <span>·</span>
           <a href="#" className="hover:text-slate-600">Privacy</a>
