@@ -20,8 +20,20 @@ export class OrganizationService {
     return org;
   }
 
+  async getOrganizationBySlug(slug: string): Promise<Organization | null> {
+    return await organizationRepository.findBySlug(slug);
+  }
+
   async getOrganizationById(id: number): Promise<Organization | null> {
     return await organizationRepository.findById(id);
+  }
+
+  /** Creates a brand-new workspace (called during sign-up). */
+  async createOrganization(data: { name: string; slug: string }): Promise<Organization> {
+    return await organizationRepository.create({
+      name: data.name,
+      slug: data.slug,
+    });
   }
 }
 
