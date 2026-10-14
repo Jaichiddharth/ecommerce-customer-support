@@ -52,6 +52,21 @@ export class UserRepository {
   }
 
   /**
+   * Find a user by email across all organizations (sign-in path).
+   * Used when Firebase UID lookup misses — e.g. first Google sign-in by a user
+   * who previously registered with email/password.
+   */
+  async findByEmail(email: string): Promise<User | null> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email.toLowerCase()))
+      .limit(1);
+
+    return user || null;
+  }
+
+  /**
    * Create a user inside an organization
    */
   async create(data: {

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import {
   User,
   UserCredential,
@@ -35,12 +35,12 @@ interface AuthContextType {
   dbUser: DbUser | null;
   loading: boolean;
   error: string | null;
-  loginWithEmail: (email: string, password: string) => Promise<UserCredential>;
-  signupWithEmail: (email: string, password: string, displayName?: string) => Promise<UserCredential>;
-  loginWithGoogle: () => Promise<UserCredential>;
+  loginWithEmail: (email: string, password: string, workspaceSlug?: string) => Promise<UserCredential>;
+  signupWithEmail: (email: string, password: string, displayName?: string, workspaceSlug?: string) => Promise<UserCredential>;
+  loginWithGoogle: (workspaceSlug?: string) => Promise<UserCredential>;
   logout: () => Promise<void>;
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
-  syncDbUser: (currentUser: User) => Promise<DbUser | null>;
+  syncDbUser: (currentUser: User, workspaceSlug?: string) => Promise<DbUser | null>;
   resendVerificationEmail: (email: string, password: string) => Promise<void>;
   clearError: () => void;
 }
@@ -53,27 +53,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-
+  /**
+   * Guards onAuthStateChanged from signing out an unverified user while
+   * signupWithEmail is mid-flight creating the org + DB record.
+   */
+  const isSigningUp = useRef(false);
 
   /**
-   * Syncs the authenticated Firebase user with the PostgreSQL `users` table
+   * Syncs the authenticated Firebase user with the PostgreSQL `users` table.
+   * Pass workspaceSlug to scope the user to a specific workspace.
    */
-  const syncDbUser = useCallback(async (currentUser: User): Promise<DbUser | null> => {
+  const syncDbUser = useCallback(async (currentUser: User, workspaceSlug?: string): Promise<DbUser | null> => {
     try {
-      // Identity, organization and role are resolved server-side from the verified ID token
       const idToken = await currentUser.getIdToken();
       const response = await axios.post(
         '/api/auth/sync',
         {
           name: currentUser.displayName || currentUser.email?.split('@')[0] || 'Team Member',
           avatarUrl: currentUser.photoURL || null,
+          ...(workspaceSlug ? { workspaceSlug } : {}),
         },
         { headers: { Authorization: `Bearer ${idToken}` } }
       );
 
       if (response.data?.success && response.data?.user) {
         setDbUser(response.data.user);
-        // Force refresh the token so custom claims (organizationId, userId) are immediately available in the token
         try {
           await currentUser.getIdToken(true);
         } catch { }
@@ -81,7 +85,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       return null;
     } catch (syncErr) {
-      // Without a synced DB user every API call would fail — tell the user why
       const apiError = notifyError(syncErr, { where: 'AuthContext.syncDbUser', title: "Couldn't load your account" });
       setError(apiError.message);
       return null;
@@ -93,7 +96,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(
       auth,
       async (currentUser) => {
-        if (currentUser && !currentUser.emailVerified) {
+        if (currentUser && !currentUser.emailVerified && !isSigningUp.current) {
           const isEmailPasswordUser = currentUser.providerData.some(
             (p) => p.providerId === 'password'
           );
@@ -129,7 +132,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const clearError = () => setError(null);
 
-  const loginWithEmail = async (email: string, password: string) => {
+  const loginWithEmail = async (email: string, password: string, workspaceSlug?: string) => {
     try {
       const result = await signInWithEmailAndPassword(auth, email, password);
       if (!result.user.emailVerified) {
@@ -139,7 +142,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw err;
       }
       if (result.user) {
-        await syncDbUser(result.user);
+        await syncDbUser(result.user, workspaceSlug);
       }
       return result;
     } catch (err: any) {
@@ -154,12 +157,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const signupWithEmail = async (email: string, password: string, displayName?: string) => {
+  const signupWithEmail = async (email: string, password: string, displayName?: string, workspaceSlug?: string) => {
+    isSigningUp.current = true;
     try {
       const result = await createUserWithEmailAndPassword(auth, email, password);
       if (displayName && result.user) {
         await updateProfile(result.user, { displayName });
       }
+
+      // Create the org + DB user NOW while the token is valid.
+      // workspaceSlug tells syncUser to create a new workspace (signup path).
+      // isSigningUp = true suppresses onAuthStateChanged from kicking the user out mid-flight.
+      await syncDbUser(result.user, workspaceSlug);
+
       await sendEmailVerification(result.user);
       await signOut(auth);
       const signal: any = new Error('EMAIL_VERIFICATION_SENT');
@@ -173,6 +183,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       clientLogger.warn('AuthContext.signupWithEmail', msg, { code: err?.code });
       gooeyToast.error('Sign up failed', { description: msg });
       throw err;
+    } finally {
+      isSigningUp.current = false;
     }
   };
 
@@ -192,19 +204,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loginWithGoogle = async () => {
+  const loginWithGoogle = async (workspaceSlug?: string) => {
     try {
       const result = await signInWithPopup(auth, googleProvider);
       if (result.user) {
-        await syncDbUser(result.user);
+        await syncDbUser(result.user, workspaceSlug);
       }
       return result;
     } catch (err: any) {
       const msg = getFirebaseAuthErrorMessage(err);
       clientLogger.warn('AuthContext.loginWithGoogle', msg, { code: err?.code });
-      gooeyToast.error('Google sign-in failed', {
-        description: msg,
-      });
+      gooeyToast.error('Google sign-in failed', { description: msg });
       throw err;
     }
   };
