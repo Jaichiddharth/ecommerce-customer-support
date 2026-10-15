@@ -168,11 +168,15 @@ export const MetaDetailsView: React.FC = () => {
               onChange={handleConnectionChange}
               className="px-3 py-2 text-xs font-bold bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer min-w-56"
             >
-              {allConnections.map((conn: any) => (
-                <option key={conn.phoneNumber_id} value={conn.phoneNumber_id}>
-                  {conn.display_phone_number || conn.verified_name} (ID: {conn.phoneNumber_id})
-                </option>
-              ))}
+              {allConnections.map((conn: any) => {
+                const phoneId = conn.metaPhoneNumberId || conn.phoneNumber_id;
+                const phoneDisplay = conn.phoneNumber || conn.display_phone_number || conn.verified_name;
+                return (
+                  <option key={phoneId} value={phoneId}>
+                    {phoneDisplay} (ID: {phoneId})
+                  </option>
+                );
+              })}
             </select>
           </div>
         </div>
@@ -253,14 +257,14 @@ export const MetaDetailsView: React.FC = () => {
                 </span>
               </div>
               <p className="text-sm font-bold text-slate-900">
-                {metaData.phoneDetails?.display_phone_number || metaData.connection?.display_phone_number || 'N/A'}
+                {metaData.phoneDetails?.display_phone_number || metaData.connection?.phoneNumber || metaData.connection?.display_phone_number || 'N/A'}
               </p>
               <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-xs">
                 <span className="text-slate-400 font-mono text-[11px] truncate">
-                  ID: {metaData.phoneDetails?.id || metaData.connection?.phoneNumber_id}
+                  ID: {metaData.phoneDetails?.id || metaData.connection?.metaPhoneNumberId || metaData.connection?.phoneNumber_id}
                 </span>
                 <button
-                  onClick={() => copyToClipboard(metaData.phoneDetails?.id || metaData.connection?.phoneNumber_id, 'phone_id')}
+                  onClick={() => copyToClipboard(metaData.phoneDetails?.id || metaData.connection?.metaPhoneNumberId || metaData.connection?.phoneNumber_id, 'phone_id')}
                   className="text-slate-400 hover:text-emerald-600 p-1 cursor-pointer"
                   title="Copy Phone Number ID"
                 >
@@ -297,10 +301,13 @@ export const MetaDetailsView: React.FC = () => {
             </div>
             <div className="divide-y divide-slate-100">
               {allConnections.map((conn: any) => {
-                const isSelected = conn.phoneNumber_id === (selectedPhoneId || metaData?.selectedPhoneId);
+                const phoneId = conn.metaPhoneNumberId || conn.phoneNumber_id;
+                const phoneDisplay = conn.phoneNumber || conn.display_phone_number || phoneId;
+                const channelName = conn.verified_name || 'Verified Business';
+                const isSelected = phoneId === (selectedPhoneId || metaData?.selectedPhoneId);
                 return (
                   <div
-                    key={conn.phoneNumber_id}
+                    key={phoneId}
                     className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
                       isSelected ? 'bg-emerald-50/40 border-l-4 border-emerald-600' : 'hover:bg-slate-50/60'
                     }`}
@@ -314,10 +321,10 @@ export const MetaDetailsView: React.FC = () => {
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-bold text-slate-900 font-mono">
-                            {conn.display_phone_number || conn.phoneNumber_id}
+                            {phoneDisplay}
                           </span>
                           <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md">
-                            {conn.verified_name || 'Verified Business'}
+                            {channelName}
                           </span>
                           {isSelected && (
                             <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
@@ -326,7 +333,7 @@ export const MetaDetailsView: React.FC = () => {
                           )}
                         </div>
                         <p className="text-xs text-slate-400 font-mono mt-0.5">
-                          Phone Number ID: {conn.phoneNumber_id}
+                          Phone Number ID: {phoneId}
                         </p>
                       </div>
                     </div>
@@ -336,8 +343,8 @@ export const MetaDetailsView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => {
-                            setSelectedPhoneId(conn.phoneNumber_id);
-                            fetchMetaDetails(false, conn.phoneNumber_id);
+                            setSelectedPhoneId(phoneId);
+                            fetchMetaDetails(false, phoneId);
                           }}
                           className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold cursor-pointer transition-all"
                         >
@@ -345,10 +352,10 @@ export const MetaDetailsView: React.FC = () => {
                         </button>
                       )}
                       <button
-                        onClick={() => copyToClipboard(conn.phoneNumber_id, `phone_${conn.phoneNumber_id}`)}
+                        onClick={() => copyToClipboard(phoneId, `phone_${phoneId}`)}
                         className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                       >
-                        {copiedKey === `phone_${conn.phoneNumber_id}` ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                        {copiedKey === `phone_${phoneId}` ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                         <span>Copy ID</span>
                       </button>
                     </div>

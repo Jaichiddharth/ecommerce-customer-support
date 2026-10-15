@@ -82,7 +82,7 @@ export const SettingsView: React.FC = () => {
             </p>
             <p><strong>Verified Name:</strong> {connectionData.verified_name || connectionData.displayName}</p>
             <p><strong>Phone Number:</strong> {connectionData.display_phone_number || connectionData.phoneNumber_id}</p>
-            <p><strong>WABA ID:</strong> {connectionData.waba_id}</p>
+            <p><strong>WABA ID:</strong> {connectionData.wabaId}</p>
           </div>
         )}
       </div>

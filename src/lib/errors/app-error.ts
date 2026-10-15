@@ -79,6 +79,11 @@ export class AppError extends Error {
     return new AppError("NOT_FOUND", { message, expected: true });
   }
 
+  /** 409 when attempting to connect a WhatsApp account/phone that is already connected. */
+  static whatsappAlreadyConnected(message: string, details?: Record<string, unknown>): AppError {
+    return new AppError("WHATSAPP_ALREADY_CONNECTED", { message, details, expected: true });
+  }
+
   /**
    * Re-label an error caught at a higher level while keeping everything the lower level knew.
    * - A specific AppError (e.g. MESSAGE_WINDOW_EXPIRED) keeps its code; only `details` are merged.

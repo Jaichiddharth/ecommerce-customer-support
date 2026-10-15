@@ -49,6 +49,155 @@ export class ChannelRepository {
   }
 
   /**
+   * Find a channel by WABA ID across organizations or within an organization
+   */
+  async findByWabaId(wabaId: string, organizationId?: number): Promise<Channel | null> {
+    const cleanWaba = wabaId.trim();
+    const condition = organizationId
+      ? and(eq(channels.wabaId, cleanWaba), eq(channels.organizationId, organizationId))
+      : eq(channels.wabaId, cleanWaba);
+
+    const [channel] = await db
+      .select()
+      .from(channels)
+      .where(condition)
+      .limit(1);
+
+    return channel || null;
+  }
+
+  /**
+   * Find a WhatsApp channel by phone number
+   */
+  async findByPhoneNumber(phoneNumber: string, organizationId?: number): Promise<Channel | null> {
+    const cleanPhone = phoneNumber.trim();
+    const cleanDigits = cleanPhone.replace(/\D/g, "");
+
+    const condition = organizationId
+      ? and(eq(channels.organizationId, organizationId), eq(channels.type, "whatsapp"))
+      : eq(channels.type, "whatsapp");
+
+    const waChannels = await db
+      .select()
+      .from(channels)
+      .where(condition);
+
+    for (const ch of waChannels) {
+      if (!ch.phoneNumber) continue;
+      if (ch.phoneNumber.trim() === cleanPhone) return ch;
+      if (cleanDigits.length >= 7 && ch.phoneNumber.replace(/\D/g, "") === cleanDigits) {
+        return ch;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find any existing WhatsApp channel that conflicts by WABA ID, Phone Number ID, or Phone Number.
+   * Used to strictly prevent connecting an already connected WhatsApp account.
+   */
+  async findConflictingWhatsAppChannel(params: {
+    wabaId?: string | null;
+    metaPhoneNumberId?: string | null;
+    phoneNumber?: string | null;
+    excludeChannelId?: number;
+  }): Promise<{
+    conflictType: "waba" | "phone_number_id" | "phone_number";
+    matchedValue: string;
+    channel: Channel;
+  } | null> {
+    const cleanWaba = params.wabaId?.trim() || null;
+    const cleanPhoneId = params.metaPhoneNumberId?.trim() || null;
+    const cleanPhone = params.phoneNumber?.trim() || null;
+    const cleanPhoneDigits = cleanPhone ? cleanPhone.replace(/\D/g, "") : null;
+
+    if (!cleanWaba && !cleanPhoneId && !cleanPhone) {
+      return null;
+    }
+
+    const allWaChannels = await db
+      .select()
+      .from(channels)
+      .where(eq(channels.type, "whatsapp"));
+
+    for (const ch of allWaChannels) {
+      if (params.excludeChannelId && ch.id === params.excludeChannelId) {
+        continue;
+      }
+
+      // 1. Check WABA ID match
+      if (cleanWaba && ch.wabaId && ch.wabaId.trim() === cleanWaba) {
+        return {
+          conflictType: "waba",
+          matchedValue: cleanWaba,
+          channel: ch,
+        };
+      }
+
+      // 2. Check Phone Number ID match
+      if (cleanPhoneId && ch.metaPhoneNumberId && ch.metaPhoneNumberId.trim() === cleanPhoneId) {
+        return {
+          conflictType: "phone_number_id",
+          matchedValue: cleanPhoneId,
+          channel: ch,
+        };
+      }
+
+      // 3. Check Phone Number match (exact or normalized digits)
+      if (cleanPhone && ch.phoneNumber) {
+        const existingTrimmed = ch.phoneNumber.trim();
+        if (existingTrimmed === cleanPhone) {
+          return {
+            conflictType: "phone_number",
+            matchedValue: cleanPhone,
+            channel: ch,
+          };
+        }
+        const existingDigits = existingTrimmed.replace(/\D/g, "");
+        if (cleanPhoneDigits && cleanPhoneDigits.length >= 7 && existingDigits === cleanPhoneDigits) {
+          return {
+            conflictType: "phone_number",
+            matchedValue: cleanPhone,
+            channel: ch,
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Create a new WhatsApp Channel with WABA ID
+   */
+  async createWhatsAppChannel(data: {
+    organizationId: number;
+    name: string;
+    phoneNumber?: string | null;
+    metaPhoneNumberId?: string | null;
+    wabaId?: string | null;
+    metaAccessToken?: string | null;
+    isActive?: boolean;
+  }): Promise<Channel> {
+    const [created] = await db
+      .insert(channels)
+      .values({
+        organizationId: data.organizationId,
+        type: "whatsapp",
+        name: data.name,
+        phoneNumber: data.phoneNumber || null,
+        metaPhoneNumberId: data.metaPhoneNumberId || null,
+        wabaId: data.wabaId || null,
+        metaAccessToken: data.metaAccessToken || null,
+        isActive: data.isActive ?? true,
+      })
+      .returning();
+
+    return created;
+  }
+
+  /**
    * Upsert a WhatsApp Channel for an organization
    */
   async upsertWhatsAppChannel(data: {
@@ -56,6 +205,7 @@ export class ChannelRepository {
     name: string;
     phoneNumber?: string | null;
     metaPhoneNumberId?: string | null;
+    wabaId?: string | null;
     metaAccessToken?: string | null;
     isActive?: boolean;
   }): Promise<Channel> {
@@ -66,11 +216,14 @@ export class ChannelRepository {
     if (data.metaPhoneNumberId) {
       existing = await this.findByPhoneId(orgId, data.metaPhoneNumberId);
     }
+    if (!existing && data.wabaId) {
+      existing = await this.findByWabaId(data.wabaId, orgId);
+    }
 
-    // If not found by phone ID, check if there is an active WhatsApp channel for this org
+    // If not found by phone ID or WABA, check if there is an active WhatsApp channel for this org
     if (!existing) {
       const orgChannels = await this.listByOrgAndType(orgId, "whatsapp");
-      if (orgChannels.length > 0 && !data.metaPhoneNumberId) {
+      if (orgChannels.length > 0 && !data.metaPhoneNumberId && !data.wabaId) {
         existing = orgChannels[0];
       }
     }
@@ -82,6 +235,7 @@ export class ChannelRepository {
           name: data.name || existing.name,
           phoneNumber: data.phoneNumber !== undefined ? data.phoneNumber : existing.phoneNumber,
           metaPhoneNumberId: data.metaPhoneNumberId !== undefined ? data.metaPhoneNumberId : existing.metaPhoneNumberId,
+          wabaId: data.wabaId !== undefined ? data.wabaId : existing.wabaId,
           metaAccessToken: data.metaAccessToken || existing.metaAccessToken,
           isActive: data.isActive !== undefined ? data.isActive : existing.isActive,
           updatedAt: new Date(),
@@ -100,6 +254,7 @@ export class ChannelRepository {
         name: data.name,
         phoneNumber: data.phoneNumber || null,
         metaPhoneNumberId: data.metaPhoneNumberId || null,
+        wabaId: data.wabaId || null,
         metaAccessToken: data.metaAccessToken || null,
         isActive: data.isActive ?? true,
       })
