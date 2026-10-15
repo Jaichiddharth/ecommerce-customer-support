@@ -54,6 +54,7 @@ export const ERROR_DEFINITIONS = {
   WHATSAPP_CHANNEL_MISCONFIGURED: { status: 422, source: "whatsapp", message: "This WhatsApp channel is not fully set up. Please reconnect it." },
   WHATSAPP_REAUTH_REQUIRED: { status: 422, source: "whatsapp", message: "The WhatsApp connection has expired. Please reconnect your WhatsApp account." },
   WHATSAPP_CONNECT_FAILED: { status: 502, source: "whatsapp", message: "Could not connect your WhatsApp account. Please try again." },
+  WHATSAPP_ALREADY_CONNECTED: { status: 409, source: "whatsapp", message: "This WhatsApp account, phone number ID, or phone number is already connected." },
 
   // Message sending
   MESSAGE_SEND_FAILED: { status: 502, source: "whatsapp", message: "The message could not be sent. Please try again." },

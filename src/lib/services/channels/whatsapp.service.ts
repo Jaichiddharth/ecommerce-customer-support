@@ -32,6 +32,40 @@ export class WhatsAppService {
   }> {
     const orgId = dto.organizationId;
 
+    // 0. Early conflict check if WABA ID or Phone Number ID was provided in signup data
+    if (dto.wabaId || dto.phoneNumberId) {
+      const earlyConflict = await channelRepository.findConflictingWhatsAppChannel({
+        wabaId: dto.wabaId,
+        metaPhoneNumberId: dto.phoneNumberId,
+      });
+
+      if (earlyConflict) {
+        const isSameOrg = earlyConflict.channel.organizationId === orgId;
+        const label =
+          earlyConflict.conflictType === "waba"
+            ? `WABA ID "${earlyConflict.matchedValue}"`
+            : `Phone Number ID "${earlyConflict.matchedValue}"`;
+
+        const message = isSameOrg
+          ? "This WhatsApp account is already connected."
+          : "This WhatsApp account is already connected to another organization.";
+
+        log.warn("Prevented early duplicate WhatsApp channel connection", {
+          conflictType: earlyConflict.conflictType,
+          matchedValue: earlyConflict.matchedValue,
+          channelId: earlyConflict.channel.id,
+          orgId,
+        });
+
+        throw AppError.whatsappAlreadyConnected(message, {
+          conflictType: earlyConflict.conflictType,
+          matchedValue: earlyConflict.matchedValue,
+          conflictingChannelId: earlyConflict.channel.id,
+          organizationId: earlyConflict.channel.organizationId,
+        });
+      }
+    }
+
     // 1. Exchange OAuth code for Meta Access Token & register WABA / phone
     let metaAuth;
     try {
@@ -87,37 +121,82 @@ export class WhatsAppService {
       dto.name ||
       (displayPhone ? `WhatsApp - ${displayPhone}` : "WhatsApp - Official");
 
-    // 3. Encrypt Meta Access Token for secure storage
-    const encryptedToken = encryptToken(metaAuth.accessToken);
+    const resolvedWabaId = metaAuth.wabaId || dto.wabaId || null;
 
     if (!activePhoneId) {
       throw new AppError("WHATSAPP_CONNECT_FAILED", {
         message: "No WhatsApp phone number was found on this Meta account. Finish adding a phone number in Meta, then connect again.",
-        details: { wabaId: metaAuth.wabaId ?? null },
+        details: { wabaId: resolvedWabaId },
       });
     }
 
-    // 4. Upsert channel in PostgreSQL channels table under organizationId
-    const channel = await channelRepository.upsertWhatsAppChannel({
+    // 3. Authoritative conflict check on all 3 criteria: WABA ID, Phone Number ID, and Phone Number
+    const conflict = await channelRepository.findConflictingWhatsAppChannel({
+      wabaId: resolvedWabaId,
+      metaPhoneNumberId: activePhoneId,
+      phoneNumber: displayPhone,
+    });
+
+    if (conflict) {
+      const isSameOrg = conflict.channel.organizationId === orgId;
+      let label = "";
+      if (conflict.conflictType === "waba") {
+        label = `WABA ID "${conflict.matchedValue}"`;
+      } else if (conflict.conflictType === "phone_number_id") {
+        label = `Phone Number ID "${conflict.matchedValue}"`;
+      } else {
+        label = `Phone Number "${conflict.matchedValue}"`;
+      }
+
+      const message = isSameOrg
+        ? "This WhatsApp account is already connected."
+        : "This WhatsApp account is already connected to another organization.";
+
+      log.warn("Prevented duplicate WhatsApp channel connection", {
+        conflictType: conflict.conflictType,
+        matchedValue: conflict.matchedValue,
+        channelId: conflict.channel.id,
+        channelOrgId: conflict.channel.organizationId,
+        requestOrgId: orgId,
+      });
+
+      throw AppError.whatsappAlreadyConnected(message, {
+        conflictType: conflict.conflictType,
+        matchedValue: conflict.matchedValue,
+        channelId: conflict.channel.id,
+        channelName: conflict.channel.name,
+        organizationId: conflict.channel.organizationId,
+        wabaId: resolvedWabaId,
+        phoneNumberId: activePhoneId,
+        phoneNumber: displayPhone,
+      });
+    }
+
+    // 4. Encrypt Meta Access Token for secure storage
+    const encryptedToken = encryptToken(metaAuth.accessToken);
+
+    // 5. Create channel in PostgreSQL channels table under organizationId
+    const channel = await channelRepository.createWhatsAppChannel({
       organizationId: orgId,
       name: verifiedName,
       phoneNumber: displayPhone,
       metaPhoneNumberId: activePhoneId,
+      wabaId: resolvedWabaId,
       metaAccessToken: encryptedToken,
       isActive: true,
     });
 
-    log.info("WhatsApp channel connected", {
+    log.info("WhatsApp channel connected and stored", {
       channelId: channel.id,
-      wabaId: metaAuth.wabaId ?? null,
+      wabaId: resolvedWabaId,
       phoneNumberId: activePhoneId,
       displayPhone,
     });
 
     return {
       channel,
-      wabaId: metaAuth.wabaId ?? null,
-      phoneNumberId: activePhoneId ?? null,
+      wabaId: resolvedWabaId,
+      phoneNumberId: activePhoneId,
       phoneData,
     };
   }
@@ -161,12 +240,16 @@ export class WhatsAppService {
         log.warn("Could not fetch live phone details", { err, channelId: activeChannel.id });
       }
 
-      // Try to resolve WABA from token to fetch templates
+      // Try to resolve WABA from stored wabaId or token to fetch templates
       try {
-        const resolved = await metaApi.resolveWabaAndPhoneFromToken(rawToken);
-        if (resolved.wabaId) {
-          wabaDetails = await metaApi.getWabaAccountDetails(resolved.wabaId, rawToken);
-          const tplRes = await metaApi.getWabaTemplates(resolved.wabaId, rawToken);
+        let activeWabaId = activeChannel.wabaId;
+        if (!activeWabaId) {
+          const resolved = await metaApi.resolveWabaAndPhoneFromToken(rawToken);
+          activeWabaId = resolved.wabaId || null;
+        }
+        if (activeWabaId) {
+          wabaDetails = await metaApi.getWabaAccountDetails(activeWabaId, rawToken);
+          const tplRes = await metaApi.getWabaTemplates(activeWabaId, rawToken);
           templates = tplRes?.data || [];
         }
       } catch (err) {
@@ -177,12 +260,15 @@ export class WhatsAppService {
     // Format all connections for UI selector
     const formattedConnections = connections.map((conn) => ({
       id: conn.id,
-      name: conn.name,
-      phoneNumber_id: conn.metaPhoneNumberId,
-      display_phone_number: conn.phoneNumber,
+      organizationId: conn.organizationId,
+      type: conn.type,
       verified_name: conn.name,
-      is_active: conn.isActive,
-      created_at: conn.createdAt,
+      phoneNumber: conn.phoneNumber,
+      metaPhoneNumberId: conn.metaPhoneNumberId,
+      wabaId: conn.wabaId,
+      isActive: conn.isActive,
+      createdAt: conn.createdAt,
+      updatedAt: conn.updatedAt,
     }));
 
     return {
@@ -190,10 +276,15 @@ export class WhatsAppService {
       selectedPhoneId: activeChannel.metaPhoneNumberId,
       connection: {
         id: activeChannel.id,
-        name: activeChannel.name,
-        phoneNumber_id: activeChannel.metaPhoneNumberId,
-        display_phone_number: activeChannel.phoneNumber,
-        created_at: activeChannel.createdAt,
+        organizationId: activeChannel.organizationId,
+        type: activeChannel.type,
+        verified_name: activeChannel.name,
+        phoneNumber: activeChannel.phoneNumber,
+        metaPhoneNumberId: activeChannel.metaPhoneNumberId,
+        wabaId: activeChannel.wabaId,
+        isActive: activeChannel.isActive,
+        createdAt: activeChannel.createdAt,
+        updatedAt: activeChannel.updatedAt,
       },
       phoneDetails: phoneDetails || {
         id: activeChannel.metaPhoneNumberId,
@@ -202,7 +293,7 @@ export class WhatsAppService {
         quality_rating: "HIGH",
       },
       waba: wabaDetails || {
-        id: "WABA_OFFICIAL",
+        id: activeChannel.wabaId || "WABA_OFFICIAL",
         name: activeChannel.name,
         review_status: "VERIFIED",
         template_namespace: "pingcart_templates",

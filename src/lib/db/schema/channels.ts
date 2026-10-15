@@ -16,6 +16,7 @@ export const channels = pgTable(
     name: varchar("name", { length: 255 }).notNull(),
     phoneNumber: varchar("phone_number", { length: 50 }),
     metaPhoneNumberId: varchar("meta_phone_number_id", { length: 100 }),
+    wabaId: varchar("waba_id", { length: 100 }),
     metaAccessToken: text("meta_access_token"),
     isActive: boolean("is_active").default(true),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
@@ -23,6 +24,9 @@ export const channels = pgTable(
   },
   (table) => [
     index("idx_channels_org_type").on(table.organizationId, table.type),
+    index("idx_channels_waba_id").on(table.wabaId),
+    index("idx_channels_meta_phone_id").on(table.metaPhoneNumberId),
+    index("idx_channels_phone_number").on(table.phoneNumber),
   ]
 );
 

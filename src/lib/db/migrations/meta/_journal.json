@@ -50,6 +50,13 @@
       "when": 1791266006581,
       "tag": "0006_calm_eternals",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791981568953,
+      "tag": "0007_foamy_nehzno",
+      "breakpoints": true
     }
   ]
 }

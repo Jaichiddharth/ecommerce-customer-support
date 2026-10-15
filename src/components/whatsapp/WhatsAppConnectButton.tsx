@@ -1,10 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
-import apiClient from '@/lib/api/client';
-import { toApiError } from '@/lib/api/api-error';
-import { clientLogger } from '@/lib/client-logger';
+import React from 'react';
 import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useWhatsAppConnect } from './useWhatsAppConnect';
 
 export interface WhatsAppConnectButtonProps {
   storeId?: string;
@@ -14,38 +12,6 @@ export interface WhatsAppConnectButtonProps {
   onError?: (error: string) => void;
 }
 
-/**
- * Loads Facebook SDK dynamically
- */
-const getFacebookSdk = (): Promise<any> => {
-  return new Promise((resolve, reject) => {
-    if (typeof window === 'undefined') return reject(new Error('Window not available'));
-    if (window.FB) return resolve(window.FB);
-
-    window.fbAsyncInit = function () {
-      window.FB?.init({
-        appId: process.env.NEXT_PUBLIC_META_APP_ID || '1388239869739882',
-        cookie: true,
-        xfbml: true,
-        version: process.env.NEXT_PUBLIC_META_GRAPH_VERSION || 'v25.0',
-      });
-      resolve(window.FB);
-    };
-
-    const SCRIPT_ID = 'facebook-jssdk';
-    if (document.getElementById(SCRIPT_ID)) return;
-
-    const script = document.createElement('script');
-    script.id = SCRIPT_ID;
-    script.src = 'https://connect.facebook.net/en_US/sdk.js';
-    script.async = true;
-    script.defer = true;
-    script.crossOrigin = 'anonymous';
-    script.onerror = () => reject(new Error('Failed to load Meta Facebook SDK'));
-    document.head.appendChild(script);
-  });
-};
-
 export const WhatsAppConnectButton: React.FC<WhatsAppConnectButtonProps> = ({
   storeId = 'pingcart-store.myshopify.com',
   className = '',
@@ -53,133 +19,11 @@ export const WhatsAppConnectButton: React.FC<WhatsAppConnectButtonProps> = ({
   onSuccess,
   onError,
 }) => {
-  const [loading, setLoading] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const signupDataRef = useRef<{ waba_id?: string; phone_number_id?: string }>({});
-
-  // 1. Check if store already has an active connection via apiClient
-  useEffect(() => {
-    const checkExistingConnection = async () => {
-      try {
-        const response = await apiClient.get('/api/channels/whatsapp/connections', {
-          params: { storeId },
-        });
-        if (response.data?.success && response.data?.hasConnection) {
-          setIsConnected(true);
-        }
-      } catch {
-        // Already logged by apiClient — the button simply shows "Connect WhatsApp"
-      }
-    };
-
-    if (storeId) {
-      checkExistingConnection();
-    }
-  }, [storeId]);
-
-  // 2. Listen for Meta Embedded Signup message events
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (!event.data) return;
-
-      let payload = event.data;
-      if (typeof payload === 'string') {
-        try {
-          payload = JSON.parse(payload);
-        } catch {
-          return;
-        }
-      }
-
-      if (payload?.type === 'WA_EMBEDDED_SIGNUP' && payload?.event === 'FINISH') {
-        signupDataRef.current = {
-          waba_id: payload.data?.waba_id,
-          phone_number_id: payload.data?.phone_number_id,
-        };
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
-
-  // 3. Post OAuth code to backend
-  const executeBackendConnect = async (code: string) => {
-    const { waba_id, phone_number_id } = signupDataRef.current;
-    try {
-      const res = await apiClient.post('/api/channels/whatsapp/connect', {
-        code,
-        wabaId: waba_id,
-        phoneNumberId: phone_number_id,
-      });
-
-
-      if (res.data?.success) {
-        setIsConnected(true);
-        setLoading(false);
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(
-            new CustomEvent('whatsapp-channel-connected', {
-              detail: res.data.connection,
-            })
-          );
-        }
-        if (onSuccess) onSuccess(res.data.connection);
-      } else {
-        const errMsg = res.data?.error || 'Failed to connect WhatsApp';
-        setError(errMsg);
-        if (onError) onError(errMsg);
-        setLoading(false);
-      }
-    } catch (apiErr) {
-      // apiClient already logged it; show the server's user-friendly reason (+ reference for support)
-      const apiError = toApiError(apiErr);
-      const msg = apiError.requestId ? `${apiError.message} (Ref ${apiError.requestId})` : apiError.message;
-      setError(msg);
-      if (onError) onError(msg);
-      setLoading(false);
-    }
-  };
-
-  // 4. Trigger FB.login (using standard synchronous callback, NOT async)
-  const handleConnect = async () => {
-    setLoading(true);
-    setError(null);
-    signupDataRef.current = {};
-
-    try {
-      const FB = await getFacebookSdk();
-      const configId = process.env.NEXT_PUBLIC_META_CONFIG_ID
-      FB.login(
-        function (response: any) {
-          if (response?.authResponse?.code) {
-            executeBackendConnect(response.authResponse.code);
-          } else {
-            setLoading(false);
-          }
-        },
-        {
-          config_id: configId,
-          response_type: "code",
-          override_default_response_type: true,
-          extras: {
-            setup: {},
-            "featureType": "whatsapp_business_app_onboarding",
-            sessionInfoVersion: 3,
-          },
-        }
-      );
-    } catch (err: any) {
-      clientLogger.error('WhatsAppConnectButton.handleConnect', 'Could not start Meta Embedded Signup', err);
-      const msg = err?.message === 'Failed to load Meta Facebook SDK'
-        ? 'Could not load the Facebook sign-up window. Check your connection or disable ad blockers, then try again.'
-        : 'Could not start the WhatsApp sign-up. Please try again.';
-      setError(msg);
-      if (onError) onError(msg);
-      setLoading(false);
-    }
-  };
+  const { handleConnect, loading, isConnected, error } = useWhatsAppConnect({
+    storeId,
+    onSuccess,
+    onError,
+  });
 
   return (
     <div className="inline-flex flex-col items-start gap-1.5">
