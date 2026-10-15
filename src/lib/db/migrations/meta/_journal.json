@@ -5,50 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1789384420995,
-      "tag": "0000_tough_dormammu",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1789640714478,
-      "tag": "0001_round_mauler",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1789975935184,
-      "tag": "0002_chubby_marvel_boy",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1790144375840,
-      "tag": "0003_silent_young_avengers",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1790500000000,
-      "tag": "0004_message_status_enum",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1790500100000,
-      "tag": "0005_add_error_code_to_messages",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1791266006581,
-      "tag": "0006_calm_eternals",
+      "when": 1792041431795,
+      "tag": "0000_initial_schema",
       "breakpoints": true
     }
   ]
