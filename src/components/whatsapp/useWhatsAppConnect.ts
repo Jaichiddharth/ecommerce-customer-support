@@ -9,6 +9,7 @@ export interface UseWhatsAppConnectOptions {
   storeId?: string;
   onSuccess?: (data: any) => void;
   onError?: (error: string) => void;
+  onCancel?: (message: string) => void;
 }
 
 /**
@@ -63,11 +64,13 @@ export function useWhatsAppConnect({
   storeId = 'pingcart-store.myshopify.com',
   onSuccess,
   onError,
+  onCancel,
 }: UseWhatsAppConnectOptions = {}) {
   const [loading, setLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [connections, setConnections] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [infoBanner, setInfoBanner] = useState<string | null>(null);
   const signupDataRef = useRef<{ waba_id?: string; phone_number_id?: string }>({});
 
   // 1. Check existing connection
@@ -112,17 +115,24 @@ export function useWhatsAppConnect({
         }
       }
 
-      if (payload?.type === 'WA_EMBEDDED_SIGNUP' && payload?.event === 'FINISH') {
-        signupDataRef.current = {
-          waba_id: payload.data?.waba_id,
-          phone_number_id: payload.data?.phone_number_id,
-        };
+      if (payload?.type === 'WA_EMBEDDED_SIGNUP') {
+        if (payload?.event === 'FINISH') {
+          signupDataRef.current = {
+            waba_id: payload.data?.waba_id,
+            phone_number_id: payload.data?.phone_number_id,
+          };
+        } else if (payload?.event === 'CANCEL') {
+          setLoading(false);
+          const bannerMsg = 'Signup was closed before finishing. Try again.';
+          setInfoBanner(bannerMsg);
+          if (onCancel) onCancel(bannerMsg);
+        }
       }
     };
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, []);
+  }, [onCancel]);
 
   // 3. Post OAuth code to backend
   const executeBackendConnect = useCallback(
@@ -138,6 +148,8 @@ export function useWhatsAppConnect({
         if (res.data?.success) {
           setIsConnected(true);
           setLoading(false);
+          setInfoBanner(null);
+          setError(null);
           if (typeof window !== 'undefined') {
             window.dispatchEvent(
               new CustomEvent('whatsapp-channel-connected', {
@@ -167,6 +179,7 @@ export function useWhatsAppConnect({
   const handleConnect = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setInfoBanner(null);
     signupDataRef.current = {};
 
     try {
@@ -178,6 +191,9 @@ export function useWhatsAppConnect({
             executeBackendConnect(response.authResponse.code);
           } else {
             setLoading(false);
+            const bannerMsg = 'Signup was closed before finishing. Try again.';
+            setInfoBanner(bannerMsg);
+            if (onCancel) onCancel(bannerMsg);
           }
         },
         {
@@ -201,7 +217,7 @@ export function useWhatsAppConnect({
       if (onError) onError(msg);
       setLoading(false);
     }
-  }, [executeBackendConnect, onError]);
+  }, [executeBackendConnect, onError, onCancel]);
 
   return {
     handleConnect,
@@ -210,5 +226,7 @@ export function useWhatsAppConnect({
     connections,
     error,
     setError,
+    infoBanner,
+    setInfoBanner,
   };
 }
