@@ -1,5 +1,5 @@
 {
-  "id": "046083c3-8916-4d30-99c0-34f2df722af7",
+  "id": "f6b0e2e8-de10-49fb-977b-64016f00339e",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -44,6 +44,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "waba_id": {
+          "name": "waba_id",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "meta_access_token": {
           "name": "meta_access_token",
           "type": "text",
@@ -84,6 +90,51 @@
             },
             {
               "expression": "type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_channels_waba_id": {
+          "name": "idx_channels_waba_id",
+          "columns": [
+            {
+              "expression": "waba_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_channels_meta_phone_id": {
+          "name": "idx_channels_meta_phone_id",
+          "columns": [
+            {
+              "expression": "meta_phone_number_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_channels_phone_number": {
+          "name": "idx_channels_phone_number",
+          "columns": [
+            {
+              "expression": "phone_number",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

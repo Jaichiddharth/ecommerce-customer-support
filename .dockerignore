@@ -8,3 +8,5 @@ node_modules
 npm-debug.log*
 README*
 docs
+src/lib/db/migrations/
+src/lib/db/migrations_backup/

@@ -20,13 +20,9 @@ import {
   ExternalLink,
   X,
   Check,
-  Flame,
-  CornerUpLeft,
-  Phone,
   User,
   ShoppingBag,
   Store,
-  Layers,
   Sparkles,
   Share2,
   LogOut,
@@ -52,7 +48,7 @@ import {
   getMessageStatusName,
 } from '../types';
 import { useAuth } from '../context/AuthContext';
-import WhatsAppConnectButton from './whatsapp/WhatsAppConnectButton';
+import { AddChannelModal } from './channels/AddChannelModal';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 import { Modal } from '@/components/ui/Modal';
 import {
@@ -129,14 +125,13 @@ export interface WhatsAppChannel {
   id: number;
   organizationId?: number;
   type?: string;
-  name: string;
-  phoneNumber?: string | null;
-  phoneNumber_id?: string | null;
-  metaPhoneNumberId?: string | null;
-  display_phone_number?: string | null;
   verified_name?: string | null;
+  phoneNumber?: string | null;
+  metaPhoneNumberId?: string | null;
+  wabaId?: string | null;
   isActive?: boolean;
   createdAt?: string;
+  updatedAt?: string;
 }
 
 /**
@@ -945,7 +940,7 @@ export const InboxView: React.FC<InboxViewProps> = ({
     }
 
     const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
-    const fromLabel = `${targetChannel.name} (${targetChannel.phoneNumber || targetChannel.metaPhoneNumberId || 'Connected'})`;
+    const fromLabel = `${targetChannel.verified_name || 'WhatsApp'} (${targetChannel.phoneNumber || targetChannel.metaPhoneNumberId || 'Connected'})`;
     const toLabel = `${activeConv.customer.name} (${customerPhone})`;
 
     clientLogger.debug('InboxView.handleSend', 'Sending WhatsApp message', {
@@ -1082,7 +1077,7 @@ export const InboxView: React.FC<InboxViewProps> = ({
       });
       if (res.data?.success && res.data?.customer) {
         const targetChannelObj = whatsappChannels.find((c) => c.id === targetChannelId);
-        gooeyToast.success(`Customer ${newContactName} created under ${targetChannelObj?.name || 'WhatsApp'}!`);
+        gooeyToast.success(`Customer ${newContactName} created under ${targetChannelObj?.verified_name || 'WhatsApp'}!`);
         await fetchCustomers();
         handleSelectConversation(`cust-${res.data.customer.id}`);
       }
@@ -1407,8 +1402,8 @@ export const InboxView: React.FC<InboxViewProps> = ({
                       whatsappChannels.map((channel) => {
                         const folderKey = `whatsapp-${channel.id}`;
                         const isSelected = activeChannelFolder === folderKey;
-                        const displayName = channel.name || 'WhatsApp Account';
-                        const displayPhone = channel.phoneNumber || channel.display_phone_number || '';
+                        const displayName = channel.verified_name || 'WhatsApp Account';
+                        const displayPhone = channel.phoneNumber || '';
                         const formattedLabel = displayPhone && !displayName.includes(displayPhone)
                           ? `${displayName} - ${displayPhone}`
                           : displayName;
@@ -1623,7 +1618,7 @@ export const InboxView: React.FC<InboxViewProps> = ({
                     {activeChannelFolder === 'all' && custChannel && (
                       <div className="mt-1 flex items-center gap-1 text-[10px] text-slate-400 font-medium truncate">
                         <span className="w-1 h-1 rounded-full bg-emerald-500 shrink-0"></span>
-                        <span className="truncate">{custChannel.name}</span>
+                        <span className="truncate">{custChannel.verified_name || 'WhatsApp'}</span>
                       </div>
                     )}
                   </div>
@@ -1655,17 +1650,15 @@ export const InboxView: React.FC<InboxViewProps> = ({
                 {/* Header Action Buttons (Live SSE Status & Sync) */}
                 <div className="flex items-center gap-2">
                   <span
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${
-                      isRealtimeConnected
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${isRealtimeConnected
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-2xs'
                         : 'bg-amber-50 text-amber-700 border-amber-200'
-                    }`}
+                      }`}
                     title={isRealtimeConnected ? 'Real-time live sync active via SSE' : 'Connecting to live SSE stream...'}
                   >
                     <span
-                      className={`w-2 h-2 rounded-full ${
-                        isRealtimeConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'
-                      }`}
+                      className={`w-2 h-2 rounded-full ${isRealtimeConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'
+                        }`}
                     />
                     <span>{isRealtimeConnected ? 'Live Sync' : 'Connecting...'}</span>
                   </span>
@@ -1722,8 +1715,8 @@ export const InboxView: React.FC<InboxViewProps> = ({
                     // Agent messages show the agent who actually sent them (users.name via senderId), not the logged-in user
                     const senderName = isAgent
                       ? msg.senderName ||
-                        (msg.senderId != null && msg.senderId === dbUser?.id ? dbUser?.name : null) ||
-                        'Agent'
+                      (msg.senderId != null && msg.senderId === dbUser?.id ? dbUser?.name : null) ||
+                      'Agent'
                       : activeConv.customer.name;
 
                     // Group message reactions from DB
@@ -1983,8 +1976,8 @@ export const InboxView: React.FC<InboxViewProps> = ({
                               <div
                                 ref={reactionPickerRef}
                                 className={`absolute ${reactionPickerPlacement === 'bottom'
-                                    ? 'top-full mt-1.5'
-                                    : 'bottom-full mb-1.5'
+                                  ? 'top-full mt-1.5'
+                                  : 'bottom-full mb-1.5'
                                   } ${isAgent ? 'right-0' : 'left-0'} z-50 animate-in fade-in zoom-in-95`}
                               >
                                 {showFullReactionPicker ? (
@@ -2343,9 +2336,9 @@ export const InboxView: React.FC<InboxViewProps> = ({
                     <div className="p-3 text-xs space-y-2 text-slate-700 bg-white">
                       <div className="flex items-center justify-between">
                         <span className="text-slate-500">Channel:</span>
-                        <span className="font-semibold text-emerald-700 flex items-center gap-1 truncate max-w-[170px]" title={conversationChannel?.name || 'WhatsApp'}>
+                        <span className="font-semibold text-emerald-700 flex items-center gap-1 truncate max-w-[170px]" title={conversationChannel?.verified_name || 'WhatsApp'}>
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>
-                          <span className="truncate">{conversationChannel?.name || 'Default WhatsApp'}</span>
+                          <span className="truncate">{conversationChannel?.verified_name || 'Default WhatsApp'}</span>
                         </span>
                       </div>
                       <div className="flex items-center justify-between">
@@ -2455,58 +2448,13 @@ export const InboxView: React.FC<InboxViewProps> = ({
       {/* ======================================================== */}
 
       {/* Add Channel Modal */}
-      <Modal
+      <AddChannelModal
         isOpen={showAddChannelModal}
         onClose={() => setShowAddChannelModal(false)}
-        title="Connect New Channel"
-        icon={<Layers className="w-4 h-4 text-[#2563eb]" />}
-        maxWidth="md"
-      >
-        <p className="text-xs text-slate-600">
-          Select the communication channel you wish to add to your Omnichannel command desk:
-        </p>
-
-        <div className="space-y-2 text-xs">
-          <div className="p-3 border border-[#bfdbfe] bg-[#eff6ff] rounded-xl flex items-center justify-between cursor-pointer">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-[#25d366] text-white flex items-center justify-center font-bold">
-                WA
-              </div>
-              <div>
-                <p className="font-bold text-slate-900">WhatsApp Business Cloud API</p>
-                <p className="text-[11px] text-slate-500">Official Meta Cloud API for automated messaging</p>
-              </div>
-            </div>
-            <Check className="w-4 h-4 text-[#2563eb]" />
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-2 pt-2">
-          <button
-            type="button"
-            onClick={() => setShowAddChannelModal(false)}
-            className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
-          >
-            Cancel
-          </button>
-          <WhatsAppConnectButton
-            onSuccess={(data) => {
-              setShowAddChannelModal(false);
-              gooeyToast.success("WhatsApp channel connected successfully!");
-              fetchWhatsAppChannels();
-            }}
-            onError={(err) => {
-              gooeyToast.error(err || "Failed to connect WhatsApp channel");
-            }}
-          >
-            <div
-              className="px-3 py-1.5 text-xs font-semibold text-white bg-[#2563eb] hover:bg-[#1d4ed8] rounded-lg cursor-pointer"
-            >
-              Continue Setup
-            </div>
-          </WhatsAppConnectButton>
-        </div>
-      </Modal>
+        onSuccess={() => {
+          fetchWhatsAppChannels();
+        }}
+      />
 
       {/* New Contact Modal */}
       <Modal
@@ -2528,7 +2476,7 @@ export const InboxView: React.FC<InboxViewProps> = ({
               >
                 {whatsappChannels.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name} {c.phoneNumber || c.display_phone_number ? `(${c.phoneNumber || c.display_phone_number})` : ''}
+                    {c.verified_name || 'WhatsApp'} {c.phoneNumber ? `(${c.phoneNumber})` : ''}
                   </option>
                 ))}
               </select>

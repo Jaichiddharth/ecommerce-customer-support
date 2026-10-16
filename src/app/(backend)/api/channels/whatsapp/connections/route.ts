@@ -11,14 +11,13 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
     id: c.id,
     organizationId: c.organizationId,
     type: c.type,
-    name: c.name,
-    phoneNumber: c.phoneNumber,
-    phoneNumber_id: c.metaPhoneNumberId,
-    metaPhoneNumberId: c.metaPhoneNumberId,
-    display_phone_number: c.phoneNumber,
     verified_name: c.name,
+    phoneNumber: c.phoneNumber,
+    metaPhoneNumberId: c.metaPhoneNumberId,
+    wabaId: c.wabaId,
     isActive: c.isActive,
     createdAt: c.createdAt,
+    updatedAt: c.updatedAt,
   }));
 
   return NextResponse.json({
