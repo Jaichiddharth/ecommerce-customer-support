@@ -5,15 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1792041431795,
-      "tag": "0000_initial_schema",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1791981568953,
-      "tag": "0007_foamy_nehzno",
+      "when": 1792066312495,
+      "tag": "0000_thankful_stellaris",
       "breakpoints": true
     }
   ]

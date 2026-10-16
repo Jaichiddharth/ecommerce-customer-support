@@ -10,8 +10,6 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-console.log("FIREBASE CONFIG :", firebaseConfig)
-
 // Initialize Firebase safely for SSR/Client environments
 const app: FirebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 const auth: Auth = getAuth(app);

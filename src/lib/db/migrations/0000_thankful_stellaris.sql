@@ -5,6 +5,7 @@ CREATE TABLE "channels" (
 	"name" varchar(255) NOT NULL,
 	"phone_number" varchar(50),
 	"meta_phone_number_id" varchar(100),
+	"waba_id" varchar(100),
 	"meta_access_token" text,
 	"is_active" boolean DEFAULT true,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -122,6 +123,9 @@ ALTER TABLE "message_reactions" ADD CONSTRAINT "message_reactions_message_id_mes
 ALTER TABLE "message_reactions" ADD CONSTRAINT "message_reactions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "message_reactions" ADD CONSTRAINT "message_reactions_customer_id_customers_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "idx_channels_org_type" ON "channels" USING btree ("organization_id","type");--> statement-breakpoint
+CREATE INDEX "idx_channels_waba_id" ON "channels" USING btree ("waba_id");--> statement-breakpoint
+CREATE INDEX "idx_channels_meta_phone_id" ON "channels" USING btree ("meta_phone_number_id");--> statement-breakpoint
+CREATE INDEX "idx_channels_phone_number" ON "channels" USING btree ("phone_number");--> statement-breakpoint
 CREATE INDEX "idx_customers_org_phone" ON "customers" USING btree ("organization_id","phone");--> statement-breakpoint
 CREATE INDEX "idx_customers_org_email" ON "customers" USING btree ("organization_id","email");--> statement-breakpoint
 CREATE INDEX "idx_customers_org_channel" ON "customers" USING btree ("organization_id","channel_id");--> statement-breakpoint
