@@ -1,5 +1,5 @@
 import { customerRepository } from "../db/repositories/customer.repository";
-import { shopifyRepository, type ShopifyStoreWithUser } from "../db/repositories/shopify.repository";
+import { shopifyRepository, pickPrimaryStore, type ShopifyStoreWithUser } from "../db/repositories/shopify.repository";
 import { ShopifyStoreStatus, type ShopifyStore, type SharedShopifyProduct } from "../db/schema";
 import { AppError, toAppError } from "../errors";
 import { createLogger } from "../logger";
@@ -261,18 +261,19 @@ export class ShopifyService {
   }
 
   async getConnection(organizationId: number) {
-    const store = await shopifyRepository.findActiveStore(organizationId);
-    return { configured: this.isConfigured(), store: store ? this.toStoreInfo(store) : null };
+    const stores = await shopifyRepository.findActiveStores(organizationId);
+    const primary = pickPrimaryStore(stores);
+    return {
+      configured: this.isConfigured(),
+      store: primary ? this.toStoreInfo(primary) : null,
+      stores: stores.map((store) => this.toStoreInfo(store)),
+    };
   }
 
   /* ---------------- Connection lifecycle ---------------- */
 
+  /** Connects another store, or re-authorizes one already connected (expired token, missing scopes) */
   async startInstall(user: AuthUser, shop: string) {
-    const existing = await shopifyRepository.findActiveStore(user.organizationId);
-    // Re-authorizing the same store is allowed (expired token, missing scopes); a second store is not
-    if (existing && existing.shopDomain !== shop) {
-      throw new AppError("SHOPIFY_STORE_ALREADY_CONNECTED", { details: { connectedShop: existing.shopDomain }, expected: true });
-    }
     return buildAuthorizeUrl({ organizationId: user.organizationId, userId: user.id, shop });
   }
 
@@ -304,40 +305,26 @@ export class ShopifyService {
 
     const { shop: info } = await shopifyGraphql<{ shop: Node }>(shop, token.accessToken, "shop_info", SHOP_QUERY);
 
-    const existing = await shopifyRepository.findActiveStore(state.o);
-    if (existing && existing.shopDomain !== shop) {
-      throw new AppError("SHOPIFY_STORE_ALREADY_CONNECTED", { details: { connectedShop: existing.shopDomain }, expected: true });
-    }
-
-    try {
-      const store = await shopifyRepository.upsertStore({
-        organizationId: state.o,
-        shopDomain: shop,
-        shopifyShopId: info?.id ?? null,
-        name: info?.name ?? null,
-        email: info?.email ?? null,
-        currencyCode: info?.currencyCode ?? null,
-        primaryDomainUrl: info?.primaryDomain?.url ?? null,
-        accessToken: encryptToken(token.accessToken),
-        refreshToken: token.refreshToken ? encryptToken(token.refreshToken) : null,
-        tokenExpiresAt: token.expiresAt,
-        scopes: token.scopes.join(","),
-        connectedById: state.u,
-      });
-      log.info("Shopify store connected", { organizationId: state.o, shop, storeId: store.id });
-      return store;
-    } catch (err) {
-      const appError = toAppError(err);
-      // uq_shopify_stores_org_active: another store was connected while this flow was open
-      if (appError.code === "DB_CONSTRAINT_VIOLATION") {
-        throw new AppError("SHOPIFY_STORE_ALREADY_CONNECTED", { cause: appError, expected: true });
-      }
-      throw appError;
-    }
+    const store = await shopifyRepository.upsertStore({
+      organizationId: state.o,
+      shopDomain: shop,
+      shopifyShopId: info?.id ?? null,
+      name: info?.name ?? null,
+      email: info?.email ?? null,
+      currencyCode: info?.currencyCode ?? null,
+      primaryDomainUrl: info?.primaryDomain?.url ?? null,
+      accessToken: encryptToken(token.accessToken),
+      refreshToken: token.refreshToken ? encryptToken(token.refreshToken) : null,
+      tokenExpiresAt: token.expiresAt,
+      scopes: token.scopes.join(","),
+      connectedById: state.u,
+    });
+    log.info("Shopify store connected", { organizationId: state.o, shop, storeId: store.id });
+    return store;
   }
 
-  async disconnect(organizationId: number): Promise<void> {
-    const store = await shopifyRepository.findActiveStore(organizationId);
+  async disconnect(organizationId: number, storeId: number): Promise<void> {
+    const store = await shopifyRepository.findActiveStore(organizationId, storeId);
     if (!store) throw new AppError("SHOPIFY_NOT_CONNECTED", { expected: true });
 
     const token = store.accessToken ? decryptToken(store.accessToken) : "";

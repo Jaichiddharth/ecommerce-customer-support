@@ -82,7 +82,6 @@ export const ERROR_DEFINITIONS = {
   SHOPIFY_NOT_CONNECTED: { status: 422, source: "shopify", message: "No Shopify store is connected. Connect your store first." },
   SHOPIFY_NOT_CONFIGURED: { status: 500, source: "shopify", message: "The Shopify integration is not configured on the server." },
   SHOPIFY_OAUTH_FAILED: { status: 400, source: "shopify", message: "The Shopify authorization could not be verified. Please try connecting again." },
-  SHOPIFY_STORE_ALREADY_CONNECTED: { status: 409, source: "shopify", message: "Another Shopify store is already connected. Disconnect it before connecting a new one." },
   SHOPIFY_CUSTOMER_ALREADY_LINKED: { status: 409, source: "shopify", message: "This Shopify customer is already linked to another contact." },
 
   // Database

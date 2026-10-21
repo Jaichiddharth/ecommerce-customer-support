@@ -27,7 +27,10 @@ export interface ShopifyConnectionResponse {
   success: true;
   /** False when the server has no Shopify app credentials; the UI then explains it instead of offering Connect. */
   configured: boolean;
+  /** The primary store, used by the inbox for products, customers and orders */
   store: ShopifyStoreInfo | null;
+  /** Every connected store (or needing re-authorization), oldest first */
+  stores: ShopifyStoreInfo[];
 }
 
 export interface ShopifyProductSummary {

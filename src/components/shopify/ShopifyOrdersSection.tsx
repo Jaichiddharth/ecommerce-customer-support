@@ -137,12 +137,12 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
 
   let body: React.ReactNode;
   if (storeNeedsReauth) {
-    body = box('The Shopify connection has expired. Reconnect the store from the Store page to see orders.');
+    body = box('The Shopify connection has expired. Reconnect the store from Integrations to see orders.');
   } else if (!storeConnected) {
     body = box(
       <span className="flex items-start gap-2">
         <ShoppingBag className="w-4 h-4 shrink-0 text-slate-400 mt-0.5" />
-        Connect your Shopify store from the Store page to see this customer&apos;s orders and share products.
+        Connect your Shopify store from Integrations to see this customer&apos;s orders and share products.
       </span>
     );
   } else if (error) {

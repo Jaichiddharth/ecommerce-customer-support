@@ -57,7 +57,7 @@ export const ChannelIcon: React.FC<{ type: string; size?: keyof typeof SIZE_CLAS
       );
     case 'email':
       return (
-        <span className={`${box} bg-slate-100 text-slate-500 flex items-center justify-center shrink-0 ${className}`}>
+        <span className={`${box} bg-slate-100 text-black flex items-center justify-center shrink-0 ${className}`}>
           <Mail className={glyph} />
         </span>
       );

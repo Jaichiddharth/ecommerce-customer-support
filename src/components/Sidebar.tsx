@@ -16,7 +16,6 @@ import {
   MoreHorizontal,
   Plug,
   Settings,
-  ShoppingBag,
   Sparkles,
   Users,
   type LucideIcon,
@@ -34,7 +33,7 @@ export type TabType =
   | 'contacts'
   | 'meta'
   | 'settings'
-  | 'store';
+  | 'integrations';
 
 interface SidebarProps {
   activeTab: TabType;
@@ -63,9 +62,8 @@ const WORKSPACE_ITEMS: NavItem[] = [
 ];
 
 const SETUP_ITEMS: NavItem[] = [
-  { key: 'store', label: 'Store', icon: ShoppingBag, tab: 'store' },
-  { key: 'integrations', label: 'Integrations', icon: Plug },
-  { key: 'settings', label: 'Settings', icon: Settings },
+  { key: 'integrations', label: 'Integrations', icon: Plug, tab: 'integrations' },
+  { key: 'settings', label: 'Settings', icon: Settings, tab: 'settings' },
 ];
 
 const initialsOf = (value?: string | null, fallback = '?') => {
@@ -215,12 +213,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-colors cursor-pointer ${
                         active
                           ? 'bg-[#eef0fb] text-[#3440a8] font-bold'
-                          : 'text-slate-800 hover:text-black hover:bg-slate-100/70'
+                          : 'text-black hover:text-black hover:bg-slate-100/70'
                       }`}
                     >
                       <Icon
                         className={`w-[18px] h-[18px] stroke-[1.8] shrink-0 ${
-                          active ? 'text-[#3440a8]' : 'text-slate-700'
+                          active ? 'text-[#3440a8]' : 'text-black'
                         }`}
                       />
                       <span className="flex-1 text-left truncate">{item.label}</span>
@@ -253,12 +251,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-colors cursor-pointer ${
                         active
                           ? 'bg-[#eef0fb] text-[#3440a8] font-bold'
-                          : 'text-slate-800 hover:text-black hover:bg-slate-100/70'
+                          : 'text-black hover:text-black hover:bg-slate-100/70'
                       }`}
                     >
                       <Icon
                         className={`w-[18px] h-[18px] stroke-[1.8] shrink-0 ${
-                          active ? 'text-[#3440a8]' : 'text-slate-700'
+                          active ? 'text-[#3440a8]' : 'text-black'
                         }`}
                       />
                       <span className="flex-1 text-left truncate">{item.label}</span>
@@ -383,7 +381,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
                     onClick={() => handleItemClick(item)}
                     title={item.tab ? item.label : `${item.label} · coming soon`}
                     className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
-                      active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                      active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-black hover:text-black hover:bg-slate-100'
                     }`}
                   >
                     <Icon className="w-[19px] h-[19px] stroke-[1.8]" />
@@ -409,7 +407,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
                     onClick={() => handleItemClick(item)}
                     title={item.tab ? item.label : `${item.label} · coming soon`}
                     className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
-                      active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                      active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-black hover:text-black hover:bg-slate-100'
                     }`}
                   >
                     <Icon className="w-[19px] h-[19px] stroke-[1.8]" />

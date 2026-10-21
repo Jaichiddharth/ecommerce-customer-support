@@ -1,5 +1,5 @@
-import { pgTable, serial, integer, varchar, text, timestamp, index, unique, uniqueIndex } from "drizzle-orm/pg-core";
-import { sql, relations } from "drizzle-orm";
+import { pgTable, serial, integer, varchar, text, timestamp, index, unique } from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
 import { organizations } from "./organizations";
 import { users } from "./users";
 import { customers } from "./customers";
@@ -44,10 +44,8 @@ export const shopifyStores = pgTable(
   (table) => [
     // Reconnecting the same shop reuses its row, so existing contact links survive a disconnect
     unique("uq_shopify_stores_org_domain").on(table.organizationId, table.shopDomain),
-    // One active store per organization
-    uniqueIndex("uq_shopify_stores_org_active")
-      .on(table.organizationId)
-      .where(sql`${table.status} <> 'disconnected'`),
+    // An organization can connect several stores
+    index("idx_shopify_stores_org").on(table.organizationId),
     index("idx_shopify_stores_domain").on(table.shopDomain),
   ]
 );
