@@ -48,7 +48,8 @@ export const ShopifyStoreView: React.FC = () => {
     try {
       const res = await apiClient.post('/api/integrations/shopify/install', { shop: shop.trim() });
       // Shopify asks the merchant to approve the permissions, then redirects back to /?tab=store
-      window.location.assign(res.data.authorizeUrl);
+      window.open(res.data.authorizeUrl, '_blank', 'noopener,noreferrer');
+      setIsConnecting(false);
     } catch (err) {
       notifyError(err, { where: 'ShopifyStoreView.startConnect', title: "Couldn't start the Shopify connection" });
       setIsConnecting(false);

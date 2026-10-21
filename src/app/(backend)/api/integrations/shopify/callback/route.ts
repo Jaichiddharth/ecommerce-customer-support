@@ -7,7 +7,6 @@ import { getShopifyConfig, SHOPIFY_CALLBACK_PATH } from "@/lib/shopify/config";
 import { OAUTH_NONCE_COOKIE } from "@/lib/shopify/oauth";
 
 const log = createLogger("ShopifyCallback");
-
 /**
  * GET /api/integrations/shopify/callback — Shopify's OAuth redirect.
  * There's no Firebase session on a browser redirect: the request is trusted only after the

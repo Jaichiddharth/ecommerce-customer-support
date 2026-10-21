@@ -24,10 +24,12 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
   const { authorizeUrl, nonce } = await shopifyService.startInstall(req.user, shop);
 
   const response = NextResponse.json({ success: true, authorizeUrl, shop });
-  // Binds the callback to this browser; SameSite=Lax is still sent on Shopify's top-level redirect back
+  // Binds the callback to this browser; SameSite=Lax is still sent on Shopify's top-level redirect back.
+  // Use secure:true whenever the app is served over HTTPS (covers ngrok tunnels in dev too).
+  const isHttps = (process.env.SHOPIFY_APP_URL || process.env.NEXT_PUBLIC_APP_URL || "").startsWith("https://");
   response.cookies.set(OAUTH_NONCE_COOKIE, nonce, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: process.env.NODE_ENV === "production" || isHttps,
     sameSite: "lax",
     path: SHOPIFY_CALLBACK_PATH,
     maxAge: OAUTH_STATE_TTL_SECONDS,
