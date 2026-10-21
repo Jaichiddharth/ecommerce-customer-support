@@ -4,6 +4,7 @@ import { adminAuth } from "@/lib/firebase/admin";
 import { verifyFirebaseToken } from "@/lib/security/auth";
 import { apiHandler } from "@/lib/api/handler";
 import { createLogger, setRequestContext } from "@/lib/logger";
+import { organizationRepository } from "@/lib/db/repositories/organization.repository";
 
 const log = createLogger("auth.sync");
 
@@ -45,11 +46,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
     log.warn("Could not set Firebase custom claims", { err, uid: decodedToken.uid });
   }
 
+  const organization = await organizationRepository.findById(user.organizationId);
+
   return NextResponse.json({
     success: true,
     user: {
       id: user.id,
       organizationId: user.organizationId,
+      organizationName: organization?.name ?? null,
       name: user.name,
       email: user.email,
       role: user.role,

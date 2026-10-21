@@ -79,6 +79,11 @@ export const ERROR_DEFINITIONS = {
   SHOPIFY_AUTH_FAILED: { status: 422, source: "shopify", message: "The Shopify store connection has expired. Please reconnect your store." },
   SHOPIFY_RATE_LIMITED: { status: 429, source: "shopify", message: "Shopify rate limit reached. Please wait a moment and try again.", retryable: true },
   SHOPIFY_UNAVAILABLE: { status: 503, source: "shopify", message: "Shopify is temporarily unavailable. Please try again shortly.", retryable: true },
+  SHOPIFY_NOT_CONNECTED: { status: 422, source: "shopify", message: "No Shopify store is connected. Connect your store first." },
+  SHOPIFY_NOT_CONFIGURED: { status: 500, source: "shopify", message: "The Shopify integration is not configured on the server." },
+  SHOPIFY_OAUTH_FAILED: { status: 400, source: "shopify", message: "The Shopify authorization could not be verified. Please try connecting again." },
+  SHOPIFY_STORE_ALREADY_CONNECTED: { status: 409, source: "shopify", message: "Another Shopify store is already connected. Disconnect it before connecting a new one." },
+  SHOPIFY_CUSTOMER_ALREADY_LINKED: { status: 409, source: "shopify", message: "This Shopify customer is already linked to another contact." },
 
   // Database
   DB_UNAVAILABLE: { status: 503, source: "database", message: "The database is temporarily unavailable. Please try again shortly.", retryable: true },
