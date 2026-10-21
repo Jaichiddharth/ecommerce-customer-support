@@ -4,7 +4,7 @@ import { messageRepository } from "../../db/repositories/message.repository";
 import { messageReactionRepository } from "../../db/repositories/message-reaction.repository";
 import { metaApi } from "../../meta";
 import { encryptToken, decryptToken } from "../../security/crypto";
-import { Channel, Message, MessageStatus } from "../../db/schema";
+import { Channel, Message, MessageStatus, type MessageMetadata } from "../../db/schema";
 import { publish } from "@/lib/realtime";
 import { AppError, toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
@@ -320,12 +320,15 @@ export class WhatsAppService {
     type?: 'text' | 'template' | 'image' | 'document' | 'video' | 'audio';
     mediaType?: 'image' | 'document' | 'video' | 'audio';
     mediaId?: string;
+    /** Public https URL that Meta downloads itself, e.g. a Shopify product image */
+    mediaLink?: string;
     mediaFile?: Buffer | Uint8Array | Blob;
     mimeType?: string;
     filename?: string;
     templateName?: string;
     languageCode?: string;
     components?: Array<Record<string, unknown>>;
+    metadata?: MessageMetadata | null;
   }) {
     const orgId = params.organizationId;
     const connections = await this.getConnections(orgId);
@@ -383,7 +386,8 @@ export class WhatsAppService {
 
     const hasMediaFile = Boolean(params.mediaFile);
     const hasMediaId = Boolean(params.mediaId);
-    const isMediaMessage = hasMediaFile || hasMediaId;
+    const hasMediaLink = Boolean(params.mediaLink);
+    const isMediaMessage = hasMediaFile || hasMediaId || hasMediaLink;
     const resolvedMediaType: 'image' | 'video' | 'audio' | 'document' =
       params.mediaType ||
       (params.type && ['image', 'video', 'audio', 'document'].includes(params.type) ? (params.type as any) : null) ||
@@ -473,6 +477,22 @@ export class WhatsAppService {
           params.text?.trim() || undefined,
           params.filename
         );
+      } else if (hasMediaLink && params.mediaLink) {
+        if (!/^https:\/\//i.test(params.mediaLink)) {
+          throw AppError.validation("Media links must be https URLs.", "mediaLink");
+        }
+        storedMediaUrl = params.mediaLink;
+        storedMediaType = resolvedMediaType;
+
+        metaRes = await metaApi.sendWhatsAppMediaMessage(
+          targetChannel.metaPhoneNumberId,
+          rawToken,
+          cleanTo,
+          resolvedMediaType,
+          params.mediaLink,
+          params.text?.trim() || undefined,
+          params.filename
+        );
       } else if (params.type === 'template' && params.templateName) {
         metaRes = await metaApi.sendWhatsAppTemplateMessage(
           targetChannel.metaPhoneNumberId,
@@ -548,6 +568,7 @@ export class WhatsAppService {
           status: MessageStatus.SENT, // Outbound message starts as SENT (0)
           metaMessageId: metaMessageId,
           repliedToId: repliedTo?.id ?? null,
+          metadata: params.metadata ?? null,
           createdAt: new Date(),
         });
         storedMessage = createdMessage ? { ...createdMessage, senderName: params.senderName ?? null } : null;

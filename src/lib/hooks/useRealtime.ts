@@ -10,6 +10,7 @@ export interface UseRealtimeOptions {
   onMessageStatus?: (event: Extract<RealtimeEvent, { type: 'message.status' }>) => void;
   onMessageReaction?: (event: Extract<RealtimeEvent, { type: 'message.reaction' }>) => void;
   onNotificationCount?: (event: Extract<RealtimeEvent, { type: 'notification.count' }>) => void;
+  onConversationUpdated?: (event: Extract<RealtimeEvent, { type: 'conversation.updated' }>) => void;
   onAnyEvent?: (event: RealtimeEvent) => void;
   enabled?: boolean;
 }
@@ -120,6 +121,18 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
         }
       });
 
+      // 5. Conversation Updated Event (AI/human mode, assignee, status, tags)
+      es.addEventListener('conversation.updated', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          setLastEventTime(new Date());
+          callbacksRef.current.onConversationUpdated?.(payload);
+          callbacksRef.current.onAnyEvent?.(payload);
+        } catch (err) {
+          clientLogger.error('useRealtime', 'Could not handle conversation.updated event', { err, data: e.data });
+        }
+      });
+
       // Generic Message Handler fallback
       es.onmessage = (e: MessageEvent) => {
         if (!e.data || e.data.startsWith(':')) return; // Ignore SSE comments/ping
@@ -134,6 +147,8 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
             callbacksRef.current.onMessageReaction?.(payload);
           } else if (payload.type === 'notification.count') {
             callbacksRef.current.onNotificationCount?.(payload);
+          } else if (payload.type === 'conversation.updated') {
+            callbacksRef.current.onConversationUpdated?.(payload);
           }
           callbacksRef.current.onAnyEvent?.(payload);
         } catch {}

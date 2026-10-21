@@ -5,11 +5,13 @@ import {
   type Message,
   type SenderType,
   type MessageReaction,
+  type MessageMetadata,
   MessageStatus,
   normalizeMessageStatus,
 } from "../schema";
 import { eq, and, asc, ne, getTableColumns } from "drizzle-orm";
 import { messageReactionRepository } from "./message-reaction.repository";
+import { conversationRepository } from "./conversation.repository";
 import { createLogger } from "../../logger";
 
 const log = createLogger("MessageRepository");
@@ -36,6 +38,7 @@ export interface CreateMessageData {
   isRead?: boolean; // Backward compatibility
   metaMessageId?: string | null;
   repliedToId?: number | null;
+  metadata?: MessageMetadata | null;
   createdAt?: Date;
 }
 
@@ -44,6 +47,11 @@ export class MessageRepository {
    * Create and store a new message (outbound agent message or inbound webhook message)
    */
   async createMessage(data: CreateMessageData): Promise<Message | null> {
+    // Every message belongs to the customer's inbox conversation
+    const conversation = data.ticketId
+      ? await conversationRepository.findById(data.ticketId, data.organizationId)
+      : await conversationRepository.ensureForCustomer(data.organizationId, data.customerId, data.channelId);
+
     const initialStatus =
       data.status !== undefined
         ? normalizeMessageStatus(data.status)
@@ -57,7 +65,7 @@ export class MessageRepository {
         organizationId: data.organizationId,
         customerId: data.customerId,
         channelId: data.channelId || null,
-        ticketId: data.ticketId || null,
+        ticketId: conversation?.id ?? null,
         senderType: data.senderType,
         senderId: data.senderId ?? null,
         receiverId: data.receiverId ?? data.customerId,
@@ -69,10 +77,20 @@ export class MessageRepository {
         errorCode: data.errorCode ?? null,
         metaMessageId: data.metaMessageId || null,
         repliedToId: data.repliedToId || null,
+        metadata: data.metadata ?? null,
         createdAt: data.createdAt || new Date(),
         updatedAt: new Date(),
       })
       .returning();
+
+    if (created && conversation) {
+      try {
+        await conversationRepository.recordMessage(conversation, created);
+      } catch (err) {
+        // The message itself is saved; a stale conversation preview must not fail the send/webhook
+        log.warn("Could not update conversation for message", { err, messageId: created.id, ticketId: conversation.id });
+      }
+    }
 
     return created || null;
   }
