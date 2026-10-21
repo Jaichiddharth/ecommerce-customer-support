@@ -17,6 +17,9 @@ export const customers = pgTable(
     name: varchar("name", { length: 255 }).notNull(),
     phone: varchar("phone", { length: 50 }),
     email: varchar("email", { length: 255 }),
+    handle: varchar("handle", { length: 255 }), // Social handle, e.g. 'meera.styles' on Instagram
+    externalId: varchar("external_id", { length: 255 }), // Channel-scoped user ID (Instagram IGSID / Messenger PSID)
+    language: varchar("language", { length: 20 }), // Preferred language code, e.g. "en"
     avatarUrl: text("avatar_url"),
     shopifyCustomerId: varchar("shopify_customer_id", { length: 100 }),
     tags: text("tags")
@@ -31,6 +34,7 @@ export const customers = pgTable(
     index("idx_customers_org_email").on(table.organizationId, table.email),
     index("idx_customers_org_channel").on(table.organizationId, table.channelId),
     index("idx_customers_channel").on(table.channelId),
+    index("idx_customers_org_external").on(table.organizationId, table.externalId),
   ]
 );
 

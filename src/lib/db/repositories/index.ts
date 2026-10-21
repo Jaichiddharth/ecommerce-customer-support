@@ -4,4 +4,5 @@ export * from "./channel.repository";
 export * from "./customer.repository";
 export * from "./message.repository";
 export * from "./message-reaction.repository";
-
+export * from "./conversation.repository";
+export * from "./shopify.repository";
