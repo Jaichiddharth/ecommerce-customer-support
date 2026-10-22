@@ -1,0 +1,4 @@
+-- Disconnected channels never keep Meta credentials (rows disconnected before this rule kept theirs)
+UPDATE "channels" SET "meta_access_token" = NULL, "token_expires_at" = NULL WHERE "status" = 'disconnected';--> statement-breakpoint
+CREATE UNIQUE INDEX "uq_channels_live_meta_phone_id" ON "channels" USING btree ("meta_phone_number_id") WHERE "channels"."status" <> 'disconnected' AND "channels"."meta_phone_number_id" IS NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "uq_channels_org_meta_phone_id" ON "channels" USING btree ("organization_id","meta_phone_number_id") WHERE "channels"."meta_phone_number_id" IS NOT NULL;

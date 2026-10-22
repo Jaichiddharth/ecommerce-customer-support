@@ -420,8 +420,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     fetchConversations();
     fetchChannels();
 
+    // Reconnecting a number brings its contacts and threads back, so conversations are refreshed too
     const handleChannelConnected = () => {
       fetchChannels();
+      fetchConversations();
     };
     window.addEventListener('whatsapp-channel-connected', handleChannelConnected);
     return () => {
@@ -443,6 +445,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     setShowModeMenu(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCustomerId, fetchMessagesForCustomer]);
+
+  // The open thread's channel was disconnected, so it's no longer listed: close it
+  useEffect(() => {
+    if (isLoadingConversations || !selectedCustomerId || activeConv) return;
+    setInternalSelectedId('');
+    onSelectConversation?.('');
+  }, [isLoadingConversations, selectedCustomerId, activeConv, onSelectConversation]);
 
   // Rail badges: unread conversations total and conversations the AI agent is handling
   useEffect(() => {
@@ -635,11 +644,24 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     onMessageStatus: handleRealtimeStatus,
     onMessageReaction: handleRealtimeReaction,
     onConversationUpdated: refreshConversationsSoon,
+    onChannelUpdated: () => {
+      fetchChannels();
+      refreshConversationsSoon();
+    },
   });
 
   // -------------------------------------------------------------
   // FILTERING
   // -------------------------------------------------------------
+  // A disconnected channel drops out of the Channels pane; don't leave the inbox filtered to it
+  useEffect(() => {
+    if (isLoadingChannels) return;
+    const stale =
+      (channelFilter.kind === 'channel' && !channels.some((c) => c.id === channelFilter.id)) ||
+      (channelFilter.kind === 'type' && !channels.some((c) => c.type === channelFilter.type));
+    if (stale) setChannelFilter({ kind: 'all' });
+  }, [channels, channelFilter, isLoadingChannels]);
+
   const channelScoped = useMemo(
     () =>
       conversations.filter((conv) => {

@@ -140,6 +140,18 @@ const subscribeAppToWaba = async (
 };
 
 /* ----------------------------------------------------
+   2b. Unsubscribe App from WABA (on disconnect)
+   Stops Meta delivering this WABA's webhooks to us. Throws on failure so the
+   caller can decide whether a local-only disconnect is acceptable.
+-----------------------------------------------------*/
+const unsubscribeAppFromWaba = async (wabaId: string, accessToken: string): Promise<void> => {
+  await graphHttp.delete(`/${wabaId}/subscribed_apps`, {
+    headers: bearer(accessToken),
+    operation: 'waba.unsubscribe_app',
+  });
+};
+
+/* ----------------------------------------------------
    3. Register Customer WhatsApp Phone Number (6-digit PIN)
 -----------------------------------------------------*/
 const registerPhoneNumber = async (
@@ -239,7 +251,11 @@ const resolveWabaAndPhoneFromToken = async (
 const generateMetaAuthToken = async (
   code: string,
   wabaId?: string,
-  phoneNumberId?: string
+  phoneNumberId?: string,
+  options: {
+    /** Runs once the WABA/phone are known and before anything changes at Meta; throw to stop the connect */
+    beforeActivate?: (ids: { wabaId: string | null; phoneNumberId: string | null }) => Promise<void>;
+  } = {}
 ): Promise<MetaAuthResult> => {
   // Step 1: Exchange code for access token
   const token = await getAuthTokenFromCode(code);
@@ -263,6 +279,9 @@ const generateMetaAuthToken = async (
     activePhoneId = activePhoneId || resolved.phoneNumberId || undefined;
     activePhoneData = resolved.phoneData;
   }
+
+  // Ownership checks run here, so a rejected connect never subscribes or re-registers someone else's number
+  await options.beforeActivate?.({ wabaId: activeWabaId ?? null, phoneNumberId: activePhoneId ?? null });
 
   // Step 2: Subscribe App to WABA
   if (activeWabaId) {
@@ -528,6 +547,7 @@ const sendWhatsAppMediaMessage = async (
 export const metaApi = {
   getAuthTokenFromCode,
   subscribeAppToWaba,
+  unsubscribeAppFromWaba,
   registerPhoneNumber,
   getPhoneNumberFromCode,
   getPhoneNumberDetails: getPhoneNumberFromCode,

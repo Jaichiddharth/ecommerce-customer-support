@@ -26,6 +26,7 @@ export type RealtimeEvent =
         userId?: number | null;
     }
     | { type: "conversation.updated"; conversationId: number; customerId: number }
+    | { type: "channel.updated"; channelId: number } // connected, reconnected or disconnected
     | { type: "notification.count"; unread: number };
 
 // globalThis keeps ONE bus across Next.js hot reloads / route modules

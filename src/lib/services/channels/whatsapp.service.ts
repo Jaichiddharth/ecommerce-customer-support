@@ -1,10 +1,11 @@
 import { channelRepository } from "../../db/repositories/channel.repository";
 import { customerRepository } from "../../db/repositories/customer.repository";
+import { customerService } from "../customer.service";
 import { messageRepository } from "../../db/repositories/message.repository";
 import { messageReactionRepository } from "../../db/repositories/message-reaction.repository";
 import { metaApi } from "../../meta";
 import { encryptToken, decryptToken } from "../../security/crypto";
-import { Channel, Message, MessageStatus, type MessageMetadata } from "../../db/schema";
+import { Channel, ChannelStatus, Message, MessageStatus, type MessageMetadata } from "../../db/schema";
 import { publish } from "@/lib/realtime";
 import { AppError, toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
@@ -32,40 +33,19 @@ export class WhatsAppService {
   }> {
     const orgId = dto.organizationId;
 
-    // 0. Early conflict check if Phone Number ID was provided in signup data
-    //    (WABA ID is not checked: one WABA can have several phone numbers connected)
+    // 0. Fail fast on a number connected in another workspace (before exchanging the OAuth code)
     if (dto.phoneNumberId) {
-      const earlyConflict = await channelRepository.findConflictingWhatsAppChannel({
-        metaPhoneNumberId: dto.phoneNumberId,
-      });
-
-      if (earlyConflict) {
-        const isSameOrg = earlyConflict.channel.organizationId === orgId;
-
-        const message = isSameOrg
-          ? "This WhatsApp account is already connected."
-          : "This WhatsApp account is already connected to another organization.";
-
-        log.warn("Prevented early duplicate WhatsApp channel connection", {
-          conflictType: earlyConflict.conflictType,
-          matchedValue: earlyConflict.matchedValue,
-          channelId: earlyConflict.channel.id,
-          orgId,
-        });
-
-        throw AppError.whatsappAlreadyConnected(message, {
-          conflictType: earlyConflict.conflictType,
-          matchedValue: earlyConflict.matchedValue,
-          conflictingChannelId: earlyConflict.channel.id,
-          organizationId: earlyConflict.channel.organizationId,
-        });
-      }
+      await this.resolveOwnedChannel(orgId, { metaPhoneNumberId: dto.phoneNumberId });
     }
 
     // 1. Exchange OAuth code for Meta Access Token & register WABA / phone
     let metaAuth;
     try {
-      metaAuth = await metaApi.generateMetaAuthToken(dto.code, dto.wabaId, dto.phoneNumberId);
+      metaAuth = await metaApi.generateMetaAuthToken(dto.code, dto.wabaId, dto.phoneNumberId, {
+        beforeActivate: async ({ phoneNumberId }) => {
+          if (phoneNumberId) await this.resolveOwnedChannel(orgId, { metaPhoneNumberId: phoneNumberId });
+        },
+      });
     } catch (err) {
       const cause = toAppError(err);
       // An invalid/expired OAuth code comes back from Meta as a generic parameter error
@@ -126,59 +106,44 @@ export class WhatsAppService {
       });
     }
 
-    // 3. Authoritative conflict check on Phone Number ID and Phone Number
-    //    (same WABA with a different phone number is allowed)
-    const conflict = await channelRepository.findConflictingWhatsAppChannel({
+    // 3. Authoritative ownership check on the resolved Phone Number ID and phone number.
+    //    Returns this workspace's existing row for the number, if any, so it is updated instead of duplicated.
+    const existing = await this.resolveOwnedChannel(orgId, {
       metaPhoneNumberId: activePhoneId,
       phoneNumber: displayPhone,
     });
 
-    if (conflict) {
-      const isSameOrg = conflict.channel.organizationId === orgId;
-
-      const message = isSameOrg
-        ? "This WhatsApp account is already connected."
-        : "This WhatsApp account is already connected to another organization.";
-
-      log.warn("Prevented duplicate WhatsApp channel connection", {
-        conflictType: conflict.conflictType,
-        matchedValue: conflict.matchedValue,
-        channelId: conflict.channel.id,
-        channelOrgId: conflict.channel.organizationId,
-        requestOrgId: orgId,
-      });
-
-      throw AppError.whatsappAlreadyConnected(message, {
-        conflictType: conflict.conflictType,
-        matchedValue: conflict.matchedValue,
-        channelId: conflict.channel.id,
-        channelName: conflict.channel.name,
-        organizationId: conflict.channel.organizationId,
-        wabaId: resolvedWabaId,
-        phoneNumberId: activePhoneId,
-        phoneNumber: displayPhone,
-      });
-    }
-
     // 4. Encrypt Meta Access Token for secure storage
     const encryptedToken = encryptToken(metaAuth.accessToken);
 
-    // 5. Create channel in PostgreSQL channels table under organizationId
-    const channel = await channelRepository.createWhatsAppChannel({
-      organizationId: orgId,
+    // 5. Store the channel: reconnecting (or re-running the flow for) a number this workspace already has
+    //    updates that row, so its contacts and conversations reattach and no duplicate is created
+    const credentials = {
       name: verifiedName,
       phoneNumber: displayPhone,
       metaPhoneNumberId: activePhoneId,
       wabaId: resolvedWabaId,
       metaAccessToken: encryptedToken,
-      isActive: true,
-    });
+    };
+    let channel: Channel;
+    try {
+      channel = existing
+        ? await channelRepository.reconnectWhatsAppChannel(existing.id, credentials)
+        : await channelRepository.createWhatsAppChannel({ organizationId: orgId, ...credentials, isActive: true });
+    } catch (err) {
+      // Lost a race: another workspace connected this number between the ownership check and the write
+      if (toAppError(err).code === "DB_CONSTRAINT_VIOLATION") throw this.numberInUseError(activePhoneId);
+      throw err;
+    }
+
+    publish(orgId, { type: "channel.updated", channelId: channel.id });
 
     log.info("WhatsApp channel connected and stored", {
       channelId: channel.id,
       wabaId: resolvedWabaId,
       phoneNumberId: activePhoneId,
       displayPhone,
+      updatedExisting: Boolean(existing),
     });
 
     return {
@@ -190,7 +155,95 @@ export class WhatsAppService {
   }
 
   /**
-   * Retrieve all WhatsApp connections for an organization
+   * Ownership rule for a WhatsApp number: it belongs to the workspace that has it connected right now.
+   * Several workspaces may hold a row for the same number over time, but at most one row is live
+   * (also enforced by the uq_channels_live_meta_phone_id index); disconnected rows carry no token.
+   * - another workspace has it live            → rejected
+   * - this workspace already has a row for it  → that row is returned to be updated (no duplicate)
+   * - otherwise (free, or only disconnected elsewhere) → null, a new channel may be created
+   * The other workspace's identity is never put in the error, since details reach the client.
+   */
+  private async resolveOwnedChannel(
+    orgId: number,
+    number: { metaPhoneNumberId?: string | null; phoneNumber?: string | null }
+  ): Promise<Channel | null> {
+    const matches = await channelRepository.findWhatsAppChannelsForNumber(number);
+    const isLive = (c: Channel) => c.status !== ChannelStatus.DISCONNECTED;
+
+    const liveElsewhere = matches.find((c) => c.organizationId !== orgId && isLive(c));
+    if (liveElsewhere) {
+      log.warn("Prevented WhatsApp number connected in another workspace from being claimed", {
+        conflictingChannelId: liveElsewhere.id,
+        conflictingOrgId: liveElsewhere.organizationId,
+        requestOrgId: orgId,
+        ...number,
+      });
+      throw this.numberInUseError(number.metaPhoneNumberId);
+    }
+
+    // Prefer the live row, then the most recently updated one
+    const own = matches
+      .filter((c) => c.organizationId === orgId)
+      .sort((a, b) => Number(isLive(b)) - Number(isLive(a)) || b.updatedAt.getTime() - a.updatedAt.getTime());
+    return own[0] ?? null;
+  }
+
+  private numberInUseError(phoneNumberId?: string | null) {
+    return AppError.whatsappAlreadyConnected(
+      "This WhatsApp number is connected to another workspace. It can be connected here once that workspace disconnects it.",
+      { phoneNumberId: phoneNumberId ?? null }
+    );
+  }
+
+  /**
+   * Disconnect a WhatsApp channel: unsubscribe our app from the WABA at Meta (so webhooks stop),
+   * then soft-disconnect it locally. The WABA subscription is kept while another live number
+   * still uses it, since one WABA can hold several connected numbers.
+   * Meta failures don't block the local disconnect; they are reported back as metaUnsubscribed=false.
+   */
+  async disconnect(channel: Channel): Promise<{ metaUnsubscribed: boolean; metaSkippedReason?: string }> {
+    let metaUnsubscribed = false;
+    let metaSkippedReason: string | undefined;
+
+    const wabaStillInUse = channel.wabaId
+      ? (await channelRepository.findByWabaIdLive(channel.wabaId)).some((c) => c.id !== channel.id)
+      : false;
+    const rawToken = channel.metaAccessToken ? decryptToken(channel.metaAccessToken) : "";
+
+    if (!channel.wabaId || !rawToken) {
+      metaSkippedReason = "missing_credentials";
+    } else if (wabaStillInUse) {
+      metaSkippedReason = "waba_shared";
+    } else {
+      try {
+        await metaApi.unsubscribeAppFromWaba(channel.wabaId, rawToken);
+        metaUnsubscribed = true;
+      } catch (err) {
+        metaSkippedReason = "meta_error";
+        log.warn("Could not unsubscribe app from WABA during disconnect — disconnecting locally", {
+          err,
+          channelId: channel.id,
+          wabaId: channel.wabaId,
+        });
+      }
+    }
+
+    await channelRepository.markDisconnected(channel.id, channel.organizationId);
+
+    log.info("WhatsApp channel disconnected", {
+      channelId: channel.id,
+      organizationId: channel.organizationId,
+      wabaId: channel.wabaId,
+      metaUnsubscribed,
+      metaSkippedReason,
+    });
+
+    publish(channel.organizationId, { type: "channel.updated", channelId: channel.id });
+    return { metaUnsubscribed, metaSkippedReason };
+  }
+
+  /**
+   * Retrieve all live WhatsApp connections for an organization
    */
   async getConnections(organizationId: number): Promise<Channel[]> {
     return await channelRepository.listByOrgAndType(organizationId, "whatsapp");
@@ -325,12 +378,18 @@ export class WhatsAppService {
       throw new AppError("WHATSAPP_NOT_CONNECTED", { expected: true });
     }
 
-    // Select channel (by channelId, phoneNumberId, or first active)
+    // A contact belongs to its channel: hidden once that channel is disconnected, and always
+    // replied to from its own number rather than whichever channel happens to be first
+    const contact = params.customerId ? await customerService.requireVisible(params.customerId, orgId) : null;
+
+    // Select channel (by channelId, phoneNumberId, the contact's own channel, or first active)
     let targetChannel = null;
     if (params.channelId) {
       targetChannel = connections.find((c) => c.id === params.channelId);
     } else if (params.phoneNumberId) {
       targetChannel = connections.find((c) => c.metaPhoneNumberId === params.phoneNumberId);
+    } else if (contact?.channelId) {
+      targetChannel = connections.find((c) => c.id === contact.channelId);
     } else {
       targetChannel = connections.find((c) => c.isActive) || connections[0];
     }
@@ -516,8 +575,8 @@ export class WhatsAppService {
     try {
       // 1. Resolve or Create Customer in DB
       let targetCustomer = null;
-      if (params.customerId) {
-        targetCustomer = await customerRepository.findById(params.customerId, orgId);
+      if (contact) {
+        targetCustomer = contact;
       }
       if (!targetCustomer) {
         targetCustomer = await customerRepository.findByPhone(orgId, cleanTo, targetChannel.id);
@@ -625,6 +684,7 @@ export class WhatsAppService {
     if (!targetMessage) {
       throw AppError.notFound("Message not found.");
     }
+    await customerService.requireVisible(targetMessage.customerId, orgId);
     const connections = await this.getConnections(orgId);
     const targetMetaId = params.targetMetaMessageId || targetMessage.metaMessageId;
     const resolvedCustomerId = targetMessage.customerId;

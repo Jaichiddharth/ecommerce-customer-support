@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  allowedDevOrigins: ["*"],
+  allowedDevOrigins: ['result-icy-material.ngrok-free.dev']
 };
 
 export default nextConfig;

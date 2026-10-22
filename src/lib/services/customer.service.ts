@@ -1,5 +1,6 @@
 import { Customer } from "../db";
 import { customerRepository } from "../db/repositories";
+import { AppError } from "../errors";
 
 export class CustomerService {
   async createCustomer(customerDto: {
@@ -25,7 +26,21 @@ export class CustomerService {
   }
 
   async getCustomerById(id: number, organizationId: number): Promise<Customer | null> {
-    return await customerRepository.findById(id, organizationId);
+    return await customerRepository.findVisibleById(id, organizationId);
+  }
+
+  /**
+   * A customer the user may see and act on: it must exist and its channel must still be connected.
+   * Contacts of a disconnected channel are hidden until the same number is reconnected.
+   */
+  async requireVisible(id: number, organizationId: number): Promise<Customer> {
+    const visible = await customerRepository.findVisibleById(id, organizationId);
+    if (visible) return visible;
+
+    if (await customerRepository.findById(id, organizationId)) {
+      throw new AppError("WHATSAPP_CHANNEL_DISCONNECTED", { details: { customerId: id }, expected: true });
+    }
+    throw AppError.notFound("Customer not found.");
   }
 
   async getCustomerByPhone(organizationId: number, phone: string, channelId?: number): Promise<Customer | null> {

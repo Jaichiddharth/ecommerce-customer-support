@@ -1,5 +1,5 @@
 import { db } from "..";
-import { and, eq, ne } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 import {
   shopifyStores,
   shopifyCustomerLinks,
@@ -13,17 +13,29 @@ import {
 export type ShopifyStoreWithUser = ShopifyStore & { connectedByName: string | null };
 export type ShopifyCustomerLinkWithUser = ShopifyCustomerLink & { linkedByName: string | null };
 
+/** The store the inbox uses: the oldest working connection, else the oldest one needing re-authorization */
+export function pickPrimaryStore<T extends ShopifyStore>(stores: T[]): T | null {
+  return stores.find((store) => store.status === ShopifyStoreStatus.CONNECTED) ?? stores[0] ?? null;
+}
+
 export class ShopifyRepository {
-  /** The organization's store that is connected or needs re-authorization (at most one, enforced by uq_shopify_stores_org_active) */
-  async findActiveStore(organizationId: number): Promise<ShopifyStoreWithUser | null> {
-    const [row] = await db
+  /** The organization's stores that are connected or need re-authorization, oldest connection first */
+  async findActiveStores(organizationId: number): Promise<ShopifyStoreWithUser[]> {
+    const rows = await db
       .select({ store: shopifyStores, connectedByName: users.name })
       .from(shopifyStores)
       .leftJoin(users, eq(users.id, shopifyStores.connectedById))
       .where(and(eq(shopifyStores.organizationId, organizationId), ne(shopifyStores.status, ShopifyStoreStatus.DISCONNECTED)))
-      .limit(1);
+      .orderBy(asc(shopifyStores.connectedAt), asc(shopifyStores.id));
 
-    return row ? { ...row.store, connectedByName: row.connectedByName } : null;
+    return rows.map((row) => ({ ...row.store, connectedByName: row.connectedByName }));
+  }
+
+  /** One active store: the given one, or else the primary store (pickPrimaryStore) */
+  async findActiveStore(organizationId: number, storeId?: number): Promise<ShopifyStoreWithUser | null> {
+    const stores = await this.findActiveStores(organizationId);
+    if (storeId !== undefined) return stores.find((store) => store.id === storeId) ?? null;
+    return pickPrimaryStore(stores);
   }
 
   async findStoreByDomain(organizationId: number, shopDomain: string): Promise<ShopifyStore | null> {

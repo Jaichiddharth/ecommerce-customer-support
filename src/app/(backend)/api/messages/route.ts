@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
 import { messageRepository } from "@/lib/db/repositories/message.repository";
-import { customerRepository } from "@/lib/db/repositories/customer.repository";
+import { customerService } from "@/lib/services";
 import { MessageStatus } from "@/lib/db/schema";
 import { publish } from "@/lib/realtime";
 import { AppError } from "@/lib/errors";
@@ -41,6 +41,8 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
     throw AppError.validation("Invalid before parameter.", "before");
   }
 
+  await customerService.requireVisible(customerId, orgId);
+
   const { messages, hasMore } = await messageRepository.listPageByCustomer(customerId, orgId, { limit, beforeId });
 
   // Opening the thread (newest batch) marks unread incoming messages as read
@@ -69,10 +71,7 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
     throw AppError.validation("customerId is required.", "customerId");
   }
 
-  const customer = await customerRepository.findById(Number(customerId), orgId);
-  if (!customer) {
-    throw AppError.notFound("Customer not found.");
-  }
+  const customer = await customerService.requireVisible(Number(customerId), orgId);
 
   const repliedTo = repliedToId
     ? await messageRepository.findById(Number(repliedToId), orgId)

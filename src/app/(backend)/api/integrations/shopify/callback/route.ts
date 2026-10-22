@@ -11,7 +11,7 @@ const log = createLogger("ShopifyCallback");
  * GET /api/integrations/shopify/callback — Shopify's OAuth redirect.
  * There's no Firebase session on a browser redirect: the request is trusted only after the
  * Shopify HMAC, our signed state and the nonce cookie all check out (shopifyService.completeInstall).
- * Always answers with a redirect back to the app's Store page.
+ * Always answers with a redirect back to the app's Shopify integration page.
  */
 export const GET = apiHandler(async (req: NextRequest) => {
   let origin = req.nextUrl.origin;
@@ -21,7 +21,8 @@ export const GET = apiHandler(async (req: NextRequest) => {
     // Not configured: completeInstall reports it below
   }
   const target = new URL("/", origin);
-  target.searchParams.set("tab", "store");
+  target.searchParams.set("tab", "integrations");
+  target.searchParams.set("integration", "shopify");
 
   try {
     const store = await shopifyService.completeInstall(req.nextUrl.searchParams, req.cookies.get(OAUTH_NONCE_COOKIE)?.value);

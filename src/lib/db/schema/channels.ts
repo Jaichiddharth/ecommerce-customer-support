@@ -1,5 +1,5 @@
-import { pgTable, serial, integer, varchar, text, boolean, timestamp, index } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { pgTable, serial, integer, varchar, text, boolean, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { relations, sql } from "drizzle-orm";
 import { organizations } from "./organizations";
 import { customers } from "./customers";
 import { tickets } from "./tickets";
@@ -42,6 +42,14 @@ export const channels = pgTable(
     index("idx_channels_meta_phone_id").on(table.metaPhoneNumberId),
     index("idx_channels_phone_number").on(table.phoneNumber),
     index("idx_channels_external_account").on(table.externalAccountId),
+    // A number is live in at most one workspace at a time; disconnected rows from earlier owners may remain
+    uniqueIndex("uq_channels_live_meta_phone_id")
+      .on(table.metaPhoneNumberId)
+      .where(sql`${table.status} <> 'disconnected' AND ${table.metaPhoneNumberId} IS NOT NULL`),
+    // One row per number per workspace: reconnecting updates it instead of adding a duplicate
+    uniqueIndex("uq_channels_org_meta_phone_id")
+      .on(table.organizationId, table.metaPhoneNumberId)
+      .where(sql`${table.metaPhoneNumberId} IS NOT NULL`),
   ]
 );
 

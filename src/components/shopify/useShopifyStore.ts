@@ -12,9 +12,10 @@ export function notifyShopifyChanged() {
   window.dispatchEvent(new Event(SHOPIFY_CHANGED_EVENT));
 }
 
-/** The organization's Shopify connection, from GET /api/integrations/shopify */
+/** The organization's Shopify connections, from GET /api/integrations/shopify. `store` is the primary one the inbox uses. */
 export function useShopifyStore() {
   const [store, setStore] = useState<ShopifyStoreInfo | null>(null);
+  const [stores, setStores] = useState<ShopifyStoreInfo[]>([]);
   const [configured, setConfigured] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
@@ -23,6 +24,7 @@ export function useShopifyStore() {
     try {
       const res = await apiClient.get('/api/integrations/shopify');
       setStore(res.data?.store ?? null);
+      setStores(res.data?.stores ?? []);
       setConfigured(res.data?.configured !== false);
       setError(null);
     } catch (err) {
@@ -40,6 +42,7 @@ export function useShopifyStore() {
 
   return {
     store,
+    stores,
     configured,
     isLoading,
     error,

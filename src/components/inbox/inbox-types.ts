@@ -49,7 +49,7 @@ export interface InboxConversation {
   } | null;
 }
 
-/** Row returned by GET /api/channels */
+/** Row returned by GET /api/channels (disconnected channels are never returned) */
 export interface InboxChannel {
   id: number;
   type: string;

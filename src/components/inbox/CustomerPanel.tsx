@@ -127,8 +127,8 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
         ) : (
           <p className="m-4 rounded-lg bg-slate-100/80 px-3 py-2.5 text-xs text-slate-600 leading-relaxed">
             {shopify.needsReauth
-              ? 'The Shopify connection has expired. Reconnect the store from the Store page.'
-              : 'Connect your Shopify store from the Store page to search and share products.'}
+              ? 'The Shopify connection has expired. Reconnect the store from Integrations.'
+              : 'Connect your Shopify store from Integrations to search and share products.'}
           </p>
         )}
       </aside>
