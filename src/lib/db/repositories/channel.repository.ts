@@ -94,25 +94,24 @@ export class ChannelRepository {
   }
 
   /**
-   * Find any existing WhatsApp channel that conflicts by WABA ID, Phone Number ID, or Phone Number.
-   * Used to strictly prevent connecting an already connected WhatsApp account.
+   * Find any existing WhatsApp channel that conflicts by Phone Number ID or Phone Number.
+   * WABA ID is intentionally not compared: one WABA can hold several phone numbers,
+   * each connected as its own channel.
    */
   async findConflictingWhatsAppChannel(params: {
-    wabaId?: string | null;
     metaPhoneNumberId?: string | null;
     phoneNumber?: string | null;
     excludeChannelId?: number;
   }): Promise<{
-    conflictType: "waba" | "phone_number_id" | "phone_number";
+    conflictType: "phone_number_id" | "phone_number";
     matchedValue: string;
     channel: Channel;
   } | null> {
-    const cleanWaba = params.wabaId?.trim() || null;
     const cleanPhoneId = params.metaPhoneNumberId?.trim() || null;
     const cleanPhone = params.phoneNumber?.trim() || null;
     const cleanPhoneDigits = cleanPhone ? cleanPhone.replace(/\D/g, "") : null;
 
-    if (!cleanWaba && !cleanPhoneId && !cleanPhone) {
+    if (!cleanPhoneId && !cleanPhone) {
       return null;
     }
 
@@ -126,16 +125,7 @@ export class ChannelRepository {
         continue;
       }
 
-      // 1. Check WABA ID match
-      if (cleanWaba && ch.wabaId && ch.wabaId.trim() === cleanWaba) {
-        return {
-          conflictType: "waba",
-          matchedValue: cleanWaba,
-          channel: ch,
-        };
-      }
-
-      // 2. Check Phone Number ID match
+      // 1. Check Phone Number ID match
       if (cleanPhoneId && ch.metaPhoneNumberId && ch.metaPhoneNumberId.trim() === cleanPhoneId) {
         return {
           conflictType: "phone_number_id",
@@ -144,7 +134,7 @@ export class ChannelRepository {
         };
       }
 
-      // 3. Check Phone Number match (exact or normalized digits)
+      // 2. Check Phone Number match (exact or normalized digits)
       if (cleanPhone && ch.phoneNumber) {
         const existingTrimmed = ch.phoneNumber.trim();
         if (existingTrimmed === cleanPhone) {

@@ -30,6 +30,7 @@ import {
 import { Message, MessageStatus, normalizeMessageStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { AddChannelModal } from './channels/AddChannelModal';
+import { WhatsAppMediaAttachment } from './whatsapp/WhatsAppMediaAttachment';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 import { Modal } from '@/components/ui/Modal';
 import {
@@ -227,28 +228,7 @@ interface InboxViewProps {
 }
 
 export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, onSelectConversation, onCountsChange }) => {
-  const { user, dbUser, getIdToken } = useAuth();
-
-  // Firebase ID token appended to media URLs: <img>/<video> tags cannot send an Authorization header.
-  // Refreshed every 50 minutes because ID tokens expire after 1 hour.
-  const [mediaToken, setMediaToken] = useState<string | null>(null);
-  useEffect(() => {
-    if (!user) {
-      setMediaToken(null);
-      return;
-    }
-    let cancelled = false;
-    const refresh = async () => {
-      const token = await getIdToken();
-      if (!cancelled) setMediaToken(token);
-    };
-    refresh();
-    const interval = setInterval(refresh, 50 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [user, getIdToken]);
+  const { dbUser } = useAuth();
 
   // Channels & conversations from DB
   const [channels, setChannels] = useState<InboxChannel[]>([]);
@@ -1134,78 +1114,23 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // -------------------------------------------------------------
   // RENDER HELPERS
   // -------------------------------------------------------------
+  // WhatsApp media is fetched with the Authorization header and shown from a blob URL
   const renderMedia = (msg: Message, senderName: string) => {
     if (!msg.mediaUrl) return null;
-    let resolvedMediaUrl = msg.mediaUrl;
-    if (msg.mediaUrl.startsWith('whatsapp-media:')) {
-      const rawId = msg.mediaUrl.replace('whatsapp-media:', '');
-      resolvedMediaUrl = `/api/channels/whatsapp/media/${rawId}?token=${encodeURIComponent(mediaToken ?? '')}`;
-    }
-    const mType = (msg.mediaType || msg.type || '').toLowerCase();
-    const cleanCaption = isPlaceholderText(msg.text) ? '' : msg.text.trim();
     const fullTimestamp = msg.createdAt
       ? `${new Date(msg.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}, ${formatTime(msg.createdAt)}`
       : msg.timestamp;
-    const openPreview = (type: string, caption = cleanCaption) =>
-      setPreviewMedia({ url: resolvedMediaUrl, type, senderName, timestamp: fullTimestamp, caption });
 
-    if (
-      mType === 'image' ||
-      resolvedMediaUrl.match(/\.(jpeg|jpg|gif|png|webp)($|\?)/i) ||
-      (mType !== 'video' && mType !== 'audio' && mType !== 'document' && !resolvedMediaUrl.match(/\.(pdf|doc|docx|mp4|mp3|ogg|wav)($|\?)/i))
-    ) {
-      return (
-        <div className="mb-1.5 rounded-lg overflow-hidden max-w-xs border border-black/5 bg-black/5">
-          <img
-            src={resolvedMediaUrl}
-            alt="Attachment"
-            className="w-full h-auto max-h-64 object-contain cursor-pointer hover:opacity-95"
-            onClick={() => openPreview('image')}
-          />
-        </div>
-      );
-    }
-
-    if (mType === 'video' || resolvedMediaUrl.match(/\.(mp4|mov|webm)($|\?)/i)) {
-      return (
-        <div className="mb-1.5 max-w-xs">
-          <video
-            src={resolvedMediaUrl}
-            controls
-            controlsList="nodownload nofullscreen noplaybackrate"
-            disablePictureInPicture
-            className="w-full rounded-lg max-h-64"
-          />
-          <button
-            type="button"
-            onClick={() => openPreview('video')}
-            className="mt-1 text-[11px] font-medium text-[#3440a8] flex items-center gap-1 cursor-pointer hover:underline"
-          >
-            <ExternalLink className="w-3 h-3" /> Expand video
-          </button>
-        </div>
-      );
-    }
-
-    if (mType === 'audio' || mType === 'voice' || resolvedMediaUrl.match(/\.(mp3|ogg|wav|m4a|aac)($|\?)/i)) {
-      return <audio src={resolvedMediaUrl} controls className="mb-1.5 w-full min-w-[220px]" />;
-    }
-
-    const docTitle = msg.text && msg.text.startsWith('[Document]') ? msg.text.replace('[Document]', '').trim() : 'View document';
     return (
-      <div
-        onClick={() => openPreview('document', cleanCaption || docTitle)}
-        className="mb-1.5 p-2.5 rounded-lg flex items-center gap-2.5 cursor-pointer border bg-white/70 hover:bg-white border-slate-200 text-slate-800"
-      >
-        <div className="p-1.5 rounded-md bg-[#eef0fb] text-[#3440a8]">
-          <FileText className="w-4 h-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="font-medium text-xs truncate">{docTitle}</p>
-          <p className="text-[10px] text-slate-400">Click to preview</p>
-        </div>
-        <Download className="w-4 h-4 shrink-0 text-slate-400" />
-      </div>
+      <WhatsAppMediaAttachment
+        mediaUrl={msg.mediaUrl}
+        mediaType={msg.mediaType}
+        msgType={msg.type}
+        msgText={msg.text}
+        senderName={senderName}
+        fullTimestamp={fullTimestamp}
+        onPreview={setPreviewMedia}
+      />
     );
   };
 
