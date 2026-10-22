@@ -51,6 +51,7 @@ export const ERROR_DEFINITIONS = {
   // WhatsApp channel connection
   WHATSAPP_NOT_CONNECTED: { status: 422, source: "whatsapp", message: "No WhatsApp channel is connected. Please connect your WhatsApp account first." },
   WHATSAPP_CHANNEL_NOT_FOUND: { status: 404, source: "whatsapp", message: "The selected WhatsApp channel could not be found." },
+  WHATSAPP_CHANNEL_DISCONNECTED: { status: 409, source: "whatsapp", message: "This contact's WhatsApp number was disconnected. Reconnect it to see and reply to this conversation." },
   WHATSAPP_CHANNEL_MISCONFIGURED: { status: 422, source: "whatsapp", message: "This WhatsApp channel is not fully set up. Please reconnect it." },
   WHATSAPP_REAUTH_REQUIRED: { status: 422, source: "whatsapp", message: "The WhatsApp connection has expired. Please reconnect your WhatsApp account." },
   WHATSAPP_CONNECT_FAILED: { status: 502, source: "whatsapp", message: "Could not connect your WhatsApp account. Please try again." },
@@ -79,6 +80,10 @@ export const ERROR_DEFINITIONS = {
   SHOPIFY_AUTH_FAILED: { status: 422, source: "shopify", message: "The Shopify store connection has expired. Please reconnect your store." },
   SHOPIFY_RATE_LIMITED: { status: 429, source: "shopify", message: "Shopify rate limit reached. Please wait a moment and try again.", retryable: true },
   SHOPIFY_UNAVAILABLE: { status: 503, source: "shopify", message: "Shopify is temporarily unavailable. Please try again shortly.", retryable: true },
+  SHOPIFY_NOT_CONNECTED: { status: 422, source: "shopify", message: "No Shopify store is connected. Connect your store first." },
+  SHOPIFY_NOT_CONFIGURED: { status: 500, source: "shopify", message: "The Shopify integration is not configured on the server." },
+  SHOPIFY_OAUTH_FAILED: { status: 400, source: "shopify", message: "The Shopify authorization could not be verified. Please try connecting again." },
+  SHOPIFY_CUSTOMER_ALREADY_LINKED: { status: 409, source: "shopify", message: "This Shopify customer is already linked to another contact." },
 
   // Database
   DB_UNAVAILABLE: { status: 503, source: "database", message: "The database is temporarily unavailable. Please try again shortly.", retryable: true },

@@ -30,6 +30,7 @@ const INLINE_ERROR_CODES = ['auth/no-workspace', 'auth/sync-failed', 'auth/email
 export interface DbUser {
   id: number;
   organizationId: number;
+  organizationName?: string | null;
   name: string;
   email: string;
   role: string;

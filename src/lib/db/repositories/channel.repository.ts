@@ -1,6 +1,9 @@
 import { db } from "..";
-import { channels, type Channel } from "../schema";
-import { eq, and } from "drizzle-orm";
+import { channels, ChannelStatus, type Channel } from "../schema";
+import { eq, and, ne } from "drizzle-orm";
+
+/** A disconnected channel is kept only for history: it is never listed, routed to or sent from. */
+const isLive = ne(channels.status, ChannelStatus.DISCONNECTED);
 
 export class ChannelRepository {
   /**
@@ -29,7 +32,7 @@ export class ChannelRepository {
     const [channel] = await db
       .select()
       .from(channels)
-      .where(eq(channels.metaPhoneNumberId, metaPhoneNumberId))
+      .where(and(eq(channels.metaPhoneNumberId, metaPhoneNumberId), isLive))
       .limit(1);
 
     return channel || null;
@@ -67,6 +70,16 @@ export class ChannelRepository {
   }
 
   /**
+   * All live channels on a WABA, across organizations (used to tell whether a WABA is still in use).
+   */
+  async findByWabaIdLive(wabaId: string): Promise<Channel[]> {
+    return await db
+      .select()
+      .from(channels)
+      .where(and(eq(channels.wabaId, wabaId.trim()), isLive));
+  }
+
+  /**
    * Find a WhatsApp channel by phone number
    */
   async findByPhoneNumber(phoneNumber: string, organizationId?: number): Promise<Channel | null> {
@@ -94,26 +107,20 @@ export class ChannelRepository {
   }
 
   /**
-   * Find any existing WhatsApp channel that conflicts by WABA ID, Phone Number ID, or Phone Number.
-   * Used to strictly prevent connecting an already connected WhatsApp account.
+   * Every WhatsApp channel row for a number, across all organizations and statuses (disconnected included).
+   * Matched by Meta Phone Number ID, or by phone number digits. WABA ID is intentionally not compared:
+   * one WABA can hold several phone numbers, each connected as its own channel.
+   * Used for ownership checks: a number belongs to whichever workspace has it connected right now.
    */
-  async findConflictingWhatsAppChannel(params: {
-    wabaId?: string | null;
+  async findWhatsAppChannelsForNumber(params: {
     metaPhoneNumberId?: string | null;
     phoneNumber?: string | null;
-    excludeChannelId?: number;
-  }): Promise<{
-    conflictType: "waba" | "phone_number_id" | "phone_number";
-    matchedValue: string;
-    channel: Channel;
-  } | null> {
-    const cleanWaba = params.wabaId?.trim() || null;
+  }): Promise<Channel[]> {
     const cleanPhoneId = params.metaPhoneNumberId?.trim() || null;
-    const cleanPhone = params.phoneNumber?.trim() || null;
-    const cleanPhoneDigits = cleanPhone ? cleanPhone.replace(/\D/g, "") : null;
+    const cleanDigits = params.phoneNumber?.replace(/\D/g, "") || "";
 
-    if (!cleanWaba && !cleanPhoneId && !cleanPhone) {
-      return null;
+    if (!cleanPhoneId && cleanDigits.length < 7) {
+      return [];
     }
 
     const allWaChannels = await db
@@ -121,51 +128,11 @@ export class ChannelRepository {
       .from(channels)
       .where(eq(channels.type, "whatsapp"));
 
-    for (const ch of allWaChannels) {
-      if (params.excludeChannelId && ch.id === params.excludeChannelId) {
-        continue;
-      }
-
-      // 1. Check WABA ID match
-      if (cleanWaba && ch.wabaId && ch.wabaId.trim() === cleanWaba) {
-        return {
-          conflictType: "waba",
-          matchedValue: cleanWaba,
-          channel: ch,
-        };
-      }
-
-      // 2. Check Phone Number ID match
-      if (cleanPhoneId && ch.metaPhoneNumberId && ch.metaPhoneNumberId.trim() === cleanPhoneId) {
-        return {
-          conflictType: "phone_number_id",
-          matchedValue: cleanPhoneId,
-          channel: ch,
-        };
-      }
-
-      // 3. Check Phone Number match (exact or normalized digits)
-      if (cleanPhone && ch.phoneNumber) {
-        const existingTrimmed = ch.phoneNumber.trim();
-        if (existingTrimmed === cleanPhone) {
-          return {
-            conflictType: "phone_number",
-            matchedValue: cleanPhone,
-            channel: ch,
-          };
-        }
-        const existingDigits = existingTrimmed.replace(/\D/g, "");
-        if (cleanPhoneDigits && cleanPhoneDigits.length >= 7 && existingDigits === cleanPhoneDigits) {
-          return {
-            conflictType: "phone_number",
-            matchedValue: cleanPhone,
-            channel: ch,
-          };
-        }
-      }
-    }
-
-    return null;
+    return allWaChannels.filter(
+      (ch) =>
+        (cleanPhoneId && ch.metaPhoneNumberId?.trim() === cleanPhoneId) ||
+        (cleanDigits.length >= 7 && ch.phoneNumber?.replace(/\D/g, "") === cleanDigits)
+    );
   }
 
   /**
@@ -195,6 +162,61 @@ export class ChannelRepository {
       .returning();
 
     return created;
+  }
+
+  /**
+   * Store fresh Meta credentials on a workspace's existing WhatsApp channel and mark it connected.
+   * Used when the owner reconnects a disconnected number or runs the connect flow again.
+   */
+  async reconnectWhatsAppChannel(
+    id: number,
+    data: {
+      name: string;
+      phoneNumber?: string | null;
+      metaPhoneNumberId?: string | null;
+      wabaId?: string | null;
+      metaAccessToken?: string | null;
+    }
+  ): Promise<Channel> {
+    const [updated] = await db
+      .update(channels)
+      .set({
+        name: data.name,
+        phoneNumber: data.phoneNumber || null,
+        metaPhoneNumberId: data.metaPhoneNumberId || null,
+        wabaId: data.wabaId || null,
+        metaAccessToken: data.metaAccessToken || null,
+        status: ChannelStatus.CONNECTED,
+        lastError: null,
+        tokenExpiresAt: null,
+        isActive: true,
+        updatedAt: new Date(),
+      })
+      .where(eq(channels.id, id))
+      .returning();
+
+    return updated;
+  }
+
+  /**
+   * Soft-disconnect a channel: kept for conversation history, but hidden and never used again.
+   * The stored Meta token is wiped so it can't be used after the user disconnected.
+   */
+  async markDisconnected(id: number, organizationId: number): Promise<Channel | null> {
+    const [updated] = await db
+      .update(channels)
+      .set({
+        status: ChannelStatus.DISCONNECTED,
+        isActive: false,
+        metaAccessToken: null,
+        tokenExpiresAt: null,
+        lastError: null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(channels.id, id), eq(channels.organizationId, organizationId)))
+      .returning();
+
+    return updated || null;
   }
 
   /**
@@ -264,12 +286,19 @@ export class ChannelRepository {
   }
 
   /**
-   * List channels by organization and optional channel type
+   * List an organization's channels (optionally of one type). Disconnected channels are left out
+   * unless includeDisconnected is set, so nothing in the app lists, routes to or sends from them.
    */
-  async listByOrgAndType(organizationId: number, type?: string): Promise<Channel[]> {
-    const condition = type
-      ? and(eq(channels.organizationId, organizationId), eq(channels.type, type))
-      : eq(channels.organizationId, organizationId);
+  async listByOrgAndType(
+    organizationId: number,
+    type?: string,
+    { includeDisconnected = false }: { includeDisconnected?: boolean } = {}
+  ): Promise<Channel[]> {
+    const condition = and(
+      eq(channels.organizationId, organizationId),
+      type ? eq(channels.type, type) : undefined,
+      includeDisconnected ? undefined : isLive
+    );
 
     return await db
       .select()

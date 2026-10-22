@@ -1,15 +1,19 @@
 import { NextResponse } from "next/server";
 import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
 import { messageRepository } from "@/lib/db/repositories/message.repository";
-import { customerRepository } from "@/lib/db/repositories/customer.repository";
+import { customerService } from "@/lib/services";
 import { MessageStatus } from "@/lib/db/schema";
 import { publish } from "@/lib/realtime";
 import { AppError } from "@/lib/errors";
 import { readJson } from "@/lib/api/handler";
 
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 100;
+
 /**
- * GET /api/messages?customerId=123
- * Fetch all messages for a customer from PostgreSQL in chronological order
+ * GET /api/messages?customerId=123&limit=50&before=<messageId>
+ * One batch of a customer's messages in chronological order. Without `before` it is the newest batch;
+ * pass the oldest loaded message id as `before` to get the batch above it.
  */
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
   const orgId = req.user.organizationId;
@@ -25,15 +29,32 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
     throw AppError.validation("Invalid customerId parameter.", "customerId");
   }
 
-  const messages = await messageRepository.listByCustomer(customerId, orgId);
+  const limitParam = searchParams.get("limit");
+  const limit = limitParam ? Number(limitParam) : DEFAULT_PAGE_SIZE;
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) {
+    throw AppError.validation(`limit must be between 1 and ${MAX_PAGE_SIZE}.`, "limit");
+  }
 
-  // Automatically mark unread incoming messages as read when fetched
-  await messageRepository.markAsReadByCustomer(customerId, orgId);
+  const beforeParam = searchParams.get("before");
+  const beforeId = beforeParam ? Number(beforeParam) : null;
+  if (beforeParam && (!Number.isInteger(beforeId) || beforeId! < 1)) {
+    throw AppError.validation("Invalid before parameter.", "before");
+  }
+
+  await customerService.requireVisible(customerId, orgId);
+
+  const { messages, hasMore } = await messageRepository.listPageByCustomer(customerId, orgId, { limit, beforeId });
+
+  // Opening the thread (newest batch) marks unread incoming messages as read
+  if (!beforeId) {
+    await messageRepository.markAsReadByCustomer(customerId, orgId);
+  }
 
   return NextResponse.json({
     success: true,
     messages,
-    total: messages.length,
+    hasMore,
+    nextCursor: hasMore && messages.length > 0 ? messages[0].id : null,
   });
 });
 
@@ -50,10 +71,7 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
     throw AppError.validation("customerId is required.", "customerId");
   }
 
-  const customer = await customerRepository.findById(Number(customerId), orgId);
-  if (!customer) {
-    throw AppError.notFound("Customer not found.");
-  }
+  const customer = await customerService.requireVisible(Number(customerId), orgId);
 
   const repliedTo = repliedToId
     ? await messageRepository.findById(Number(repliedToId), orgId)

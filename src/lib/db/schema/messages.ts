@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, varchar, text, boolean, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, varchar, text, boolean, timestamp, jsonb, index } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { organizations } from "./organizations";
 import { customers } from "./customers";
@@ -7,7 +7,30 @@ import { tickets } from "./tickets";
 import { users } from "./users";
 import { messageReactions } from "./message_reactions";
 
-export type SenderType = "customer" | "agent" | "system";
+export type SenderType = "customer" | "agent" | "ai" | "system";
+
+/** Shopify product/variant reference recorded on a shared-product message */
+export interface SharedShopifyProduct {
+  storeId: number;
+  productId: string; // gid://shopify/Product/…
+  variantId: string; // gid://shopify/ProductVariant/…
+  title: string;
+  variantTitle: string | null;
+  options: { name: string; value: string }[];
+  sku: string | null;
+  price: string;
+  currencyCode: string;
+  available: boolean;
+  imageUrl: string | null;
+  productUrl: string | null;
+}
+
+/** Extra data attached to a message, e.g. which action the AI agent performed */
+export interface MessageMetadata {
+  aiAction?: string; // e.g. 'catalog lookup'
+  shopifyProduct?: SharedShopifyProduct; // Set when an agent shares a Shopify product
+  [key: string]: unknown;
+}
 
 export enum MessageStatus {
   SENT = 0,
@@ -64,8 +87,8 @@ export const messages = pgTable(
       .references(() => customers.id, { onDelete: "cascade" }),
     channelId: integer("channel_id").references(() => channels.id, { onDelete: "set null" }),
     ticketId: integer("ticket_id").references(() => tickets.id, { onDelete: "set null" }), // Nullable for now
-    senderType: varchar("sender_type", { length: 50 }).notNull(), // 'customer', 'agent', 'system'
-    senderId: integer("sender_id").references(() => users.id, { onDelete: "set null" }), // User ID (null when coming from webhook / customer)
+    senderType: varchar("sender_type", { length: 50 }).notNull(), // 'customer', 'agent', 'ai', 'system'
+    senderId: integer("sender_id").references(() => users.id, { onDelete: "set null" }), // User ID (null when coming from webhook / customer / AI)
     receiverId: integer("receiver_id").references(() => customers.id, { onDelete: "cascade" }), // Always denotes customer_id
     textContent: text("text_content"),
     mediaUrl: text("media_url"),
@@ -75,6 +98,7 @@ export const messages = pgTable(
     errorCode: integer("error_code"), // Meta error code if message failed (e.g. 131026, 131047, etc.)
     metaMessageId: varchar("meta_message_id", { length: 255 }), // e.g. "wamid.HBg..."
     repliedToId: integer("replied_to_id").references((): any => messages.id, { onDelete: "set null" }),
+    metadata: jsonb("metadata").$type<MessageMetadata>(), // e.g. { aiAction: 'catalog lookup' }
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
   },

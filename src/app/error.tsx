@@ -24,13 +24,13 @@ export default function AppError({ error, reset }: { error: Error & { digest?: s
           <AlertTriangle className="w-6 h-6" />
         </div>
         <div className="space-y-1">
-          <h2 className="text-sm font-bold text-slate-900">This page ran into a problem</h2>
-          <p className="text-xs text-slate-500">
+          <h2 className="text-sm font-bold text-black">This page ran into a problem</h2>
+          <p className="text-xs text-slate-800 font-medium">
             Something went wrong while showing this view. Your data is safe — try again, or reload the page.
           </p>
-          {error.digest && <p className="text-[10px] text-slate-400 font-mono select-all">Ref {error.digest}</p>}
+          {error.digest && <p className="text-[10px] text-slate-600 font-mono select-all">Ref {error.digest}</p>}
           {process.env.NODE_ENV !== 'production' && (
-            <p className="text-[10px] text-red-500 font-mono break-all">{error.message}</p>
+            <p className="text-[10px] text-red-600 font-mono break-all">{error.message}</p>
           )}
         </div>
         <div className="flex items-center justify-center gap-2">

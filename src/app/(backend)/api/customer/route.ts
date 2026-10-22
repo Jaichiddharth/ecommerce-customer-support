@@ -3,6 +3,8 @@ import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
 import { NextResponse } from "next/server";
 import { AppError } from "@/lib/errors";
 import { readJson } from "@/lib/api/handler";
+import { conversationRepository } from "@/lib/db/repositories";
+import { ChannelStatus } from "@/lib/db/schema";
 
 export const POST = withAuth(async (req: AuthenticatedRequest) => {
   const body = await readJson(req);
@@ -17,7 +19,7 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
   }
 
   const channel = await channelService.getById(Number(channelId), req.user.organizationId);
-  if (!channel) {
+  if (!channel || channel.status === ChannelStatus.DISCONNECTED) {
     throw new AppError("WHATSAPP_CHANNEL_NOT_FOUND", { details: { channelId }, expected: true });
   }
 
@@ -35,6 +37,11 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
     tags: Array.isArray(tags) ? tags : [],
     isOptedOut: Boolean(isOptedOut),
   });
+
+  // Show the new contact in the inbox before the first message is exchanged
+  if (customer) {
+    await conversationRepository.ensureForCustomer(req.user.organizationId, customer.id, customer.channelId);
+  }
 
   return NextResponse.json({ success: true, customer }, { status: 201 });
 });

@@ -123,6 +123,9 @@ export interface Message {
   mediaUrl?: string;
   voiceDuration?: string;
   metaMessageId?: string;
+  isInternalNote?: boolean;
+  /** Action the AI agent performed with this reply, e.g. 'catalog lookup' */
+  aiAction?: string | null;
   reactions?: MessageReactionItem[];
   createdAt?: string | Date;
   templateCard?: {

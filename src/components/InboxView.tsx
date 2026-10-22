@@ -1,54 +1,36 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
 import apiClient from '@/lib/api/client';
 
 import {
-  Search,
   Send,
   Paperclip,
   Smile,
-  Mic,
   Plus,
-  ChevronLeft,
-  ChevronRight,
   ChevronDown,
-  ChevronUp,
   MessageSquare,
-  Zap,
   ExternalLink,
   X,
   Check,
   User,
-  ShoppingBag,
-  Store,
   Sparkles,
-  Share2,
-  LogOut,
-  Camera,
-  Mail,
-  Smartphone,
   CheckCheck,
   AlertCircle,
   Loader2,
-  RefreshCw,
   FileText,
   Image as ImageIcon,
   Film,
   Music,
   Download,
+  CircleCheck,
+  RotateCcw,
+  ShoppingBag,
 } from 'lucide-react';
-import {
-  Conversation,
-  Message,
-  ChannelType,
-  MessageStatus,
-  normalizeMessageStatus,
-  getMessageStatusName,
-} from '../types';
+import { Message, MessageStatus, normalizeMessageStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { AddChannelModal } from './channels/AddChannelModal';
+import { WhatsAppMediaAttachment } from './whatsapp/WhatsAppMediaAttachment';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 import { Modal } from '@/components/ui/Modal';
 import {
@@ -64,9 +46,30 @@ import { clientLogger } from '@/lib/client-logger';
 import { ErrorState } from '@/components/ui/states';
 import { describeMessageFailure, getMetaErrorInfo } from '@/lib/errors/meta-errors';
 import { validateWhatsAppMedia } from '@/lib/media-limits';
+import { ChannelsPane } from './inbox/ChannelsPane';
+import { ConversationList, Avatar, StatusFilter } from './inbox/ConversationList';
+import { CustomerPanel } from './inbox/CustomerPanel';
+import { VirtualMessageList } from './inbox/VirtualMessageList';
+import { InboxTopBar } from './inbox/InboxTopBar';
+import { ProductBrowser, type ShareProductArgs } from './shopify/ProductBrowser';
+import { useShopifyStore } from './shopify/useShopifyStore';
+import {
+  CHANNEL_LABELS,
+  CHANNEL_THREAD_LABELS,
+  ChannelFilter,
+  InboxChannel,
+  InboxConversation,
+  ListTab,
+  SENDABLE_CHANNEL_TYPES,
+  conversationChannelType,
+  formatHandle,
+  formatPhone,
+  isChannelHealthy,
+  languageName,
+} from './inbox/inbox-types';
 
 /**
- * Render Status Indicator for a message
+ * Render Status Indicator for an outbound message
  * 0 (Sent): Single check
  * 1 (Delivered): Double check (neutral)
  * 2 (Read): Double check (sky blue)
@@ -75,43 +78,34 @@ import { validateWhatsAppMedia } from '@/lib/media-limits';
 const renderMessageStatusIndicator = (statusVal: unknown, errorCode?: number | null, errorMessage?: string | null) => {
   const norm = normalizeMessageStatus(statusVal);
   switch (norm) {
-    case MessageStatus.SENT: // 0: sent
+    case MessageStatus.SENT:
       return (
-        <span
-          title="Status: Sent (0)"
-          className="inline-flex items-center text-slate-400"
-        >
+        <span title="Sent" className="inline-flex items-center">
           <Check className="w-3.5 h-3.5 text-slate-400" />
         </span>
       );
-    case MessageStatus.DELIVERED: // 1: delivered
+    case MessageStatus.DELIVERED:
       return (
-        <span
-          title="Status: Delivered (1)"
-          className="inline-flex items-center text-slate-500"
-        >
-          <CheckCheck className="w-3.5 h-3.5 text-slate-500" />
+        <span title="Delivered" className="inline-flex items-center">
+          <CheckCheck className="w-3.5 h-3.5 text-slate-400" />
         </span>
       );
-    case MessageStatus.READ: // 2: read
+    case MessageStatus.READ:
       return (
-        <span
-          title="Status: Read (2)"
-          className="inline-flex items-center text-sky-500"
-        >
+        <span title="Read" className="inline-flex items-center">
           <CheckCheck className="w-3.5 h-3.5 text-sky-500" />
         </span>
       );
-    case MessageStatus.FAILED: { // 3: failed — short reason on the badge, full explanation on hover
+    case MessageStatus.FAILED: { // short reason on the badge, full explanation on hover
       const info = getMetaErrorInfo(errorCode);
       const reason = errorMessage || describeMessageFailure(errorCode);
       const tooltip = [info?.title, reason, errorCode ? `(WhatsApp error ${errorCode})` : null].filter(Boolean).join(' — ');
       return (
         <span
           title={tooltip}
-          className="inline-flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 shadow-2xs cursor-help max-w-[280px]"
+          className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 cursor-help max-w-[240px]"
         >
-          <AlertCircle className="w-3 h-3 text-red-600 shrink-0" />
+          <AlertCircle className="w-3 h-3 shrink-0" />
           <span className="truncate">Failed · {info?.title ?? reason}</span>
         </span>
       );
@@ -121,26 +115,12 @@ const renderMessageStatusIndicator = (statusVal: unknown, errorCode?: number | n
   }
 };
 
-export interface WhatsAppChannel {
-  id: number;
-  organizationId?: number;
-  type?: string;
-  verified_name?: string | null;
-  phoneNumber?: string | null;
-  metaPhoneNumberId?: string | null;
-  wabaId?: string | null;
-  isActive?: boolean;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
 /**
  * Detects URLs in text (http, https, www) and renders them as clickable links.
  */
-const renderMessageWithLinks = (text: string, isAgent: boolean = false) => {
+const renderMessageWithLinks = (text: string) => {
   if (!text) return null;
 
-  // Regex to match URLs starting with http://, https://, or www.
   const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
   const parts = text.split(urlRegex);
 
@@ -154,9 +134,7 @@ const renderMessageWithLinks = (text: string, isAgent: boolean = false) => {
         cleanUrl = cleanUrl.slice(0, -trailingPunctuation.length);
       }
 
-      const href = cleanUrl.startsWith('http://') || cleanUrl.startsWith('https://')
-        ? cleanUrl
-        : `https://${cleanUrl}`;
+      const href = cleanUrl.startsWith('http://') || cleanUrl.startsWith('https://') ? cleanUrl : `https://${cleanUrl}`;
 
       return (
         <React.Fragment key={index}>
@@ -165,10 +143,7 @@ const renderMessageWithLinks = (text: string, isAgent: boolean = false) => {
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className={`underline underline-offset-2 break-all transition-colors ${isAgent
-              ? 'text-white font-medium hover:text-blue-100 hover:opacity-90'
-              : 'text-[#2563eb] font-medium hover:text-[#1d4ed8]'
-              }`}
+            className="underline underline-offset-2 break-all text-[#3440a8] font-medium hover:text-[#2b3590]"
           >
             {cleanUrl}
           </a>
@@ -180,68 +155,129 @@ const renderMessageWithLinks = (text: string, isAgent: boolean = false) => {
   });
 };
 
-interface InboxViewProps {
-  conversations?: Conversation[];
-  selectedConversationId?: string;
-  onSelectConversation?: (id: string) => void;
-  onSendMessage?: (conversationId: string, text: string) => void;
-  onStatusChange?: (conversationId: string, status: 'open' | 'pending' | 'resolved') => void;
+/** WhatsApp placeholder captions that should not be shown as message text */
+const isPlaceholderText = (text?: string) =>
+  !text ||
+  !text.trim() ||
+  /^\[(Image|Video|Audio|Document|Voice)\](\s*(No caption|attachment)?)?$/i.test(text) ||
+  text === '[Image] No caption' ||
+  text === '[Video] No caption';
+
+const formatTime = (iso?: string | Date) => {
+  const d = iso ? new Date(iso) : new Date();
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+};
+
+const dayKey = (iso?: string | Date) => {
+  const d = iso ? new Date(iso) : new Date();
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+};
+
+const formatDayLabel = (iso?: string | Date) => {
+  const d = iso ? new Date(iso) : new Date();
+  const today = new Date();
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  if (dayKey(d) === dayKey(today)) return 'Today';
+  if (dayKey(d) === dayKey(yesterday)) return 'Yesterday';
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+};
+
+/** Maps a message row from the API (or a realtime event) to the UI message shape */
+const mapApiMessage = (m: any, channel: string): Message => {
+  const dateObj = m.createdAt ? new Date(m.createdAt) : new Date();
+  return {
+    id: String(m.id),
+    sender: m.senderType === 'customer' ? 'customer' : m.senderType === 'ai' ? 'bot' : 'agent',
+    senderId: m.senderId ?? null,
+    senderName: m.senderName ?? null,
+    channel: channel as Message['channel'],
+    text: m.textContent || '',
+    timestamp: formatTime(dateObj),
+    createdAt: dateObj.toISOString(),
+    status: m.status !== undefined ? normalizeMessageStatus(m.status) : MessageStatus.DELIVERED,
+    errorCode: m.errorCode || undefined,
+    type: m.mediaType || (m.mediaUrl ? 'image' : 'text'),
+    mediaType: m.mediaType || undefined,
+    mediaUrl: m.mediaUrl || undefined,
+    metaMessageId: m.metaMessageId || undefined,
+    isInternalNote: Boolean(m.isInternalNote),
+    aiAction: m.metadata?.aiAction ?? null,
+    reactions: m.reactions || [],
+  };
+};
+
+const convKeyFor = (customerId: number | string) => `cust-${customerId}`;
+
+/** Messages fetched per batch when opening a thread or scrolling up */
+const MESSAGE_PAGE_SIZE = 10;
+
+/** Optimistic bubbles get a temporary `msg-<timestamp>` id until the server returns the stored row */
+const isTempMessage = (m: Message) => m.id.startsWith('msg-');
+
+const isOlderThan = (a: Message, b: Message) =>
+  a.createdAt === b.createdAt ? Number(a.id) < Number(b.id) : (a.createdAt ?? '') < (b.createdAt ?? '');
+
+/** Puts a freshly fetched newest batch in place while keeping the older batches already loaded above it */
+const mergeLatestPage = (existing: Message[], page: Message[]): Message[] => {
+  if (page.length === 0) return page;
+  const pageIds = new Set(page.map((m) => m.id));
+  const older = existing.filter((m) => !isTempMessage(m) && !pageIds.has(m.id) && isOlderThan(m, page[0]));
+  return [...older, ...page];
+};
+
+interface ThreadPaging {
+  /** The newest batch has arrived at least once */
+  loaded: boolean;
+  /** Older messages exist above the oldest loaded one */
+  hasMore: boolean;
 }
 
-export const InboxView: React.FC<InboxViewProps> = ({
-  conversations,
-  selectedConversationId,
-  onSelectConversation,
-  onSendMessage,
-}) => {
-  // Navigation & filtering state
-  const { user, dbUser, logout, getIdToken } = useAuth();
+type ComposerMode = 'reply' | 'note' | 'template';
 
-  // Firebase ID token appended to media URLs: <img>/<video> tags cannot send an Authorization header.
-  // Refreshed every 50 minutes because ID tokens expire after 1 hour.
-  const [mediaToken, setMediaToken] = useState<string | null>(null);
-  useEffect(() => {
-    if (!user) {
-      setMediaToken(null);
-      return;
-    }
-    let cancelled = false;
-    const refresh = async () => {
-      const token = await getIdToken();
-      if (!cancelled) setMediaToken(token);
-    };
-    refresh();
-    const interval = setInterval(refresh, 50 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [user, getIdToken]);
-  const router = useRouter();
-  const [showUserMenu, setShowUserMenu] = useState(false);
-  const userMenuRef = useRef<HTMLDivElement>(null);
+const SAVED_REPLIES = [
+  { title: 'Welcome greeting', text: 'Hi! Thank you for reaching out to us. How can I help you today?' },
+  { title: 'Order status check', text: 'We have checked your order details and it is currently in transit. Expected delivery is tomorrow.' },
+  { title: 'Refund / return policy', text: 'We offer a hassle-free 7-day return and exchange policy. Would you like me to generate a return label?' },
+  { title: 'Closing conversation', text: 'Thank you for contacting us! Please let us know if you need anything else. Have a wonderful day!' },
+];
 
-  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
-  const [activeChannelFolder, setActiveChannelFolder] = useState<string>('all');
-  const [filterTab, setFilterTab] = useState<'all' | 'mine'>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [orderSearchQuery, setOrderSearchQuery] = useState('');
+export interface InboxCounts {
+  unread: number;
+  ai: number;
+}
 
-  // Dynamic WhatsApp Channels & Customers from DB
-  const [whatsappChannels, setWhatsappChannels] = useState<WhatsAppChannel[]>([]);
+interface InboxViewProps {
+  selectedConversationId?: string;
+  onSelectConversation?: (id: string) => void;
+  onCountsChange?: (counts: InboxCounts) => void;
+}
+
+export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, onSelectConversation, onCountsChange }) => {
+  const { dbUser } = useAuth();
+
+  // Channels & conversations from DB
+  const [channels, setChannels] = useState<InboxChannel[]>([]);
   const [isLoadingChannels, setIsLoadingChannels] = useState(true);
-  const [channelsError, setChannelsError] = useState<ApiError | null>(null);
-  const [isWhatsAppExpanded, setIsWhatsAppExpanded] = useState(true);
-  // Right Drawer tab state
-  const [shopifyTab, setShopifyTab] = useState<'orders' | 'catalog' | 'setup'>('orders');
-  const [isCustomerProfileOpen, setIsCustomerProfileOpen] = useState(true);
+  const [conversations, setConversations] = useState<InboxConversation[]>([]);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(true);
+  const [conversationsError, setConversationsError] = useState<ApiError | null>(null);
 
-  // Modals & Popovers
+  // Navigation & filtering
+  const [isChannelsCollapsed, setIsChannelsCollapsed] = useState(false);
+  const [channelFilter, setChannelFilter] = useState<ChannelFilter>({ kind: 'all' });
+  const [listTab, setListTab] = useState<ListTab>('all');
+  const [listSearch, setListSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('open');
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [internalSelectedId, setInternalSelectedId] = useState<string>('');
+
+  // Modals & popovers
   const [showAddChannelModal, setShowAddChannelModal] = useState(false);
   const [showNewContactModal, setShowNewContactModal] = useState(false);
-  const [showFastReplies, setShowFastReplies] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [showShopifyConnectModal, setShowShopifyConnectModal] = useState(false);
+  const [showCopilot, setShowCopilot] = useState(false);
+  const [showModeMenu, setShowModeMenu] = useState(false);
+  const [showProductPicker, setShowProductPicker] = useState(false);
   const [previewMedia, setPreviewMedia] = useState<{
     url: string;
     type: 'image' | 'video' | 'audio' | 'document' | string;
@@ -250,249 +286,590 @@ export const InboxView: React.FC<InboxViewProps> = ({
     caption?: string;
   } | null>(null);
 
-  // Customer list state
-  const [customerList, setCustomerList] = useState<any[]>([]);
-  const [isLoadingCustomers, setIsLoadingCustomers] = useState(true);
-  const [customersError, setCustomersError] = useState<ApiError | null>(null);
-  const [internalSelectedId, setInternalSelectedId] = useState<string>('');
-
-  // Database Messages State
+  // Messages
   const [messagesMap, setMessagesMap] = useState<Record<string, Message[]>>({});
-  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [messagesLoadError, setMessagesLoadError] = useState<{ convId: string; error: ApiError } | null>(null);
-  const [isSyncingMessages, setIsSyncingMessages] = useState(false);
-  const [messageReactions, setMessageReactions] = useState<Record<string, string>>({});
+  const [threadPaging, setThreadPaging] = useState<Record<string, ThreadPaging>>({});
+  const [loadingOlderConvId, setLoadingOlderConvId] = useState<string | null>(null);
   const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
   const [reactionPickerPlacement, setReactionPickerPlacement] = useState<'top' | 'bottom'>('top');
+  const [showFullReactionPicker, setShowFullReactionPicker] = useState(false);
 
-  // Fetch messages from PostgreSQL for a specific customer
-  const fetchMessagesForCustomer = useCallback(async (customerId: number): Promise<ApiError | null> => {
+  // Composer
+  const [composerMode, setComposerMode] = useState<ComposerMode>('reply');
+  const [inputMessage, setInputMessage] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
+  const [isSending, setIsSending] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const loadingOlderRef = useRef<Set<string>>(new Set());
+  const emojiPickerRef = useRef<HTMLDivElement>(null);
+  const reactionPickerRef = useRef<HTMLDivElement>(null);
+  const copilotRef = useRef<HTMLDivElement>(null);
+  const modeMenuRef = useRef<HTMLDivElement>(null);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const whatsappChannels = useMemo(() => channels.filter((c) => c.type === 'whatsapp'), [channels]);
+
+  const currentSelectedId = selectedConversationId || internalSelectedId;
+  const selectedCustomerId = currentSelectedId.startsWith('cust-') ? Number(currentSelectedId.replace('cust-', '')) : null;
+
+  const activeConv = useMemo(
+    () => (selectedCustomerId ? conversations.find((c) => c.customer.id === selectedCustomerId) ?? null : null),
+    [conversations, selectedCustomerId]
+  );
+  const activeChannelType = activeConv ? conversationChannelType(activeConv) : 'whatsapp';
+  const activeMessages = activeConv ? messagesMap[convKeyFor(activeConv.customer.id)] || [] : [];
+  const canSendOnChannel = SENDABLE_CHANNEL_TYPES.includes(activeChannelType);
+
+  // -------------------------------------------------------------
+  // DATA LOADING
+  // -------------------------------------------------------------
+  const fetchConversations = useCallback(async (): Promise<ApiError | null> => {
     try {
-      const res = await apiClient.get(`/api/messages?customerId=${customerId}`);
-      if (res.data?.success && Array.isArray(res.data.messages)) {
-        const mappedMessages: Message[] = res.data.messages.map((m: any) => {
-          const dateObj = m.createdAt ? new Date(m.createdAt) : new Date();
-          const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
-          const resolvedType = m.mediaType || (m.mediaUrl ? 'image' : 'text');
-          return {
-            id: String(m.id),
-            sender: m.senderType === 'customer' ? 'customer' : 'agent',
-            senderId: m.senderId ?? null,
-            senderName: m.senderName ?? null,
-            channel: 'whatsapp',
-            text: m.textContent || '',
-            timestamp: timeStr,
-            createdAt: dateObj.toISOString(),
-            status: m.status !== undefined ? normalizeMessageStatus(m.status) : (m.isRead ? MessageStatus.READ : MessageStatus.DELIVERED),
-            errorCode: m.errorCode || undefined,
-            type: resolvedType,
-            mediaType: m.mediaType || undefined,
-            mediaUrl: m.mediaUrl || undefined,
-            metaMessageId: m.metaMessageId || undefined,
-            reactions: m.reactions || [],
-          };
-        });
+      const res = await apiClient.get('/api/conversations');
+      if (res.data?.success && Array.isArray(res.data.conversations)) {
+        setConversations(res.data.conversations);
+      }
+      setConversationsError(null);
+      return null;
+    } catch (err) {
+      const apiError = toApiError(err);
+      setConversationsError(apiError);
+      return apiError;
+    } finally {
+      setIsLoadingConversations(false);
+    }
+  }, []);
 
-        const convId = `cust-${customerId}`;
-        setMessagesMap((prev) => ({
+  /** Coalesces bursts of realtime events into one list refresh */
+  const refreshConversationsSoon = useCallback(() => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      fetchConversations();
+    }, 400);
+  }, [fetchConversations]);
+
+  const fetchChannels = useCallback(async () => {
+    try {
+      setIsLoadingChannels(true);
+      const res = await apiClient.get('/api/channels');
+      if (res.data?.success && Array.isArray(res.data.channels)) {
+        setChannels(res.data.channels);
+      }
+    } catch (err) {
+      notifyError(err, { where: 'InboxView.fetchChannels', title: "Couldn't load channels" });
+    } finally {
+      setIsLoadingChannels(false);
+    }
+  }, []);
+
+  // Fetches the newest batch (merged under any older batches already loaded).
+  // It also marks the customer's unread messages as read on the server.
+  const fetchMessagesForCustomer = useCallback(async (customerId: number, channelType = 'whatsapp'): Promise<ApiError | null> => {
+    const convId = convKeyFor(customerId);
+    try {
+      const res = await apiClient.get(`/api/messages?customerId=${customerId}&limit=${MESSAGE_PAGE_SIZE}`);
+      if (res.data?.success && Array.isArray(res.data.messages)) {
+        const mapped: Message[] = res.data.messages.map((m: any) => mapApiMessage(m, channelType));
+        setMessagesMap((prev) => ({ ...prev, [convId]: mergeLatestPage(prev[convId] || [], mapped) }));
+        // Once older batches are loaded, their hasMore is the one that matters
+        setThreadPaging((prev) => ({
           ...prev,
-          [convId]: mappedMessages,
+          [convId]: { loaded: true, hasMore: prev[convId]?.loaded ? prev[convId].hasMore : Boolean(res.data.hasMore) },
         }));
         setMessagesLoadError((prev) => (prev?.convId === convId ? null : prev));
       }
       return null;
     } catch (err) {
       const apiError = toApiError(err);
-      setMessagesLoadError({ convId: `cust-${customerId}`, error: apiError });
+      setMessagesLoadError({ convId, error: apiError });
       return apiError;
     }
   }, []);
 
-  // Handle setting / toggling reactions for a message
+  // Fetches the batch above the oldest loaded message, triggered by scrolling to the top of the thread
+  const loadOlderMessages = useCallback(async (customerId: number, beforeId: number, channelType = 'whatsapp') => {
+    const convId = convKeyFor(customerId);
+    if (loadingOlderRef.current.has(convId)) return;
+    loadingOlderRef.current.add(convId);
+    setLoadingOlderConvId(convId);
+    try {
+      const res = await apiClient.get(`/api/messages?customerId=${customerId}&limit=${MESSAGE_PAGE_SIZE}&before=${beforeId}`);
+      if (res.data?.success && Array.isArray(res.data.messages)) {
+        const older: Message[] = res.data.messages.map((m: any) => mapApiMessage(m, channelType));
+        setMessagesMap((prev) => {
+          const existing = prev[convId] || [];
+          const knownIds = new Set(existing.map((m) => m.id));
+          return { ...prev, [convId]: [...older.filter((m) => !knownIds.has(m.id)), ...existing] };
+        });
+        setThreadPaging((prev) => ({ ...prev, [convId]: { loaded: true, hasMore: Boolean(res.data.hasMore) } }));
+      }
+    } catch (err) {
+      notifyError(err, { where: 'InboxView.loadOlderMessages', title: "Couldn't load earlier messages" });
+    } finally {
+      loadingOlderRef.current.delete(convId);
+      setLoadingOlderConvId((prev) => (prev === convId ? null : prev));
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchConversations();
+    fetchChannels();
+
+    // Reconnecting a number brings its contacts and threads back, so conversations are refreshed too
+    const handleChannelConnected = () => {
+      fetchChannels();
+      fetchConversations();
+    };
+    window.addEventListener('whatsapp-channel-connected', handleChannelConnected);
+    return () => {
+      window.removeEventListener('whatsapp-channel-connected', handleChannelConnected);
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
+    };
+  }, [fetchConversations, fetchChannels]);
+
+  // Load messages whenever a conversation is opened
+  useEffect(() => {
+    if (!selectedCustomerId) return;
+    fetchMessagesForCustomer(selectedCustomerId, activeChannelType);
+    // Opening the thread reads it
+    setConversations((prev) =>
+      prev.map((c) => (c.customer.id === selectedCustomerId && c.unreadCount > 0 ? { ...c, unreadCount: 0 } : c))
+    );
+    setComposerMode('reply');
+    setShowModeMenu(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCustomerId, fetchMessagesForCustomer]);
+
+  // The open thread's channel was disconnected, so it's no longer listed: close it
+  useEffect(() => {
+    if (isLoadingConversations || !selectedCustomerId || activeConv) return;
+    setInternalSelectedId('');
+    onSelectConversation?.('');
+  }, [isLoadingConversations, selectedCustomerId, activeConv, onSelectConversation]);
+
+  // Rail badges: unread conversations total and conversations the AI agent is handling
+  useEffect(() => {
+    if (!onCountsChange) return;
+    const unread = conversations.reduce((sum, c) => sum + (c.customer.id === selectedCustomerId ? 0 : c.unreadCount), 0);
+    const ai = conversations.filter((c) => c.handledBy === 'ai' && c.status !== 'RESOLVED' && c.status !== 'CLOSED').length;
+    onCountsChange({ unread, ai });
+  }, [conversations, selectedCustomerId, onCountsChange]);
+
+  // Close popovers when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(target)) setShowEmojiPicker(false);
+      if (copilotRef.current && !copilotRef.current.contains(target)) setShowCopilot(false);
+      if (modeMenuRef.current && !modeMenuRef.current.contains(target)) setShowModeMenu(false);
+      if (reactionPickerRef.current && !reactionPickerRef.current.contains(target)) {
+        setReactionPickerMsgId(null);
+        setShowFullReactionPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleSelectConversation = (conv: InboxConversation) => {
+    const id = convKeyFor(conv.customer.id);
+    setInternalSelectedId(id);
+    onSelectConversation?.(id);
+  };
+
+  // -------------------------------------------------------------
+  // REAL-TIME SSE SYNC HANDLERS
+  // -------------------------------------------------------------
+
+  /** Inserts or replaces a message, matching by DB id, Meta id, or the optimistic temp bubble */
+  const upsertMessage = useCallback((convId: string, incoming: Message, tempId?: string) => {
+    setMessagesMap((prev) => {
+      const existing = prev[convId] || [];
+      const idx = existing.findIndex((m) => {
+        if (m.id === incoming.id) return true;
+        if (tempId && m.id === tempId) return true;
+        if (incoming.metaMessageId && m.metaMessageId === incoming.metaMessageId) return true;
+        return (
+          m.id.startsWith('msg-') &&
+          m.sender === incoming.sender &&
+          m.text === incoming.text &&
+          Boolean(m.isInternalNote) === Boolean(incoming.isInternalNote)
+        );
+      });
+      if (idx < 0) return { ...prev, [convId]: [...existing, incoming] };
+      const updated = existing
+        .map((m, i) => (i === idx ? { ...m, ...incoming, mediaUrl: incoming.mediaUrl || m.mediaUrl } : m))
+        // Drop a leftover temp bubble once the real message is in place
+        .filter((m, i) => !(tempId && i !== idx && m.id === tempId));
+      return { ...prev, [convId]: updated };
+    });
+  }, []);
+
+  const handleRealtimeNewMessage = useCallback(
+    (event: { customerId: number; customer?: any; message: any }) => {
+      const { customerId, customer, message: rawMsg } = event;
+      if (!rawMsg || !customerId) return;
+
+      const known = conversations.find((c) => c.customer.id === customerId);
+      const channelType = known ? conversationChannelType(known) : 'whatsapp';
+      const incomingMsg = mapApiMessage(rawMsg, channelType);
+      const isOpen = selectedCustomerId === customerId;
+
+      upsertMessage(convKeyFor(customerId), incomingMsg);
+
+      if (!known) {
+        refreshConversationsSoon();
+      } else {
+        // Bump the conversation to the top with the new preview
+        setConversations((prev) => {
+          const idx = prev.findIndex((c) => c.customer.id === customerId);
+          if (idx < 0) return prev;
+          const conv = prev[idx];
+          const updated: InboxConversation = incomingMsg.isInternalNote
+            ? conv
+            : {
+              ...conv,
+              lastMessageText: rawMsg.textContent ?? null,
+              lastMessageAt: rawMsg.createdAt || new Date().toISOString(),
+              lastMessage: {
+                senderType: rawMsg.senderType,
+                mediaType: rawMsg.mediaType ?? null,
+                status: rawMsg.status ?? 0,
+                metadata: rawMsg.metadata ?? null,
+              },
+              unreadCount: rawMsg.senderType === 'customer' && !isOpen ? conv.unreadCount + 1 : conv.unreadCount,
+            };
+          return [updated, ...prev.slice(0, idx), ...prev.slice(idx + 1)];
+        });
+        // Agent replies can change who handles the conversation (human takes over from AI)
+        if (rawMsg.senderType === 'agent') refreshConversationsSoon();
+      }
+
+      if (isOpen && rawMsg.senderType === 'customer') {
+        // The agent is looking at it: let the server mark it read
+        if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
+        markReadTimerRef.current = setTimeout(() => fetchMessagesForCustomer(customerId, channelType), 800);
+      } else if (!isOpen && rawMsg.senderType === 'customer') {
+        const senderName = customer?.name || customer?.phone || 'Customer';
+        gooeyToast.info(`New message from ${senderName}`, {
+          description: rawMsg.textContent || `[${(rawMsg.mediaType || 'media').toUpperCase()}] New attachment`,
+        });
+      }
+    },
+    [conversations, selectedCustomerId, upsertMessage, refreshConversationsSoon, fetchMessagesForCustomer]
+  );
+
+  const handleRealtimeStatus = useCallback(
+    (event: { customerId?: number; metaMessageId: string; status: number | string; errorCode?: number | null }) => {
+      const { customerId, metaMessageId, status: newStatusVal, errorCode } = event;
+      if (!metaMessageId) return;
+      const normStatus = normalizeMessageStatus(newStatusVal);
+
+      setMessagesMap((prev) => {
+        const next = { ...prev };
+        const targetConvKeys = customerId ? [convKeyFor(customerId)] : Object.keys(next);
+        for (const convKey of targetConvKeys) {
+          const msgs = next[convKey];
+          if (!msgs || msgs.length === 0) continue;
+          const msgIndex = msgs.findIndex((m) => m.metaMessageId === metaMessageId);
+          if (msgIndex >= 0) {
+            const updatedMsgs = [...msgs];
+            updatedMsgs[msgIndex] = {
+              ...updatedMsgs[msgIndex],
+              status: normStatus,
+              errorCode: errorCode !== undefined ? errorCode : updatedMsgs[msgIndex].errorCode,
+            };
+            next[convKey] = updatedMsgs;
+            return next;
+          }
+        }
+        return prev;
+      });
+    },
+    []
+  );
+
+  const handleRealtimeReaction = useCallback(
+    (event: { customerId?: number; messageId: number; emoji: string | null; userId?: number | null }) => {
+      const { customerId, messageId, emoji, userId } = event;
+      if (!messageId) return;
+      const targetMsgIdStr = String(messageId);
+
+      setMessagesMap((prev) => {
+        const next = { ...prev };
+        const targetConvKeys = customerId ? [convKeyFor(customerId)] : Object.keys(next);
+        for (const convKey of targetConvKeys) {
+          const msgs = next[convKey];
+          if (!msgs || msgs.length === 0) continue;
+          const msgIdx = msgs.findIndex((m) => m.id === targetMsgIdStr);
+          if (msgIdx < 0) continue;
+
+          const targetMsg = msgs[msgIdx];
+          let reactions = [...(targetMsg.reactions || [])];
+          if (emoji) {
+            const existingIdx = reactions.findIndex((r) =>
+              userId ? r.userId === userId : Boolean(r.customerId && r.customerId === customerId)
+            );
+            if (existingIdx >= 0) {
+              reactions[existingIdx] = { ...reactions[existingIdx], emoji };
+            } else {
+              reactions.push({ id: Date.now(), emoji, userId: userId || null, customerId: customerId || null });
+            }
+          } else {
+            reactions = reactions.filter((r) => {
+              if (userId) return r.userId !== userId;
+              if (customerId) return r.customerId !== customerId;
+              return true;
+            });
+          }
+          const updatedMsgs = [...msgs];
+          updatedMsgs[msgIdx] = { ...targetMsg, reactions };
+          next[convKey] = updatedMsgs;
+          return next;
+        }
+        return prev;
+      });
+    },
+    []
+  );
+
+  const { isConnected: isRealtimeConnected } = useRealtime({
+    onMessageNew: handleRealtimeNewMessage,
+    onMessageStatus: handleRealtimeStatus,
+    onMessageReaction: handleRealtimeReaction,
+    onConversationUpdated: refreshConversationsSoon,
+    onChannelUpdated: () => {
+      fetchChannels();
+      refreshConversationsSoon();
+    },
+  });
+
+  // -------------------------------------------------------------
+  // FILTERING
+  // -------------------------------------------------------------
+  // A disconnected channel drops out of the Channels pane; don't leave the inbox filtered to it
+  useEffect(() => {
+    if (isLoadingChannels) return;
+    const stale =
+      (channelFilter.kind === 'channel' && !channels.some((c) => c.id === channelFilter.id)) ||
+      (channelFilter.kind === 'type' && !channels.some((c) => c.type === channelFilter.type));
+    if (stale) setChannelFilter({ kind: 'all' });
+  }, [channels, channelFilter, isLoadingChannels]);
+
+  const channelScoped = useMemo(
+    () =>
+      conversations.filter((conv) => {
+        if (channelFilter.kind === 'all') return true;
+        if (channelFilter.kind === 'type') return conversationChannelType(conv) === channelFilter.type;
+        return conv.channel?.id === channelFilter.id;
+      }),
+    [conversations, channelFilter]
+  );
+
+  const statusScoped = useMemo(
+    () =>
+      channelScoped.filter((conv) => {
+        const resolved = conv.status === 'RESOLVED' || conv.status === 'CLOSED';
+        if (statusFilter === 'open') return !resolved;
+        if (statusFilter === 'resolved') return resolved;
+        return true;
+      }),
+    [channelScoped, statusFilter]
+  );
+
+  const tabCounts = useMemo<Record<ListTab, number>>(
+    () => ({
+      all: statusScoped.length,
+      ai: statusScoped.filter((c) => c.handledBy === 'ai').length,
+      needs_human: statusScoped.filter((c) => c.needsHuman).length,
+      mine: statusScoped.filter((c) => dbUser?.id != null && c.assigneeId === dbUser.id).length,
+    }),
+    [statusScoped, dbUser?.id]
+  );
+
+  const visibleConversations = useMemo(() => {
+    const q = listSearch.trim().toLowerCase();
+    const digits = q.replace(/\D/g, '');
+    return statusScoped.filter((conv) => {
+      if (listTab === 'ai' && conv.handledBy !== 'ai') return false;
+      if (listTab === 'needs_human' && !conv.needsHuman) return false;
+      if (listTab === 'mine' && (dbUser?.id == null || conv.assigneeId !== dbUser.id)) return false;
+      if (unreadOnly && conv.unreadCount === 0) return false;
+      if (!q) return true;
+      const { name, handle, phone, email } = conv.customer;
+      return (
+        name.toLowerCase().includes(q) ||
+        (handle ?? '').toLowerCase().includes(q.replace(/^@/, '')) ||
+        (email ?? '').toLowerCase().includes(q) ||
+        (digits.length > 2 && (phone ?? '').includes(digits)) ||
+        (conv.lastMessageText ?? '').toLowerCase().includes(q) ||
+        conv.ticketNumber.toLowerCase().includes(q)
+      );
+    });
+  }, [statusScoped, listTab, listSearch, unreadOnly, dbUser?.id]);
+
+  // Top bar context chip, e.g. "Instagram · @noctylle"
+  const scope = useMemo(() => {
+    if (channelFilter.kind === 'all') return { type: null, label: 'All channels' };
+    if (channelFilter.kind === 'channel') {
+      const ch = channels.find((c) => c.id === channelFilter.id);
+      if (!ch) return { type: null, label: 'All channels' };
+      return {
+        type: ch.type,
+        label: `${CHANNEL_LABELS[ch.type] || ch.type} · ${ch.verified_name || formatPhone(ch.phoneNumber) || formatHandle(ch.handle)}`,
+      };
+    }
+    const items = channels.filter((c) => c.type === channelFilter.type);
+    const label = CHANNEL_LABELS[channelFilter.type] || channelFilter.type;
+    if (items.length === 1) {
+      const detail = formatHandle(items[0].handle) || formatPhone(items[0].phoneNumber) || items[0].verified_name;
+      return { type: channelFilter.type, label: detail ? `${label} · ${detail}` : label };
+    }
+    return { type: channelFilter.type, label: items.length > 1 ? `${label} · ${items.length} accounts` : label };
+  }, [channelFilter, channels]);
+
+  // Number shown in the top bar: the selected WhatsApp number, else the first healthy one
+  const primaryNumber = useMemo(() => {
+    if (channelFilter.kind === 'channel') {
+      const ch = channels.find((c) => c.id === channelFilter.id);
+      if (ch?.type === 'whatsapp' && ch.phoneNumber) return ch.phoneNumber;
+    }
+    return (whatsappChannels.find(isChannelHealthy) || whatsappChannels[0])?.phoneNumber ?? null;
+  }, [channelFilter, channels, whatsappChannels]);
+
+  // WhatsApp number used to reply in the open conversation
+  const conversationSendChannel = useMemo(() => {
+    if (!activeConv) return null;
+    const preferredId = activeConv.channel?.id ?? activeConv.customer.channelId;
+    return (
+      whatsappChannels.find((c) => c.id === preferredId) ||
+      whatsappChannels.find(isChannelHealthy) ||
+      whatsappChannels[0] ||
+      null
+    );
+  }, [activeConv, whatsappChannels]);
+
+  const lastAiAction = useMemo(() => {
+    for (let i = activeMessages.length - 1; i >= 0; i--) {
+      if (activeMessages[i].sender === 'bot' && activeMessages[i].aiAction) return activeMessages[i].aiAction;
+    }
+    return activeConv?.lastMessage?.metadata?.aiAction ?? null;
+  }, [activeMessages, activeConv]);
+
+  // -------------------------------------------------------------
+  // CONVERSATION ACTIONS (AI mode, take over, resolve)
+  // -------------------------------------------------------------
+  const updateConversation = async (
+    conv: InboxConversation,
+    body: Record<string, unknown>,
+    optimistic: Partial<InboxConversation>,
+    successMessage?: string
+  ) => {
+    setConversations((prev) => prev.map((c) => (c.id === conv.id ? { ...c, ...optimistic } : c)));
+    try {
+      await apiClient.patch(`/api/conversations/${conv.id}`, body);
+      if (successMessage) gooeyToast.success(successMessage);
+    } catch (err) {
+      notifyError(err, { where: 'InboxView.updateConversation', title: 'Conversation not updated' });
+    } finally {
+      refreshConversationsSoon();
+    }
+  };
+
+  const handleTakeOver = () => {
+    if (!activeConv) return;
+    updateConversation(
+      activeConv,
+      { takeOver: true },
+      { handledBy: 'human', needsHuman: false, assigneeId: dbUser?.id ?? activeConv.assigneeId, assigneeName: dbUser?.name ?? null },
+      'You took over this conversation'
+    );
+  };
+
+  const handleSetHandler = (handledBy: 'ai' | 'human') => {
+    setShowModeMenu(false);
+    if (!activeConv || activeConv.handledBy === handledBy) return;
+    updateConversation(
+      activeConv,
+      { handledBy },
+      { handledBy, ...(handledBy === 'ai' ? { needsHuman: false } : {}) },
+      handledBy === 'ai' ? 'Handed back to the AI agent' : 'AI agent paused'
+    );
+  };
+
+  const handleSetStatus = (status: 'RESOLVED' | 'OPEN') => {
+    if (!activeConv) return;
+    updateConversation(
+      activeConv,
+      { status },
+      { status, resolvedAt: status === 'RESOLVED' ? new Date().toISOString() : null },
+      status === 'RESOLVED' ? 'Conversation resolved' : 'Conversation reopened'
+    );
+  };
+
+  // -------------------------------------------------------------
+  // REACTIONS
+  // -------------------------------------------------------------
   const handleToggleReaction = async (msgId: string, emojiToSet: string) => {
     if (!activeConv) return;
     const numMsgId = Number(msgId);
     if (isNaN(numMsgId)) return;
 
-    const convId = activeConv.id;
-    const currentMsgs = messagesMap[convId] || [];
-    const targetMsg = currentMsgs.find((m) => m.id === msgId);
-
+    const convId = convKeyFor(activeConv.customer.id);
+    const targetMsg = (messagesMap[convId] || []).find((m) => m.id === msgId);
     const currentUserId = dbUser?.id;
-    const existingAgentReaction = targetMsg?.reactions?.find(
-      (r) => (currentUserId ? r.userId === currentUserId : Boolean(r.userId && !r.customerId))
-    );
+    const isMine = (r: { userId?: number | null; customerId?: number | null }) =>
+      currentUserId ? r.userId === currentUserId : Boolean(r.userId && !r.customerId);
+    const existingAgentReaction = targetMsg?.reactions?.find(isMine);
     const isRemoving = existingAgentReaction && existingAgentReaction.emoji === emojiToSet;
     const finalEmoji = isRemoving ? '' : emojiToSet;
 
-
-    console.log("finalEmoji", finalEmoji)
-
     // Optimistically update local state
-    setMessagesMap((prev) => {
-      const msgs = prev[convId] || [];
-      return {
-        ...prev,
-        [convId]: msgs.map((m) => {
-          if (m.id !== msgId) return m;
-          let newReactions = [...(m.reactions || [])];
-          if (isRemoving) {
-            newReactions = newReactions.filter(
-              (r) => !(currentUserId ? r.userId === currentUserId : Boolean(r.userId && !r.customerId))
-            );
+    setMessagesMap((prev) => ({
+      ...prev,
+      [convId]: (prev[convId] || []).map((m) => {
+        if (m.id !== msgId) return m;
+        let newReactions = [...(m.reactions || [])];
+        if (isRemoving) {
+          newReactions = newReactions.filter((r) => !isMine(r));
+        } else {
+          const existingIdx = newReactions.findIndex(isMine);
+          if (existingIdx >= 0) {
+            newReactions[existingIdx] = { ...newReactions[existingIdx], emoji: emojiToSet };
           } else {
-            const existingIdx = newReactions.findIndex(
-              (r) => (currentUserId ? r.userId === currentUserId : Boolean(r.userId && !r.customerId))
-            );
-            if (existingIdx >= 0) {
-              newReactions[existingIdx] = { ...newReactions[existingIdx], emoji: emojiToSet };
-            } else {
-              newReactions.push({ id: Date.now(), emoji: emojiToSet, userId: currentUserId ?? null });
-            }
+            newReactions.push({ id: Date.now(), emoji: emojiToSet, userId: currentUserId ?? null });
           }
-          return { ...m, reactions: newReactions };
-        }),
-      };
-    });
+        }
+        return { ...m, reactions: newReactions };
+      }),
+    }));
 
     try {
       const res = await apiClient.post('/api/messages/reactions', {
         messageId: numMsgId,
         emoji: finalEmoji,
-        customerId: Number(activeConv.customer.id),
+        customerId: activeConv.customer.id,
         to: activeConv.customer.phone,
-        channelId: activeConv.customer.channelId,
+        channelId: conversationSendChannel?.id,
       });
       if (res.data?.metaDelivered === false) {
         notifyWarning('Reaction saved, but not delivered to WhatsApp', res.data?.metaError?.message);
       }
     } catch (err) {
       notifyError(err, { where: 'InboxView.handleToggleReaction', title: 'Reaction not saved' });
-      const targetCustomerNumId = Number(activeConv.customer.id);
-      if (!isNaN(targetCustomerNumId)) {
-        fetchMessagesForCustomer(targetCustomerNumId);
-      }
+      fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
     }
   };
 
-  // Manual sync handler for fetching latest messages for active conversation
-  const handleManualSync = async () => {
-    if (!activeConv) return;
-    const customerId = Number(activeConv.customer.id);
-    if (isNaN(customerId)) return;
-
-    try {
-      setIsSyncingMessages(true);
-      const [messagesError, customersLoadError] = await Promise.all([
-        fetchMessagesForCustomer(customerId),
-        fetchCustomers(),
-      ]);
-      const syncError = messagesError ?? customersLoadError;
-      if (syncError) {
-        notifyError(syncError, { where: 'InboxView.handleManualSync', title: 'Sync failed' });
-      } else {
-        gooeyToast.success('Messages synced successfully');
-      }
-    } finally {
-      setTimeout(() => {
-        setIsSyncingMessages(false);
-      }, 400);
-    }
-  };
-
-  // Selected active WhatsApp channel for sending
-  const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
-  const [isSendingMeta, setIsSendingMeta] = useState(false);
-
-  // Active WhatsApp Channel derived from selection or first active
-  const activeWhatsAppChannel = useMemo(() => {
-    if (!whatsappChannels || whatsappChannels.length === 0) return null;
-    if (selectedChannelId) {
-      const found = whatsappChannels.find((c) => c.id === selectedChannelId);
-      if (found) return found;
-    }
-    if (activeChannelFolder && activeChannelFolder.startsWith('whatsapp-')) {
-      const idFromFolder = Number(activeChannelFolder.replace('whatsapp-', ''));
-      const found = whatsappChannels.find((c) => c.id === idFromFolder);
-      if (found) return found;
-    }
-    return whatsappChannels.find((c) => c.isActive) || whatsappChannels[0];
-  }, [whatsappChannels, selectedChannelId, activeChannelFolder]);
-
-  // Fetch Customers from Database
-  const fetchCustomers = useCallback(async (): Promise<ApiError | null> => {
-    try {
-      setIsLoadingCustomers(true);
-      const res = await apiClient.get('/api/customer');
-      if (res.data?.success && Array.isArray(res.data.customers)) {
-        setCustomerList(res.data.customers);
-      }
-      setCustomersError(null);
-      return null;
-    } catch (err) {
-      const apiError = toApiError(err);
-      setCustomersError(apiError);
-      return apiError;
-    } finally {
-      setIsLoadingCustomers(false);
-    }
-  }, []);
-
-  // Fetch WhatsApp connections from DB
-  const fetchWhatsAppChannels = useCallback(async () => {
-    try {
-      setIsLoadingChannels(true);
-      setChannelsError(null);
-      const res = await apiClient.get('/api/channels/whatsapp/connections');
-      if (res.data?.success && Array.isArray(res.data.connections)) {
-        setWhatsappChannels(res.data.connections);
-        if (res.data.connections.length > 0) {
-          setSelectedChannelId((prev) => prev ?? res.data.connections[0].id);
-        }
-      }
-    } catch (err) {
-      setChannelsError(toApiError(err));
-    } finally {
-      setIsLoadingChannels(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchCustomers();
-    fetchWhatsAppChannels();
-
-    const handleChannelConnected = () => {
-      fetchWhatsAppChannels();
-    };
-
-    window.addEventListener('whatsapp-channel-connected', handleChannelConnected);
-    return () => {
-      window.removeEventListener('whatsapp-channel-connected', handleChannelConnected);
-    };
-  }, [fetchCustomers, fetchWhatsAppChannels]);
-
-  // New Contact Form
-  const [newContactName, setNewContactName] = useState('');
-  const [newContactPhone, setNewContactPhone] = useState('');
-  const [newContactChannelId, setNewContactChannelId] = useState<number | null>(null);
-
-  // Helper to open New Contact modal with default channel preselected
-  const openNewContactModal = () => {
-    let initialChannelId = selectedChannelId || (whatsappChannels.length > 0 ? whatsappChannels[0].id : null);
-    if (activeChannelFolder && activeChannelFolder.startsWith('whatsapp-')) {
-      const folderId = Number(activeChannelFolder.replace('whatsapp-', ''));
-      if (!isNaN(folderId)) initialChannelId = folderId;
-    }
-    setNewContactChannelId(initialChannelId);
-    setShowNewContactModal(true);
-  };
-
-  // Message, Attachment & Reactions
-  const [inputMessage, setInputMessage] = useState('');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
+  // -------------------------------------------------------------
+  // COMPOSER: attachments, reply, note
+  // -------------------------------------------------------------
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
@@ -511,11 +888,7 @@ export const InboxView: React.FC<InboxViewProps> = ({
         return;
       }
       setSelectedFile(file);
-      if (file.type.startsWith('image/')) {
-        setFilePreviewUrl(URL.createObjectURL(file));
-      } else {
-        setFilePreviewUrl(null);
-      }
+      setFilePreviewUrl(file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
     }
   };
 
@@ -525,437 +898,46 @@ export const InboxView: React.FC<InboxViewProps> = ({
       URL.revokeObjectURL(filePreviewUrl);
       setFilePreviewUrl(null);
     }
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const [customerReaction, setCustomerReaction] = useState<string | null>(null);
-  const [agentReaction, setAgentReaction] = useState<string | null>(null);
-
-  // Pagination state for conversation history
-  const [currentPage, setCurrentPage] = useState(1);
-  const totalPages = 1;
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fastRepliesRef = useRef<HTMLDivElement>(null);
-  const emojiPickerRef = useRef<HTMLDivElement>(null);
-  const reactionPickerRef = useRef<HTMLDivElement>(null);
-  const [showFullReactionPicker, setShowFullReactionPicker] = useState(false);
-
-  // Close fast replies, emoji pickers and user menu when clicked outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (fastRepliesRef.current && !fastRepliesRef.current.contains(event.target as Node)) {
-        setShowFastReplies(false);
-      }
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
-        setShowUserMenu(false);
-      }
-      if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target as Node)) {
-        setShowEmojiPicker(false);
-      }
-      if (reactionPickerRef.current && !reactionPickerRef.current.contains(event.target as Node)) {
-        setReactionPickerMsgId(null);
-        setShowFullReactionPicker(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const getUserInitials = () => {
-    if (user?.displayName) {
-      const parts = user.displayName.trim().split(' ');
-      if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-      return parts[0].slice(0, 2).toUpperCase();
-    }
-    if (user?.email) {
-      return user.email.slice(0, 2).toUpperCase();
-    }
-    return 'U';
+  const resetComposerInput = () => {
+    setInputMessage('');
+    if (textareaRef.current) textareaRef.current.style.height = '';
   };
 
-  const handleLogout = async () => {
-    try {
-      await logout();
-      router.replace('/login');
-    } catch (err) {
-      clientLogger.error('InboxView.handleLogout', 'Logout failed', toApiError(err).toLogObject());
-    }
-  };
-
-  // Convert DB customers into full conversation objects
-  const dbConversations: Conversation[] = useMemo(() => {
-    return customerList.map((c) => {
-      const timeStr = c.createdAt
-        ? new Date(c.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        : 'Recent';
-
-      const convId = `cust-${c.id}`;
-      const convMessages = messagesMap[convId] || [];
-      const latestMsg = convMessages.length > 0 ? convMessages[convMessages.length - 1] : undefined;
-
-      return {
-        id: convId,
-        customer: {
-          id: String(c.id),
-          channelId: c.channelId || null,
-          name: c.name,
-          phone: c.phone || '',
-          email: c.email || '',
-          avatar: c.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
-          shopifyCustomerId: c.shopifyCustomerId || undefined,
-          totalOrders: 0,
-          totalSpent: 0,
-          currency: 'INR',
-          tags: c.tags || [],
-          optInStatus: {
-            whatsapp: !c.isOptedOut,
-            sms: false,
-            email: Boolean(c.email),
-          },
-        },
-        channel: 'whatsapp' as ChannelType,
-        status: 'open' as const,
-        unreadCount: 0,
-        assignedAgent: 'Rahul Sharma',
-        updatedAt: latestMsg ? latestMsg.timestamp : timeStr,
-        lastMessage: latestMsg,
-        messages: convMessages,
-        tags: (c.tags as string[]) || [],
-      };
-    });
-  }, [customerList, messagesMap]);
-
-  // DB customers only - 100% real database records, no dummy data
-  const allConversations = dbConversations;
-
-  const currentSelectedId = selectedConversationId || internalSelectedId;
-
-  const activeConv = currentSelectedId
-    ? allConversations.find((c) => c.id === currentSelectedId) || null
-    : null;
-
-  const handleSelectConversation = (id: string) => {
-    setInternalSelectedId(id);
-    onSelectConversation?.(id);
-  };
-
-  // -------------------------------------------------------------
-  // REAL-TIME SSE SYNC HANDLERS
-  // -------------------------------------------------------------
-  const handleRealtimeNewMessage = useCallback(
-    (event: { customerId: number; customer?: any; message: any }) => {
-      const { customerId, customer, message: rawMsg } = event;
-      if (!rawMsg || !customerId) return;
-
-      console.log('⚡ [InboxView Realtime] Incoming new message:', event);
-
-      const dateObj = rawMsg.createdAt ? new Date(rawMsg.createdAt) : new Date();
-      const timeStr = dateObj
-        .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
-        .toLowerCase();
-      const resolvedType = rawMsg.mediaType || (rawMsg.mediaUrl ? 'image' : 'text');
-
-      const incomingMsg: Message = {
-        id: String(rawMsg.id),
-        sender: rawMsg.senderType === 'customer' ? 'customer' : 'agent',
-        senderId: rawMsg.senderId ?? null,
-        senderName: rawMsg.senderName ?? null,
-        channel: 'whatsapp',
-        text: rawMsg.textContent || '',
-        timestamp: timeStr,
-        createdAt: dateObj.toISOString(),
-        status:
-          rawMsg.status !== undefined
-            ? normalizeMessageStatus(rawMsg.status)
-            : MessageStatus.DELIVERED,
-        errorCode: rawMsg.errorCode || undefined,
-        type: resolvedType,
-        mediaType: rawMsg.mediaType || undefined,
-        mediaUrl: rawMsg.mediaUrl || undefined,
-        metaMessageId: rawMsg.metaMessageId || undefined,
-        reactions: rawMsg.reactions || [],
-      };
-
-      const convId = `cust-${customerId}`;
-
-      // Update message map (deduplicate against existing DB ID, Meta Message ID, or temporary optimistic ID)
-      setMessagesMap((prev) => {
-        const existingMsgs = prev[convId] || [];
-
-        const existingIndex = existingMsgs.findIndex((m) => {
-          if (m.id === String(rawMsg.id)) return true;
-          if (rawMsg.metaMessageId && m.metaMessageId && m.metaMessageId === rawMsg.metaMessageId) return true;
-          // Match temporary optimistic message ID
-          if (m.id.startsWith('msg-') && m.sender === incomingMsg.sender && m.text === incomingMsg.text) {
-            return true;
-          }
-          return false;
-        });
-
-        if (existingIndex >= 0) {
-          const updated = [...existingMsgs];
-          updated[existingIndex] = {
-            ...updated[existingIndex],
-            ...incomingMsg,
-            id: String(rawMsg.id),
-          };
-          return { ...prev, [convId]: updated };
-        } else {
-          return { ...prev, [convId]: [...existingMsgs, incomingMsg] };
-        }
-      });
-
-      // Update customer list: bump to top or add new incoming customer
-      setCustomerList((prevCustomers) => {
-        const existingCustomerIdx = prevCustomers.findIndex((c) => Number(c.id) === customerId);
-        if (existingCustomerIdx >= 0) {
-          const existingCustomer = prevCustomers[existingCustomerIdx];
-          const updatedCustomer = {
-            ...existingCustomer,
-            createdAt: new Date().toISOString(),
-            name:
-              customer?.name && customer.name !== 'WhatsApp Customer'
-                ? customer.name
-                : existingCustomer.name,
-            phone: customer?.phone || existingCustomer.phone,
-          };
-          const listWithout = prevCustomers.filter((_, idx) => idx !== existingCustomerIdx);
-          return [updatedCustomer, ...listWithout];
-        } else {
-          // Brand new incoming WhatsApp customer
-          const newCustObj = {
-            id: customerId,
-            name: customer?.name || 'WhatsApp Customer',
-            phone: customer?.phone || '',
-            channelId: customer?.channelId || null,
-            createdAt: new Date().toISOString(),
-            tags: [],
-          };
-          return [newCustObj, ...prevCustomers];
-        }
-      });
-
-      // If this conversation is currently open, scroll smoothly to the new message
-      if (currentSelectedId === convId) {
-        setTimeout(() => {
-          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-        }, 80);
-      } else if (rawMsg.senderType === 'customer') {
-        // Notification for incoming message from another conversation
-        const senderName = customer?.name || customer?.phone || 'WhatsApp Contact';
-        gooeyToast.info(`New message from ${senderName}`, {
-          description: rawMsg.textContent || `[${resolvedType.toUpperCase()}] New attachment`,
-        });
-      }
-    },
-    [currentSelectedId]
-  );
-
-  const handleRealtimeStatus = useCallback(
-    (event: {
-      customerId?: number;
-      metaMessageId: string;
-      status: number | string;
-      errorCode?: number | null;
-    }) => {
-      const { customerId, metaMessageId, status: newStatusVal, errorCode } = event;
-      if (!metaMessageId) return;
-
-      console.log('⚡ [InboxView Realtime] Incoming status update:', event);
-      const normStatus = normalizeMessageStatus(newStatusVal);
-
-      setMessagesMap((prev) => {
-        const next = { ...prev };
-        let modified = false;
-
-        const targetConvKeys = customerId ? [`cust-${customerId}`] : Object.keys(next);
-
-        for (const convKey of targetConvKeys) {
-          const msgs = next[convKey];
-          if (!msgs || msgs.length === 0) continue;
-
-          const msgIndex = msgs.findIndex((m) => m.metaMessageId === metaMessageId);
-          if (msgIndex >= 0) {
-            const updatedMsgs = [...msgs];
-            updatedMsgs[msgIndex] = {
-              ...updatedMsgs[msgIndex],
-              status: normStatus,
-              errorCode: errorCode !== undefined ? errorCode : updatedMsgs[msgIndex].errorCode,
-            };
-            next[convKey] = updatedMsgs;
-            modified = true;
-            break;
-          }
-        }
-
-        return modified ? next : prev;
-      });
-    },
-    []
-  );
-
-  const handleRealtimeReaction = useCallback(
-    (event: {
-      customerId?: number;
-      messageId: number;
-      emoji: string | null;
-      userId?: number | null;
-    }) => {
-      const { customerId, messageId, emoji, userId } = event;
-      if (!messageId) return;
-
-      console.log('⚡ [InboxView Realtime] Incoming reaction update:', event);
-      const targetMsgIdStr = String(messageId);
-
-      setMessagesMap((prev) => {
-        const next = { ...prev };
-        let modified = false;
-
-        const targetConvKeys = customerId ? [`cust-${customerId}`] : Object.keys(next);
-
-        for (const convKey of targetConvKeys) {
-          const msgs = next[convKey];
-          if (!msgs || msgs.length === 0) continue;
-
-          const msgIdx = msgs.findIndex((m) => m.id === targetMsgIdStr);
-          if (msgIdx >= 0) {
-            const targetMsg = msgs[msgIdx];
-            let reactions = [...(targetMsg.reactions || [])];
-
-            if (emoji) {
-              // Upsert reaction
-              const existingIdx = reactions.findIndex((r) => {
-                if (userId) return r.userId === userId;
-                return Boolean(r.customerId && r.customerId === customerId);
-              });
-
-              if (existingIdx >= 0) {
-                reactions[existingIdx] = { ...reactions[existingIdx], emoji };
-              } else {
-                reactions.push({
-                  id: Date.now(),
-                  emoji,
-                  userId: userId || null,
-                  customerId: customerId || null,
-                });
-              }
-            } else {
-              // Delete reaction
-              reactions = reactions.filter((r) => {
-                if (userId) return r.userId !== userId;
-                if (customerId) return r.customerId !== customerId;
-                return true;
-              });
-            }
-
-            const updatedMsgs = [...msgs];
-            updatedMsgs[msgIdx] = { ...targetMsg, reactions };
-            next[convKey] = updatedMsgs;
-            modified = true;
-            break;
-          }
-        }
-
-        return modified ? next : prev;
-      });
-    },
-    []
-  );
-
-  // Hook into live SSE Realtime Stream
-  const { isConnected: isRealtimeConnected } = useRealtime({
-    onMessageNew: handleRealtimeNewMessage,
-    onMessageStatus: handleRealtimeStatus,
-    onMessageReaction: handleRealtimeReaction,
-  });
-
-  // Filter conversations based on search, tab, and selected channel folder
-  const filteredConversations = allConversations.filter((conv) => {
-    const matchesSearch =
-      conv.customer.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      conv.customer.phone.includes(searchQuery) ||
-      (conv.lastMessage?.text && conv.lastMessage.text.toLowerCase().includes(searchQuery.toLowerCase()));
-
-    if (!matchesSearch) return false;
-
-    if (filterTab === 'mine' && conv.assignedAgent !== 'Rahul Sharma') {
-      return false;
-    }
-
-    if (activeChannelFolder === 'all') {
-      return true;
-    }
-
-    if (activeChannelFolder === 'whatsapp') {
-      return conv.channel === 'whatsapp';
-    }
-
-    if (activeChannelFolder.startsWith('whatsapp-')) {
-      const targetChannelId = Number(activeChannelFolder.replace('whatsapp-', ''));
-      const customerChannelId = conv.customer.channelId;
-      return conv.channel === 'whatsapp' && (!customerChannelId || customerChannelId === targetChannelId);
-    }
-
-    return true;
-  });
-
-  // Active channel for the currently open conversation (based on customer's channelId)
-  const conversationChannel = useMemo(() => {
-    if (!activeConv) return activeWhatsAppChannel;
-    if (activeConv.customer.channelId) {
-      const matched = whatsappChannels.find((c) => c.id === activeConv.customer.channelId);
-      if (matched) return matched;
-    }
-    return activeWhatsAppChannel;
-  }, [activeConv, whatsappChannels, activeWhatsAppChannel]);
-
-  // Load Database Messages for selected customer
-  useEffect(() => {
-    if (!currentSelectedId || !currentSelectedId.startsWith('cust-')) return;
-    const customerId = Number(currentSelectedId.replace('cust-', ''));
-    if (isNaN(customerId)) return;
-
-    fetchMessagesForCustomer(customerId);
-  }, [currentSelectedId, fetchMessagesForCustomer]);
-
-  const handleSend = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleSend = async () => {
     if ((!inputMessage.trim() && !selectedFile) || !activeConv) return;
+
+    if (!canSendOnChannel) {
+      gooeyToast.error(`Replying on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet.`);
+      return;
+    }
 
     const messageText = inputMessage.trim();
     const customerPhone = activeConv.customer.phone;
-
     if (!customerPhone) {
       gooeyToast.error(`Customer "${activeConv.customer.name}" does not have a phone number. Please add a phone number first.`);
       return;
     }
 
-    const targetChannel = conversationChannel || activeWhatsAppChannel;
+    const targetChannel = conversationSendChannel;
     if (!targetChannel) {
       gooeyToast.error('No connected WhatsApp channel found. Please connect your WhatsApp account first.');
       return;
     }
 
-    const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
-    const fromLabel = `${targetChannel.verified_name || 'WhatsApp'} (${targetChannel.phoneNumber || targetChannel.metaPhoneNumberId || 'Connected'})`;
-    const toLabel = `${activeConv.customer.name} (${customerPhone})`;
-
     clientLogger.debug('InboxView.handleSend', 'Sending WhatsApp message', {
-      from: fromLabel,
       channelId: targetChannel.id,
-      to: toLabel,
+      customerId: activeConv.customer.id,
       length: messageText.length,
       ...(selectedFile ? { file: { name: selectedFile.name, type: selectedFile.type, size: selectedFile.size } } : {}),
     });
 
-    setIsSendingMeta(true);
-    const newMsgId = `msg-${Date.now()}`;
+    setIsSending(true);
+    const convId = convKeyFor(activeConv.customer.id);
+    const tempId = `msg-${Date.now()}`;
     const attachedFile = selectedFile;
-    const currentPreviewUrl = filePreviewUrl;
-
     const resolvedType = attachedFile
       ? attachedFile.type.startsWith('image/')
         ? 'image'
@@ -966,68 +948,54 @@ export const InboxView: React.FC<InboxViewProps> = ({
             : 'document'
       : 'text';
 
-    const newMsg: Message = {
-      id: newMsgId,
+    const optimisticMsg: Message = {
+      id: tempId,
       sender: 'agent',
       senderId: dbUser?.id ?? null,
       senderName: dbUser?.name ?? null,
       channel: 'whatsapp',
       text: messageText,
-      timestamp: timeNow,
+      timestamp: formatTime(),
       createdAt: new Date().toISOString(),
       status: MessageStatus.SENT,
       type: resolvedType,
       mediaType: resolvedType,
-      mediaUrl: currentPreviewUrl || undefined,
+      mediaUrl: filePreviewUrl || undefined,
     };
 
-    // Optimistically add message to chat thread
-    setMessagesMap((prev) => ({
-      ...prev,
-      [activeConv.id]: [...(prev[activeConv.id] || []), newMsg],
-    }));
-    setInputMessage('');
-    handleClearSelectedFile();
-
-    const targetCustomerNumId = Number(activeConv.customer.id);
+    setMessagesMap((prev) => ({ ...prev, [convId]: [...(prev[convId] || []), optimisticMsg] }));
+    resetComposerInput();
+    setSelectedFile(null);
+    setFilePreviewUrl(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
 
     try {
       let res;
       if (attachedFile) {
         const formData = new FormData();
         formData.append('to', customerPhone);
-        if (messageText) {
-          formData.append('text', messageText);
-        }
+        if (messageText) formData.append('text', messageText);
         formData.append('channelId', String(targetChannel.id));
-        if (!isNaN(targetCustomerNumId)) {
-          formData.append('customerId', String(targetCustomerNumId));
-        }
+        formData.append('customerId', String(activeConv.customer.id));
         formData.append('file', attachedFile);
-
         res = await apiClient.post('/api/channels/whatsapp/send', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
+          headers: { 'Content-Type': 'multipart/form-data' },
         });
       } else {
         res = await apiClient.post('/api/channels/whatsapp/send', {
           to: customerPhone,
           text: messageText,
           channelId: targetChannel.id,
-          customerId: isNaN(targetCustomerNumId) ? undefined : targetCustomerNumId,
+          customerId: activeConv.customer.id,
         });
       }
 
       if (res.data?.success) {
         if (res.data?.persisted === false) {
           notifyWarning('Message delivered, but not saved', res.data?.warning);
-        } else {
-          gooeyToast.success(`Message sent to ${activeConv.customer.name} (${customerPhone}) via WhatsApp!`);
         }
-        if (!isNaN(targetCustomerNumId)) {
-          fetchMessagesForCustomer(targetCustomerNumId);
-        }
+        fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
+        refreshConversationsSoon();
       }
     } catch (err) {
       const apiError = notifyError(err, { where: 'InboxView.handleSend', title: 'Message not sent' });
@@ -1035,1066 +1003,765 @@ export const InboxView: React.FC<InboxViewProps> = ({
       // Keep the bubble and mark it failed with the reason, so the agent sees what happened
       setMessagesMap((prev) => ({
         ...prev,
-        [activeConv.id]: (prev[activeConv.id] || []).map((m) =>
-          m.id === newMsgId
-            ? { ...m, status: MessageStatus.FAILED, errorCode: metaCode, errorMessage: apiError.message }
-            : m
+        [convId]: (prev[convId] || []).map((m) =>
+          m.id === tempId ? { ...m, status: MessageStatus.FAILED, errorCode: metaCode, errorMessage: apiError.message } : m
         ),
       }));
     } finally {
-      setIsSendingMeta(false);
-      onSendMessage?.(activeConv.id, messageText);
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
+      setIsSending(false);
     }
   };
 
-  const handleCreateContactAndSend = async () => {
+  const handleAddNote = async () => {
+    const text = inputMessage.trim();
+    if (!text || !activeConv) return;
+
+    const convId = convKeyFor(activeConv.customer.id);
+    const tempId = `msg-${Date.now()}`;
+    upsertMessage(convId, {
+      id: tempId,
+      sender: 'agent',
+      senderId: dbUser?.id ?? null,
+      senderName: dbUser?.name ?? null,
+      channel: activeChannelType as Message['channel'],
+      text,
+      timestamp: formatTime(),
+      createdAt: new Date().toISOString(),
+      status: MessageStatus.READ,
+      isInternalNote: true,
+    });
+    resetComposerInput();
+    setIsSending(true);
+
     try {
-      if (whatsappChannels.length === 0) {
-        gooeyToast.error('Please connect a WhatsApp channel before adding customers.');
-        return;
-      }
+      const res = await apiClient.post('/api/messages', {
+        customerId: activeConv.customer.id,
+        textContent: text,
+        isInternalNote: true,
+      });
+      if (res.data?.message) upsertMessage(convId, mapApiMessage(res.data.message, activeChannelType), tempId);
+    } catch (err) {
+      notifyError(err, { where: 'InboxView.handleAddNote', title: 'Note not saved' });
+      setMessagesMap((prev) => ({ ...prev, [convId]: (prev[convId] || []).filter((m) => m.id !== tempId) }));
+      setInputMessage(text);
+    } finally {
+      setIsSending(false);
+    }
+  };
 
-      setIsLoadingCustomers(true);
-      const cleanPhone = newContactPhone.replace(/\D/g, '');
-      if (!cleanPhone) {
-        gooeyToast.error('Please enter a valid phone number (digits only, e.g. 919876543210)');
-        return;
-      }
+  // -------------------------------------------------------------
+  // SHOPIFY PRODUCTS
+  // -------------------------------------------------------------
+  const shopifyStore = useShopifyStore();
 
-      const targetChannelId = newContactChannelId || activeWhatsAppChannel?.id || (whatsappChannels.length > 0 ? whatsappChannels[0].id : null);
-      if (!targetChannelId) {
-        gooeyToast.error('Please select a valid WhatsApp channel for this customer.');
-        return;
-      }
+  const shareDisabledReason = !activeConv
+    ? null
+    : !canSendOnChannel
+      ? `Sending on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet. Use "Insert as text" instead.`
+      : !activeConv.customer.phone
+        ? `${activeConv.customer.name} has no phone number.`
+        : !conversationSendChannel
+          ? 'No connected WhatsApp channel found.'
+          : null;
 
+  /** Sends the selected variant through the regular WhatsApp send path (the server re-checks it with Shopify) */
+  const handleShareProduct = async ({ product, variant, caption }: ShareProductArgs): Promise<boolean> => {
+    if (!activeConv || shareDisabledReason) return false;
+    try {
+      const res = await apiClient.post('/api/integrations/shopify/share', {
+        customerId: activeConv.customer.id,
+        channelId: conversationSendChannel?.id,
+        productId: product.legacyId,
+        variantId: variant.legacyId,
+        caption,
+      });
+      if (res.data?.persisted === false) {
+        notifyWarning('Product delivered, but not saved', res.data?.warning);
+      } else {
+        gooeyToast.success(`${product.title} shared`);
+      }
+      setShowProductPicker(false);
+      fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
+      refreshConversationsSoon();
+      return true;
+    } catch (err) {
+      notifyError(err, { where: 'InboxView.handleShareProduct', title: 'Product not shared' });
+      return false;
+    }
+  };
+
+  const handleInsertProductText = (text: string) => {
+    setInputMessage(text);
+    setComposerMode('reply');
+    setShowProductPicker(false);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const handleSubmitComposer = () => {
+    if (composerMode === 'note') handleAddNote();
+    else handleSend();
+  };
+
+  const applySuggestion = (text: string) => {
+    setInputMessage(text);
+    setComposerMode('reply');
+    setShowCopilot(false);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  // -------------------------------------------------------------
+  // NEW CONTACT
+  // -------------------------------------------------------------
+  const [newContactName, setNewContactName] = useState('');
+  const [newContactPhone, setNewContactPhone] = useState('');
+  const [newContactChannelId, setNewContactChannelId] = useState<number | null>(null);
+  const [isCreatingContact, setIsCreatingContact] = useState(false);
+
+  const openNewContactModal = (prefill = '') => {
+    let initialChannelId = whatsappChannels[0]?.id ?? null;
+    if (channelFilter.kind === 'channel' && whatsappChannels.some((c) => c.id === channelFilter.id)) {
+      initialChannelId = channelFilter.id;
+    }
+    setNewContactChannelId(initialChannelId);
+    const digits = prefill.replace(/\D/g, '');
+    if (digits.length >= 6) {
+      setNewContactPhone(digits);
+      setNewContactName('');
+    } else {
+      setNewContactName(prefill);
+      setNewContactPhone('');
+    }
+    setShowNewContactModal(true);
+  };
+
+  const handleCreateContact = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (whatsappChannels.length === 0) {
+      gooeyToast.error('No WhatsApp channel available. Please connect a channel first.');
+      return;
+    }
+    const cleanPhone = newContactPhone.replace(/\D/g, '');
+    if (!newContactName.trim() || !cleanPhone) {
+      gooeyToast.error('Please enter a name and a valid phone number (digits only, e.g. 919876543210)');
+      return;
+    }
+    const targetChannelId = newContactChannelId || whatsappChannels[0]?.id;
+
+    try {
+      setIsCreatingContact(true);
       const res = await apiClient.post('/api/customer', {
         name: newContactName.trim(),
         phone: cleanPhone,
         channelId: targetChannelId,
       });
       if (res.data?.success && res.data?.customer) {
-        const targetChannelObj = whatsappChannels.find((c) => c.id === targetChannelId);
-        gooeyToast.success(`Customer ${newContactName} created under ${targetChannelObj?.verified_name || 'WhatsApp'}!`);
-        await fetchCustomers();
-        handleSelectConversation(`cust-${res.data.customer.id}`);
+        const channelName = whatsappChannels.find((c) => c.id === targetChannelId)?.verified_name || 'WhatsApp';
+        gooeyToast.success(`Customer ${newContactName.trim()} created under ${channelName}!`);
+        setShowNewContactModal(false);
+        setNewContactName('');
+        setNewContactPhone('');
+        // A conversation is created with the first message; show the contact right away
+        await fetchConversations();
+        const id = convKeyFor(res.data.customer.id);
+        setInternalSelectedId(id);
+        onSelectConversation?.(id);
+        setChannelFilter({ kind: 'all' });
+        setListTab('all');
       }
     } catch (err) {
       notifyError(err, { where: 'InboxView.handleCreateContact', title: 'Customer not created' });
     } finally {
-      setIsLoadingCustomers(false);
+      setIsCreatingContact(false);
     }
   };
 
-  const handleCreateContact = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (whatsappChannels.length === 0) {
-      gooeyToast.error('No WhatsApp channel available. Please connect a channel first.');
+  const handleConnectChannel = (type: string) => {
+    if (!type || type === 'whatsapp') {
+      setShowAddChannelModal(true);
       return;
     }
-    if (!newContactName.trim() || !newContactPhone.trim()) return;
-    handleCreateContactAndSend();
-    setShowNewContactModal(false);
-    setNewContactName('');
-    setNewContactPhone('');
+    gooeyToast.info(`${CHANNEL_LABELS[type] || type} is coming soon`, {
+      description: 'Only WhatsApp Business can be connected right now.',
+    });
   };
 
-  const fastRepliesList = [
-    { title: '👋 Welcome greeting', text: 'Hi! Thank you for reaching out to us. How can I help you today?' },
-    { title: '📦 Order Status Check', text: 'We have checked your order details and it is currently in transit. Expected delivery is tomorrow.' },
-    { title: '💳 Refund / Return policy', text: 'We offer a hassle-free 7-day return and exchange policy. Would you like me to generate a return label?' },
-    { title: '🙏 Closing conversation', text: 'Thank you for contacting Omnichannel Support! Please let us know if you need anything else. Have a wonderful day!' },
-  ];
+  // -------------------------------------------------------------
+  // RENDER HELPERS
+  // -------------------------------------------------------------
+  // WhatsApp media is fetched with the Authorization header and shown from a blob URL
+  const renderMedia = (msg: Message, senderName: string) => {
+    if (!msg.mediaUrl) return null;
+    const fullTimestamp = msg.createdAt
+      ? `${new Date(msg.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}, ${formatTime(msg.createdAt)}`
+      : msg.timestamp;
 
-  // Helper to render channel icon for conversation list
-  const renderChannelIcon = (channel: ChannelType | string) => {
-    switch (channel) {
-      case 'whatsapp':
-        return (
-          <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-[#25d366] shrink-0" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.816 9.816 0 0 0 12.04 2zm.01 1.67c2.2 0 4.26.86 5.82 2.42a8.185 8.185 0 0 1 2.41 5.82c0 4.54-3.7 8.24-8.24 8.24-1.42 0-2.82-.37-4.06-1.08l-.29-.17-3.12.82.83-3.04-.19-.3a8.17 8.17 0 0 1-1.26-4.47c0-4.54 3.7-8.24 8.24-8.24zm4.52 11.66c-.25-.13-1.47-.72-1.7-.81-.23-.08-.39-.13-.56.13-.17.25-.64.81-.79.97-.14.17-.29.19-.54.06-.25-.13-1.07-.39-2.03-1.25-.75-.67-1.26-1.5-1.41-1.75-.15-.25-.02-.39.11-.51.11-.11.25-.29.38-.44.13-.14.17-.25.25-.42.08-.17.04-.31-.02-.44-.06-.13-.56-1.35-.77-1.85-.2-.49-.41-.42-.56-.43h-.48c-.17 0-.44.06-.67.31-.23.25-.87.85-.87 2.08 0 1.23.9 2.42 1.02 2.59.13.17 1.76 2.69 4.27 3.77.6.26 1.06.41 1.43.53.6.19 1.15.16 1.58.1.48-.07 1.47-.6 1.68-1.18.21-.58.21-1.07.15-1.18-.06-.11-.21-.18-.46-.3z" />
-          </svg>
-        );
-      case 'instagram':
-        return <Camera className="w-3.5 h-3.5 text-pink-600 shrink-0" />;
-      case 'messenger':
-        return <Send className="w-3.5 h-3.5 text-blue-600 shrink-0" />;
-      case 'email':
-        return <Mail className="w-3.5 h-3.5 text-slate-500 shrink-0" />;
-      case 'sms':
-        return <Smartphone className="w-3.5 h-3.5 text-amber-600 shrink-0" />;
-      default:
-        return (
-          <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-[#25d366] shrink-0" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.816 9.816 0 0 0 12.04 2zm.01 1.67c2.2 0 4.26.86 5.82 2.42a8.185 8.185 0 0 1 2.41 5.82c0 4.54-3.7 8.24-8.24 8.24-1.42 0-2.82-.37-4.06-1.08l-.29-.17-3.12.82.83-3.04-.19-.3a8.17 8.17 0 0 1-1.26-4.47c0-4.54 3.7-8.24 8.24-8.24zm4.52 11.66c-.25-.13-1.47-.72-1.7-.81-.23-.08-.39-.13-.56.13-.17.25-.64.81-.79.97-.14.17-.29.19-.54.06-.25-.13-1.07-.39-2.03-1.25-.75-.67-1.26-1.5-1.41-1.75-.15-.25-.02-.39.11-.51.11-.11.25-.29.38-.44.13-.14.17-.25.25-.42.08-.17.04-.31-.02-.44-.06-.13-.56-1.35-.77-1.85-.2-.49-.41-.42-.56-.43h-.48c-.17 0-.44.06-.67.31-.23.25-.87.85-.87 2.08 0 1.23.9 2.42 1.02 2.59.13.17 1.76 2.69 4.27 3.77.6.26 1.06.41 1.43.53.6.19 1.15.16 1.58.1.48-.07 1.47-.6 1.68-1.18.21-.58.21-1.07.15-1.18-.06-.11-.21-.18-.46-.3z" />
-          </svg>
-        );
+    return (
+      <WhatsAppMediaAttachment
+        mediaUrl={msg.mediaUrl}
+        mediaType={msg.mediaType}
+        msgType={msg.type}
+        msgText={msg.text}
+        senderName={senderName}
+        fullTimestamp={fullTimestamp}
+        onPreview={setPreviewMedia}
+      />
+    );
+  };
+
+  const renderReactions = (msg: Message, alignRight: boolean) => {
+    const rxMap = new Map<string, { count: number; hasMyReaction: boolean }>();
+    for (const rx of msg.reactions || []) {
+      if (!rx.emoji) continue;
+      const cur = rxMap.get(rx.emoji) || { count: 0, hasMyReaction: false };
+      cur.count += 1;
+      if (rx.userId === dbUser?.id || (rx.userId && !rx.customerId)) cur.hasMyReaction = true;
+      rxMap.set(rx.emoji, cur);
     }
-  };
+    const canReact = !msg.isInternalNote && !isNaN(Number(msg.id)) && canSendOnChannel;
+    if (rxMap.size === 0 && !canReact) return null;
 
-  return (
-    <div className="flex flex-col h-full w-full bg-[#f8fafc] overflow-hidden select-none font-sans text-slate-800">
-      {/* ======================================================== */}
-      {/* TOP HEADER: Omnichannel Support v2.0 + Add Channel       */}
-      {/* ======================================================== */}
-      <header className="h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between shrink-0 z-20 shadow-2xs">
-        {/* Left: Brand Logo & Title */}
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#2563eb] to-[#4f46e5] text-white flex items-center justify-center font-black text-base shadow-sm">
-            O
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-sm font-bold text-slate-900 leading-tight">
-                Omnichannel Support
-              </h1>
-              <span className="text-[10px] font-semibold text-[#2563eb] bg-[#eff6ff] border border-[#bfdbfe] px-1.5 py-0.2 rounded font-mono">
-                v2.0
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-500 leading-none mt-0.5">
-              Unified Customer Command Desk
-            </p>
-          </div>
-        </div>
-
-        {/* Right: + Add Channel Button & Connected User Profile Avatar */}
-        <div className="flex items-center gap-3">
+    return (
+      <div className={`flex items-center gap-1 mt-1 relative flex-wrap ${alignRight ? 'justify-end' : 'justify-start'}`}>
+        {Array.from(rxMap.entries()).map(([emoji, g]) => (
           <button
-            onClick={() => setShowAddChannelModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
+            key={emoji}
+            type="button"
+            onClick={() => handleToggleReaction(msg.id, emoji)}
+            title={g.hasMyReaction ? 'Click to remove your reaction' : 'Click to react'}
+            className={`px-2 py-0.5 rounded-full border text-xs flex items-center gap-1 cursor-pointer ${g.hasMyReaction ? 'bg-[#eef0fb] border-[#c7cdf0] text-[#3440a8] font-semibold' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+              }`}
           >
-            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>Add Channel</span>
+            <span>{emoji}</span>
+            {g.count > 1 && <span className="text-[10px] text-slate-500 font-semibold">{g.count}</span>}
           </button>
+        ))}
 
-          {/* Vertical Separator */}
-          <div className="h-5 w-px bg-slate-200" />
-
-          {/* Connected Firebase User Avatar Pill */}
-          <div className="relative" ref={userMenuRef}>
+        {canReact && (
+          <div className="relative">
             <button
-              onClick={() => setShowUserMenu(!showUserMenu)}
-              className="flex items-center gap-2 py-1 px-1.5 pr-2.5 rounded-full bg-slate-50 hover:bg-slate-100 border border-slate-200 transition-all cursor-pointer group"
-              title={user?.email || 'Connected Firebase User'}
+              type="button"
+              title="React"
+              onClick={(e) => {
+                if (reactionPickerMsgId === msg.id) {
+                  setReactionPickerMsgId(null);
+                  setShowFullReactionPicker(false);
+                } else {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setReactionPickerPlacement(rect.top < 340 ? 'bottom' : 'top');
+                  setReactionPickerMsgId(msg.id);
+                  setShowFullReactionPicker(false);
+                }
+              }}
+              className={`w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 flex items-center justify-center cursor-pointer transition-opacity ${reactionPickerMsgId === msg.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                }`}
             >
-              <div className="relative">
-                <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow-xs overflow-hidden">
-                  {user?.photoURL ? (
-                    <img src={user.photoURL} alt="User Avatar" className="w-full h-full object-cover" />
-                  ) : (
-                    <span>{getUserInitials()}</span>
-                  )}
-                </div>
-                {/* Live Online Badge */}
-                <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></span>
-              </div>
-
-              <div className="flex flex-col items-start text-left">
-                <div className="flex items-center gap-1">
-                  <span className="text-xs font-semibold text-slate-800 max-w-[110px] truncate leading-tight">
-                    {user?.displayName || (user?.email ? user.email.split('@')[0] : 'Connected User')}
-                  </span>
-                  <ChevronDown className={`w-3 h-3 text-slate-400 group-hover:text-slate-600 transition-transform duration-200 ${showUserMenu ? 'rotate-180' : ''}`} />
-                </div>
-                {/* <span className="text-[10px] text-emerald-600 font-medium leading-none flex items-center gap-1">
-                  Firebase Connected
-                </span> */}
-              </div>
+              <Smile className="w-3.5 h-3.5" />
             </button>
 
-            {/* Dropdown Menu */}
-            {showUserMenu && (
-              <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 text-xs animate-in fade-in slide-in-from-top-2 duration-150">
-                <div className="px-3.5 py-2.5 border-b border-slate-100">
-                  <div className="flex items-center gap-2.5 mb-2">
-                    <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-xs overflow-hidden">
-                      {user?.photoURL ? (
-                        <img src={user.photoURL} alt="User Avatar" className="w-full h-full object-cover" />
-                      ) : (
-                        <span>{getUserInitials()}</span>
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-bold text-slate-900 truncate">
-                        {user?.displayName || 'Support Agent'}
-                      </p>
-                      <p className="text-[11px] text-slate-500 truncate">
-                        {user?.email || 'Authenticated via Firebase'}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-50 border border-emerald-200/60 text-emerald-700 text-[11px] font-medium">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span>Firebase Auth Active</span>
-                  </div>
-                </div>
-
-                <div className="py-1">
-                  {user?.uid && (
-                    <div className="px-3.5 py-1.5 text-[10px] text-slate-400 font-mono flex items-center justify-between">
-                      <span>UID:</span>
-                      <span className="truncate max-w-[130px]">{user.uid}</span>
-                    </div>
-                  )}
-                  <div className="px-3.5 py-1.5 text-[11px] text-slate-600 flex items-center justify-between">
-                    <span>Role</span>
-                    <span className="font-medium text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">
-                      Administrator
-                    </span>
-                  </div>
-                </div>
-
-                <div className="border-t border-slate-100 pt-1 mt-1">
-                  <button
-                    onClick={handleLogout}
-                    className="w-full px-3.5 py-2 text-left text-rose-600 hover:bg-rose-50 flex items-center gap-2 font-medium transition-colors cursor-pointer"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                    <span>Sign Out</span>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* ======================================================== */}
-      {/* MAIN 4-PANE INTERFACE                                    */}
-      {/* ======================================================== */}
-      <div className="flex flex-1 min-h-0 w-full overflow-hidden">
-        {/* ====================================================== */}
-        {/* PANE 0: MINI ICON SIDEBAR (Single Inbox Chat Icon)     */}
-        {/* ====================================================== */}
-        <aside className="w-12 bg-white border-r border-slate-200 flex flex-col items-center py-3.5 shrink-0 h-full select-none justify-between z-10">
-          <div className="flex flex-col items-center gap-3 w-full px-1.5">
-            {/* Single Active Chat Icon Button */}
-            <button
-              title="Inbox & Live Chats"
-              className="w-8 h-8 rounded-lg bg-[#eff6ff] text-[#2563eb] border border-[#bfdbfe] flex items-center justify-center transition-all shadow-2xs cursor-pointer hover:bg-[#dbeafe]"
-            >
-              <MessageSquare className="w-4 h-4 stroke-[2.2]" />
-            </button>
-          </div>
-        </aside>
-
-        {/* ====================================================== */}
-        {/* PANE 1: LEFT CHANNELS / INBOX NAVIGATION               */}
-        {/* ====================================================== */}
-        {isLeftSidebarOpen ? (
-          <aside className="w-52 bg-white border-r border-slate-200 flex flex-col shrink-0 h-full select-none text-xs">
-            {/* Header: < Inbox */}
-            <div className="p-3 border-b border-slate-100 flex items-center justify-between">
-              <div className="flex items-center gap-1.5 font-bold text-slate-900 text-sm">
-                <button
-                  onClick={() => setIsLeftSidebarOpen(false)}
-                  className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition-colors"
-                  title="Collapse Sidebar"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                <span>Inbox</span>
-              </div>
-            </div>
-
-            {/* Folder list */}
-            <div className="p-2 space-y-1">
-              {/* All Conversations */}
-              <button
-                onClick={() => {
-                  setActiveChannelFolder('all');
-                  setInternalSelectedId('');
-                }}
-                className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg font-medium transition-colors text-left cursor-pointer ${activeChannelFolder === 'all'
-                  ? 'bg-[#eff6ff] text-[#2563eb] font-semibold'
-                  : 'text-slate-700 hover:bg-slate-100'
-                  }`}
+            {reactionPickerMsgId === msg.id && (
+              <div
+                ref={reactionPickerRef}
+                className={`absolute ${reactionPickerPlacement === 'bottom' ? 'top-full mt-1.5' : 'bottom-full mb-1.5'} ${alignRight ? 'right-0' : 'left-0'
+                  } z-50`}
               >
-                <div className="flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4 text-[#2563eb]" />
-                  <span>All Conversations</span>
-                </div>
-                <span className="min-w-4 h-4 px-1 rounded-full bg-[#2563eb] text-white text-[10px] font-bold flex items-center justify-center">
-                  {allConversations.length}
-                </span>
-              </button>
-
-              {/* CHANNELS Section */}
-              <div className="pt-3 pb-1 px-2.5 flex items-center justify-between text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                <span>CHANNELS</span>
-                <button
-                  onClick={() => setShowAddChannelModal(true)}
-                  className="text-slate-400 hover:text-slate-600 p-0.5 rounded"
-                  title="Add Channel"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {/* WhatsApp Channels Tree */}
-              <div className="space-y-0.5">
-                <div
-                  onClick={() => {
-                    setIsWhatsAppExpanded(!isWhatsAppExpanded);
-                    setActiveChannelFolder('whatsapp');
-                    setInternalSelectedId('');
-                  }}
-                  className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-700 font-medium hover:bg-slate-50 cursor-pointer transition-colors ${activeChannelFolder === 'whatsapp' ? 'bg-[#eff6ff] text-[#2563eb] font-semibold' : ''
-                    }`}
-                >
-                  <div className="flex items-center gap-2">
-                    {/* WhatsApp Icon */}
-                    <svg viewBox="0 0 24 24" className="w-4 h-4 fill-[#25d366]" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.816 9.816 0 0 0 12.04 2zm.01 1.67c2.2 0 4.26.86 5.82 2.42a8.185 8.185 0 0 1 2.41 5.82c0 4.54-3.7 8.24-8.24 8.24-1.42 0-2.82-.37-4.06-1.08l-.29-.17-3.12.82.83-3.04-.19-.3a8.17 8.17 0 0 1-1.26-4.47c0-4.54 3.7-8.24 8.24-8.24zm4.52 11.66c-.25-.13-1.47-.72-1.7-.81-.23-.08-.39-.13-.56.13-.17.25-.64.81-.79.97-.14.17-.29.19-.54.06-.25-.13-1.07-.39-2.03-1.25-.75-.67-1.26-1.5-1.41-1.75-.15-.25-.02-.39.11-.51.11-.11.25-.29.38-.44.13-.14.17-.25.25-.42.08-.17.04-.31-.02-.44-.06-.13-.56-1.35-.77-1.85-.2-.49-.41-.42-.56-.43h-.48c-.17 0-.44.06-.67.31-.23.25-.87.85-.87 2.08 0 1.23.9 2.42 1.02 2.59.13.17 1.76 2.69 4.27 3.77.6.26 1.06.41 1.43.53.6.19 1.15.16 1.58.1.48-.07 1.47-.6 1.68-1.18.21-.58.21-1.07.15-1.18-.06-.11-.21-.18-.46-.3z" />
-                    </svg>
-                    <span>WhatsApp</span>
+                {showFullReactionPicker ? (
+                  <div className="bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+                    <EmojiPicker
+                      className="h-[280px] rounded-xl border-none shadow-none bg-white text-slate-800"
+                      onEmojiSelect={({ emoji }) => {
+                        const val = typeof emoji === 'string' ? emoji : (emoji as any)?.emoji || '';
+                        if (val) handleToggleReaction(msg.id, val);
+                        setReactionPickerMsgId(null);
+                        setShowFullReactionPicker(false);
+                      }}
+                    >
+                      <EmojiPickerSearch className="border-slate-100" />
+                      <EmojiPickerContent />
+                      <EmojiPickerFooter className="border-slate-100" />
+                    </EmojiPicker>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded-full">
-                      {whatsappChannels.length}
-                    </span>
+                ) : (
+                  <div className="p-1.5 bg-white border border-slate-200 rounded-full shadow-lg flex items-center gap-1">
+                    {['👍', '❤️', '😂', '😮', '😢', '🙏', '🎉', '🔥'].map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => {
+                          handleToggleReaction(msg.id, emoji);
+                          setReactionPickerMsgId(null);
+                        }}
+                        className="w-7 h-7 rounded-full hover:bg-slate-100 flex items-center justify-center text-sm hover:scale-125 transition-transform cursor-pointer"
+                      >
+                        {emoji}
+                      </button>
+                    ))}
                     <button
                       type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setIsWhatsAppExpanded(!isWhatsAppExpanded);
-                      }}
-                      className="p-0.5 hover:bg-slate-200/60 rounded cursor-pointer"
-                      title={isWhatsAppExpanded ? "Collapse" : "Expand"}
+                      onClick={() => setShowFullReactionPicker(true)}
+                      title="More emojis"
+                      className="w-7 h-7 rounded-full hover:bg-[#eef0fb] hover:text-[#3440a8] text-slate-400 flex items-center justify-center cursor-pointer border border-dashed border-slate-200"
                     >
-                      {isWhatsAppExpanded ? (
-                        <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-                      ) : (
-                        <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-                      )}
+                      <Plus className="w-3.5 h-3.5" />
                     </button>
-                  </div>
-                </div>
-
-                {/* Sub Accounts */}
-                {isWhatsAppExpanded && (
-                  <div className="pl-5 pr-2 space-y-0.5 text-[11px]">
-                    {isLoadingChannels ? (
-                      <div className="py-2 px-2 text-[11px] text-slate-400 animate-pulse flex items-center gap-1.5">
-                        <div className="w-1.5 h-1.5 rounded-full bg-slate-300"></div>
-                        <span>Loading channels...</span>
-                      </div>
-                    ) : channelsError && whatsappChannels.length === 0 ? (
-                      <ErrorState
-                        compact
-                        error={channelsError}
-                        title="Couldn't load channels"
-                        onRetry={fetchWhatsAppChannels}
-                      />
-                    ) : whatsappChannels.length === 0 ? (
-                      <button
-                        onClick={() => setShowAddChannelModal(true)}
-                        className="w-full text-left py-1.5 px-2 text-[11px] text-slate-400 hover:text-[#2563eb] hover:bg-blue-50/50 rounded-md transition-colors flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>Connect WhatsApp</span>
-                      </button>
-                    ) : (
-                      whatsappChannels.map((channel) => {
-                        const folderKey = `whatsapp-${channel.id}`;
-                        const isSelected = activeChannelFolder === folderKey;
-                        const displayName = channel.verified_name || 'WhatsApp Account';
-                        const displayPhone = channel.phoneNumber || '';
-                        const formattedLabel = displayPhone && !displayName.includes(displayPhone)
-                          ? `${displayName} - ${displayPhone}`
-                          : displayName;
-
-                        return (
-                          <button
-                            key={channel.id}
-                            onClick={() => {
-                              setActiveChannelFolder(folderKey);
-                              setInternalSelectedId('');
-                            }}
-                            title={`${displayName}${displayPhone ? ` (${displayPhone})` : ''}`}
-                            className={`w-full flex items-center justify-between py-1.5 px-2 rounded-md transition-colors text-left truncate cursor-pointer ${isSelected
-                              ? 'text-[#2563eb] bg-[#eff6ff] font-semibold'
-                              : 'text-slate-600 hover:bg-slate-50'
-                              }`}
-                          >
-                            <span className="truncate flex items-center gap-1.5">
-                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${channel.isActive !== false ? 'bg-emerald-500' : 'bg-slate-300'}`}></span>
-                              <span className="truncate">• {formattedLabel}</span>
-                            </span>
-                          </button>
-                        );
-                      })
-                    )}
                   </div>
                 )}
               </div>
-            </div>
-          </aside>
-        ) : (
-          <button
-            onClick={() => setIsLeftSidebarOpen(true)}
-            className="w-7 bg-white border-r border-slate-200 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-50 cursor-pointer shrink-0"
-            title="Open Inbox Navigation"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
-        )}
-
-        {/* ====================================================== */}
-        {/* PANE 2: CONVERSATION LIST                              */}
-        {/* ====================================================== */}
-        <div className="w-[280px] md:w-[310px] bg-white border-r border-slate-200 flex flex-col shrink-0 h-full select-none">
-          {/* Top Search Bar & New Contact Add Button */}
-          <div className="p-3 pb-2 flex items-center gap-2 border-b border-slate-100">
-            <div className="relative flex-1">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search conversations..."
-                className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-[#2563eb] focus:ring-1 focus:ring-[#2563eb] transition-all"
-              />
-            </div>
-            {/* New contact add button */}
-            <button
-              onClick={openNewContactModal}
-              className="w-8 h-8 rounded-lg bg-[#eff6ff] hover:bg-[#dbeafe] text-[#2563eb] border border-[#bfdbfe] flex items-center justify-center shrink-0 transition-colors cursor-pointer"
-              title="Add New Contact / Conversation"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-            </button>
-          </div>
-
-          {/* Filter Tabs: All (count), Mine */}
-          <div className="px-3 py-2 flex items-center gap-2 border-b border-slate-100 text-xs">
-            <button
-              onClick={() => setFilterTab('all')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors cursor-pointer ${filterTab === 'all'
-                ? 'bg-[#eff6ff] text-[#2563eb] border border-[#bfdbfe]'
-                : 'text-slate-600 hover:bg-slate-100 border border-transparent'
-                }`}
-            >
-              All ({allConversations.length})
-            </button>
-            <button
-              onClick={() => setFilterTab('mine')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors cursor-pointer ${filterTab === 'mine'
-                ? 'bg-[#eff6ff] text-[#2563eb] border border-[#bfdbfe]'
-                : 'text-slate-600 hover:bg-slate-100 border border-transparent'
-                }`}
-            >
-              Mine
-            </button>
-          </div>
-
-          {/* Conversation List Cards */}
-          <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-            {customersError && customerList.length > 0 && !isLoadingCustomers && (
-              <div role="alert" className="px-3 py-2 bg-red-50 text-[11px] text-red-700 flex items-center justify-between gap-2">
-                <span className="truncate">Couldn&apos;t refresh customers: {customersError.message}</span>
-                <button type="button" onClick={fetchCustomers} className="font-semibold underline cursor-pointer shrink-0">
-                  Retry
-                </button>
-              </div>
             )}
-            {isLoadingCustomers ? (
-              <div className="p-8 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
-                <div className="w-5 h-5 border-2 border-slate-300 border-t-[#2563eb] rounded-full animate-spin"></div>
-                <span className="text-[11px] text-slate-500">Loading customers...</span>
-              </div>
-            ) : customersError && customerList.length === 0 ? (
-              <ErrorState
-                error={customersError}
-                title="Couldn't load customers"
-                onRetry={fetchCustomers}
-                retrying={isLoadingCustomers}
-              />
-            ) : filteredConversations.length === 0 ? (
-              <div className="p-8 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
-                  <User className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="font-bold text-slate-700 text-xs mb-0.5">No customers yet</p>
-                  <p className="text-[11px] text-slate-400 max-w-[180px] mx-auto">
-                    Click the + button above to register your first customer contact.
-                  </p>
-                </div>
-                <button
-                  onClick={openNewContactModal}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#eff6ff] hover:bg-[#dbeafe] text-[#2563eb] border border-[#bfdbfe] rounded-lg text-xs font-semibold cursor-pointer transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add Customer</span>
-                </button>
-              </div>
-            ) : (
-              filteredConversations.map((conv) => {
-                const isSelected = conv.id === activeConv?.id;
-                const isNew = conv.unreadCount > 0;
-                const custChannel = conv.customer.channelId
-                  ? whatsappChannels.find((ch) => ch.id === conv.customer.channelId)
-                  : null;
+          </div>
+        )}
+      </div>
+    );
+  };
 
-                return (
-                  <div
-                    key={conv.id}
-                    onClick={() => handleSelectConversation(conv.id)}
-                    className={`p-3 cursor-pointer transition-colors text-left relative ${isSelected
-                      ? 'bg-[#eff6ff]/70 border-l-4 border-l-[#2563eb]'
-                      : 'hover:bg-slate-50/80 bg-white border-l-4 border-l-transparent'
-                      }`}
-                  >
-                    {/* Name and Time */}
-                    <div className="flex items-center justify-between gap-1 mb-1">
-                      <span className="font-bold text-xs text-slate-900 truncate">
-                        {conv.customer.name}
-                      </span>
-                      <span className="text-[11px] text-slate-400 shrink-0 font-medium">
-                        {conv.updatedAt}
-                      </span>
+  const renderMessage = (msg: Message, index: number) => {
+    const isCustomer = msg.sender === 'customer';
+    const isAi = msg.sender === 'bot';
+    const isNote = Boolean(msg.isInternalNote);
+    const prev = index > 0 ? activeMessages[index - 1] : undefined;
+    const showDaySeparator = Boolean(prev && dayKey(prev.createdAt) !== dayKey(msg.createdAt));
+
+    const agentName =
+      msg.senderName || (msg.senderId != null && msg.senderId === dbUser?.id ? dbUser?.name : null) || 'Agent';
+    const senderName = isCustomer ? activeConv?.customer.name || 'Customer' : isAi ? 'AI agent' : agentName;
+
+    const label = isCustomer
+      ? null
+      : isNote
+        ? `INTERNAL NOTE · ${agentName.toUpperCase()}`
+        : isAi
+          ? `AI AGENT${msg.aiAction ? ` · ${msg.aiAction.toUpperCase()}` : ''}`
+          : agentName.toUpperCase();
+
+    const bubbleClass = isCustomer
+      ? 'bg-white border border-slate-200 text-slate-800'
+      : isNote
+        ? 'bg-amber-50 border border-amber-200 text-slate-800'
+        : 'bg-[#eef0fb] text-slate-800';
+
+    return (
+      <React.Fragment key={msg.id}>
+        {showDaySeparator && (
+          <div className="flex items-center gap-3 py-1">
+            <div className="flex-1 h-px bg-slate-100" />
+            <span className="text-[11px] text-slate-400">{formatDayLabel(msg.createdAt)}</span>
+            <div className="flex-1 h-px bg-slate-100" />
+          </div>
+        )}
+        <div className={`group flex flex-col ${isCustomer ? 'items-start' : 'items-end'}`}>
+          <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed ${bubbleClass}`}>
+            {label && (
+              <p className={`text-[10px] font-semibold tracking-wider mb-1 ${isNote ? 'text-amber-700' : 'text-[#3440a8]'}`}>
+                {label}
+              </p>
+            )}
+            {renderMedia(msg, senderName)}
+            {!isPlaceholderText(msg.text) && <p className="whitespace-pre-wrap break-words">{renderMessageWithLinks(msg.text)}</p>}
+            <div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-slate-400">
+              <span>{msg.timestamp}</span>
+              {!isCustomer && !isNote && renderMessageStatusIndicator(msg.status, msg.errorCode, msg.errorMessage)}
+            </div>
+          </div>
+          {renderReactions(msg, !isCustomer)}
+        </div>
+      </React.Fragment>
+    );
+  };
+
+  // Virtualized thread wiring
+  const activeConvKey = activeConv ? convKeyFor(activeConv.customer.id) : null;
+  const activePaging = activeConvKey ? threadPaging[activeConvKey] : undefined;
+  const isLoadingOlder = activeConvKey !== null && loadingOlderConvId === activeConvKey;
+
+  const handleLoadOlder = useCallback(() => {
+    if (!activeConv) return;
+    const oldest = activeMessages.find((m) => !isTempMessage(m));
+    if (oldest) loadOlderMessages(activeConv.customer.id, Number(oldest.id), activeChannelType);
+  }, [activeConv, activeMessages, activeChannelType, loadOlderMessages]);
+
+  // The agent's own optimistic bubble always brings the thread back to the bottom
+  const isOwnNewMessage = useCallback((m: Message) => m.sender === 'agent' && isTempMessage(m), []);
+
+  // -------------------------------------------------------------
+  // RENDER
+  // -------------------------------------------------------------
+  const threadLabel = CHANNEL_THREAD_LABELS[activeChannelType] || CHANNEL_LABELS[activeChannelType] || activeChannelType;
+  const channelDetail = activeConv?.channel
+    ? formatHandle(activeConv.channel.handle) || activeConv.channel.name || formatPhone(activeConv.channel.phoneNumber)
+    : '';
+  const headerSubtitle = [threadLabel, channelDetail, languageName(activeConv?.language)].filter(Boolean).join(' · ');
+  const suggestions = activeConv?.aiSuggestions ?? [];
+  const isAiHandling = activeConv?.handledBy === 'ai';
+  const isResolved = activeConv?.status === 'RESOLVED' || activeConv?.status === 'CLOSED';
+
+  const composerStatus = (() => {
+    if (!activeConv) return null;
+    if (composerMode === 'note') return { text: 'Notes are only visible to your team', className: 'text-amber-700' };
+    if (!canSendOnChannel) {
+      return { text: `Replying on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet`, className: 'text-amber-700' };
+    }
+    if (activeConv.needsHuman) return { text: `AI agent needs a human · ${threadLabel}`, className: 'text-amber-700' };
+    if (isAiHandling) return { text: `AI agent is replying · ${threadLabel}`, className: 'text-[#17803d]' };
+    return { text: `Replying as ${dbUser?.name || 'you'} · ${threadLabel}`, className: 'text-slate-500' };
+  })();
+
+  return (
+    <div className="flex h-full w-full bg-white overflow-hidden text-slate-800">
+      {!isChannelsCollapsed && (
+        <ChannelsPane
+          channels={channels}
+          conversations={conversations}
+          isLoading={isLoadingChannels}
+          filter={channelFilter}
+          onFilterChange={(f) => {
+            setChannelFilter(f);
+            setListTab('all');
+          }}
+          onConnect={handleConnectChannel}
+          onCollapse={() => setIsChannelsCollapsed(true)}
+        />
+      )}
+
+      <div className="flex-1 flex flex-col min-w-0 h-full">
+        <InboxTopBar
+          scope={scope}
+          conversations={conversations}
+          onOpenConversation={(conv) => {
+            setChannelFilter({ kind: 'all' });
+            setListTab('all');
+            if (conv.status === 'RESOLVED' || conv.status === 'CLOSED') setStatusFilter('all');
+            handleSelectConversation(conv);
+          }}
+          onNewContact={openNewContactModal}
+          primaryNumber={primaryNumber}
+          isLive={isRealtimeConnected}
+          isChannelsCollapsed={isChannelsCollapsed}
+          onExpandChannels={() => setIsChannelsCollapsed(false)}
+        />
+
+        <div className="flex flex-1 min-h-0">
+          <ConversationList
+            conversations={visibleConversations}
+            counts={tabCounts}
+            tab={listTab}
+            onTabChange={setListTab}
+            search={listSearch}
+            onSearchChange={setListSearch}
+            statusFilter={statusFilter}
+            onStatusFilterChange={setStatusFilter}
+            unreadOnly={unreadOnly}
+            onUnreadOnlyChange={setUnreadOnly}
+            selectedCustomerId={selectedCustomerId}
+            onSelect={handleSelectConversation}
+            onNewContact={() => openNewContactModal()}
+            isLoading={isLoadingConversations}
+            error={conversationsError}
+            onRetry={fetchConversations}
+          />
+
+          {/* ====================================================== */}
+          {/* CHAT                                                   */}
+          {/* ====================================================== */}
+          <section className="flex-1 flex flex-col min-w-0 h-full bg-white">
+            {activeConv ? (
+              <>
+                {/* Chat header */}
+                <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 shrink-0">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Avatar name={activeConv.customer.name} src={activeConv.customer.avatarUrl} size="lg" />
+                    <div className="min-w-0">
+                      <h2 className="font-semibold text-[15px] text-slate-900 truncate">{activeConv.customer.name}</h2>
+                      <p className="text-[11.5px] text-slate-500 truncate">{headerSubtitle}</p>
                     </div>
+                  </div>
 
-                    {/* Last message preview with Channel Icon and Read/Unread badge */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                        {renderChannelIcon(conv.channel)}
-                        {conv.lastMessage?.sender === 'agent' && (
-                          <span
-                            className="shrink-0 flex items-center"
-                            title={`Status: ${getMessageStatusName(conv.lastMessage.status)} (${normalizeMessageStatus(conv.lastMessage.status)})`}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="relative" ref={modeMenuRef}>
+                      <button
+                        onClick={() => setShowModeMenu((v) => !v)}
+                        className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-[13px] font-medium cursor-pointer ${isAiHandling ? 'bg-[#eef0fb] text-[#3440a8]' : 'bg-slate-100 text-slate-700'
+                          }`}
+                      >
+                        {isAiHandling ? <Sparkles className="w-4 h-4" /> : <User className="w-4 h-4" />}
+                        {isAiHandling ? 'AI agent' : activeConv.assigneeName || 'Human'}
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      </button>
+                      {showModeMenu && (
+                        <div className="absolute right-0 top-full mt-1.5 w-64 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 z-30 text-[13px]">
+                          <button
+                            onClick={() => handleSetHandler('ai')}
+                            className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-slate-50 text-left cursor-pointer"
                           >
-                            {(() => {
-                              const norm = normalizeMessageStatus(conv.lastMessage.status);
-                              if (norm === MessageStatus.READ) {
-                                return <CheckCheck className="w-3.5 h-3.5 text-sky-500" />;
-                              }
-                              if (norm === MessageStatus.DELIVERED) {
-                                return <CheckCheck className="w-3.5 h-3.5 text-slate-400" />;
-                              }
-                              if (norm === MessageStatus.FAILED) {
-                                return <AlertCircle className="w-3.5 h-3.5 text-red-500" />;
-                              }
-                              return <Check className="w-3.5 h-3.5 text-slate-400" />;
-                            })()}
-                          </span>
-                        )}
-                        <p className="text-xs text-slate-500 truncate leading-snug">
-                          {(() => {
-                            const lm = conv.lastMessage;
-                            if (!lm) return conv.customer.phone || 'No messages yet';
-                            if (
-                              lm.text &&
-                              !lm.text.match(/^\[(Image|Video|Audio|Document|Voice)\](\s*(No caption|attachment)?)?$/i) &&
-                              lm.text !== '[Image] No caption' &&
-                              lm.text !== '[Video] No caption' &&
-                              lm.text.trim() !== ''
-                            ) {
-                              return lm.text;
-                            }
-                            const mType = (lm.mediaType || lm.type || '').toLowerCase();
-                            if (mType === 'image') return '📷 Photo';
-                            if (mType === 'video') return '🎥 Video';
-                            if (mType === 'audio' || mType === 'voice') return '🎵 Voice note';
-                            if (mType === 'document') return '📄 Document';
-                            if (lm.mediaUrl) return '📎 Attachment';
-                            return lm.text || (conv.customer.phone ? conv.customer.phone : 'No messages yet');
-                          })()}
-                        </p>
-                      </div>
-                      {isNew && (
-                        <span className="text-[9px] font-bold text-white bg-[#2563eb] px-1.5 py-0.5 rounded-md tracking-wider uppercase shrink-0 shadow-2xs">
-                          NEW
-                        </span>
+                            <Sparkles className="w-4 h-4 mt-0.5 text-[#3440a8]" />
+                            <span className="flex-1">
+                              <span className="block font-medium text-slate-900">AI agent</span>
+                              <span className="block text-xs text-slate-500">Replies automatically, escalates when unsure</span>
+                            </span>
+                            {isAiHandling && <Check className="w-4 h-4 text-[#3440a8]" />}
+                          </button>
+                          <button
+                            onClick={() => handleSetHandler('human')}
+                            className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-slate-50 text-left cursor-pointer"
+                          >
+                            <User className="w-4 h-4 mt-0.5 text-slate-600" />
+                            <span className="flex-1">
+                              <span className="block font-medium text-slate-900">Human only</span>
+                              <span className="block text-xs text-slate-500">Pause the AI agent for this conversation</span>
+                            </span>
+                            {!isAiHandling && <Check className="w-4 h-4 text-[#3440a8]" />}
+                          </button>
+                          <div className="my-1 border-t border-slate-100" />
+                          <button
+                            onClick={() => {
+                              setShowModeMenu(false);
+                              handleSetStatus(isResolved ? 'OPEN' : 'RESOLVED');
+                            }}
+                            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-slate-50 text-left cursor-pointer text-slate-700"
+                          >
+                            {isResolved ? <RotateCcw className="w-4 h-4" /> : <CircleCheck className="w-4 h-4" />}
+                            {isResolved ? 'Reopen conversation' : 'Mark as resolved'}
+                          </button>
+                        </div>
                       )}
                     </div>
 
-                    {/* Channel Tag if in All folder */}
-                    {activeChannelFolder === 'all' && custChannel && (
-                      <div className="mt-1 flex items-center gap-1 text-[10px] text-slate-400 font-medium truncate">
-                        <span className="w-1 h-1 rounded-full bg-emerald-500 shrink-0"></span>
-                        <span className="truncate">{custChannel.verified_name || 'WhatsApp'}</span>
+                    {isAiHandling || activeConv.needsHuman || activeConv.assigneeId !== dbUser?.id ? (
+                      <button
+                        onClick={handleTakeOver}
+                        className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-[13px] font-medium text-slate-900 hover:bg-slate-50 cursor-pointer whitespace-nowrap"
+                      >
+                        Take over
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleSetStatus(isResolved ? 'OPEN' : 'RESOLVED')}
+                        className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-[13px] font-medium text-slate-900 hover:bg-slate-50 cursor-pointer whitespace-nowrap"
+                      >
+                        {isResolved ? 'Reopen' : 'Resolve'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {messagesLoadError?.convId === convKeyFor(activeConv.customer.id) && activeMessages.length > 0 && (
+                  <div role="alert" className="px-4 py-2 bg-red-50 border-b border-red-100 text-[11px] text-red-700 flex items-center justify-between gap-2">
+                    <span className="truncate">Couldn&apos;t refresh messages: {messagesLoadError.error.message}</span>
+                    <button
+                      type="button"
+                      onClick={() => fetchMessagesForCustomer(activeConv.customer.id, activeChannelType)}
+                      className="font-semibold underline cursor-pointer shrink-0"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                {/* Thread */}
+                {messagesLoadError?.convId === convKeyFor(activeConv.customer.id) && activeMessages.length === 0 ? (
+                  <div className="flex-1 flex items-center justify-center">
+                    <ErrorState
+                      error={messagesLoadError.error}
+                      title="Couldn't load messages"
+                      onRetry={() => fetchMessagesForCustomer(activeConv.customer.id, activeChannelType)}
+                    />
+                  </div>
+                ) : activeMessages.length === 0 ? (
+                  <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+                    {activeConv.aiSummary && (
+                      <div className="rounded-xl border border-slate-200 px-4 py-3 bg-white">
+                        <p className="text-[10px] font-semibold tracking-wider text-[#3440a8]">AI SUMMARY</p>
+                        <p className="mt-1 text-[13px] text-slate-700 leading-relaxed">{activeConv.aiSummary}</p>
+                      </div>
+                    )}
+
+                    {!activePaging?.loaded ? (
+                      <div className="py-16 flex items-center justify-center gap-2 text-xs text-slate-400">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Loading messages…
+                      </div>
+                    ) : (
+                      <div className="py-16 flex flex-col items-center text-center text-slate-400">
+                        <div className="w-11 h-11 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                          <MessageSquare className="w-5 h-5" />
+                        </div>
+                        <p className="font-semibold text-slate-700 text-[13px]">No messages yet</p>
+                        <p className="text-xs mt-1">
+                          Start a {threadLabel} conversation with <span className="font-medium text-slate-600">{activeConv.customer.name}</span>.
+                        </p>
                       </div>
                     )}
                   </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* ====================================================== */}
-        {/* PANE 3: CHAT WINDOW                                    */}
-        {/* ====================================================== */}
-        <div className="flex-1 flex flex-col bg-[#f8fafc] min-w-0 h-full border-r border-slate-200">
-          {activeConv ? (
-            <>
-              {/* Chat Header */}
-              <div className="bg-white px-5 py-3 border-b border-slate-200 flex items-center justify-between shrink-0 shadow-2xs z-10">
-                <div className="flex items-center gap-2.5">
-                  {/* Channel Tag */}
-                  <span className="text-[10px] font-bold text-[#0284c7] bg-[#e0f2fe] border border-[#bae6fd] px-2 py-0.5 rounded uppercase tracking-wider flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#0284c7]"></span>
-                    WHATSAPP
-                  </span>
-                  <h2 className="font-bold text-slate-900 text-sm leading-tight">
-                    {activeConv.customer.name} {activeConv.customer.phone ? `(${activeConv.customer.phone})` : ''}
-                  </h2>
-                </div>
-
-                {/* Header Action Buttons (Live SSE Status & Sync) */}
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${isRealtimeConnected
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-2xs'
-                        : 'bg-amber-50 text-amber-700 border-amber-200'
-                      }`}
-                    title={isRealtimeConnected ? 'Real-time live sync active via SSE' : 'Connecting to live SSE stream...'}
-                  >
-                    <span
-                      className={`w-2 h-2 rounded-full ${isRealtimeConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'
-                        }`}
-                    />
-                    <span>{isRealtimeConnected ? 'Live Sync' : 'Connecting...'}</span>
-                  </span>
-
-                  <button
-                    type="button"
-                    onClick={handleManualSync}
-                    disabled={isSyncingMessages}
-                    title="Sync latest messages from WhatsApp / Database"
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-[#bfdbfe] bg-white hover:bg-[#eff6ff] text-slate-600 hover:text-[#2563eb] text-xs font-semibold shadow-2xs transition-all cursor-pointer active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMessages ? 'animate-spin text-[#2563eb]' : 'text-slate-500'}`} />
-                    <span>{isSyncingMessages ? 'Syncing...' : 'Sync'}</span>
-                  </button>
-                </div>
-              </div>
-
-              {messagesLoadError?.convId === activeConv.id && activeConv.messages.length > 0 && (
-                <div role="alert" className="px-4 py-2 bg-red-50 border-b border-red-100 text-[11px] text-red-700 flex items-center justify-between gap-2">
-                  <span className="truncate">Couldn&apos;t refresh messages: {messagesLoadError.error.message}</span>
-                  <button
-                    type="button"
-                    onClick={() => fetchMessagesForCustomer(Number(activeConv.customer.id))}
-                    className="font-semibold underline cursor-pointer shrink-0"
-                  >
-                    Retry
-                  </button>
-                </div>
-              )}
-
-              {/* Conversation History Thread */}
-              {messagesLoadError?.convId === activeConv.id && activeConv.messages.length === 0 ? (
-                <div className="flex-1 flex items-center justify-center">
-                  <ErrorState
-                    error={messagesLoadError.error}
-                    title="Couldn't load messages"
-                    onRetry={() => fetchMessagesForCustomer(Number(activeConv.customer.id))}
-                  />
-                </div>
-              ) : activeConv.messages.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-slate-400">
-                  <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mb-3">
-                    <MessageSquare className="w-6 h-6" />
-                  </div>
-                  <p className="font-bold text-slate-700 text-sm mb-1">No messages yet</p>
-                  <p className="text-xs text-slate-400 max-w-xs">
-                    Start a WhatsApp conversation with <span className="font-semibold text-slate-600">{activeConv.customer.name}</span>.
-                  </p>
-                </div>
-              ) : (
-                <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
-                  {activeConv.messages.map((msg, index) => {
-                    const isAgent = msg.sender === 'agent';
-                    // Agent messages show the agent who actually sent them (users.name via senderId), not the logged-in user
-                    const senderName = isAgent
-                      ? msg.senderName ||
-                      (msg.senderId != null && msg.senderId === dbUser?.id ? dbUser?.name : null) ||
-                      'Agent'
-                      : activeConv.customer.name;
-
-                    // Group message reactions from DB
-                    const reactionsList = msg.reactions || [];
-                    const rxMap = new Map<string, { count: number; hasMyReaction: boolean }>();
-                    for (const rx of reactionsList) {
-                      if (!rx.emoji) continue;
-                      const cur = rxMap.get(rx.emoji) || { count: 0, hasMyReaction: false };
-                      cur.count += 1;
-                      if (rx.userId === dbUser?.id || (rx.userId && !rx.customerId)) {
-                        cur.hasMyReaction = true;
-                      }
-                      rxMap.set(rx.emoji, cur);
-                    }
-                    const groupedReactions: { emoji: string; count: number; hasMyReaction: boolean }[] = [];
-                    rxMap.forEach((val, emoji) => {
-                      groupedReactions.push({ emoji, count: val.count, hasMyReaction: val.hasMyReaction });
-                    });
-
-                    // Format Header Timestamp:
-                    // If first message in thread OR on a different day from the previous message,
-                    // format as "Feb 18, 02:14 pm". Otherwise, format as "02:14 pm".
-                    const prevMsg = index > 0 ? activeConv.messages[index - 1] : undefined;
-                    const formattedTimeHeader = (() => {
-                      const currDate = msg.createdAt ? new Date(msg.createdAt) : new Date();
-                      const timeStr = currDate
-                        .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
-                        .toLowerCase();
-
-                      if (!prevMsg || !prevMsg.createdAt) {
-                        const monthStr = currDate.toLocaleDateString([], { month: 'short' });
-                        const dayStr = currDate.getDate();
-                        return `${monthStr} ${dayStr}, ${timeStr}`;
-                      }
-
-                      const prevDate = new Date(prevMsg.createdAt);
-                      const isSameDay =
-                        currDate.getFullYear() === prevDate.getFullYear() &&
-                        currDate.getMonth() === prevDate.getMonth() &&
-                        currDate.getDate() === prevDate.getDate();
-
-                      if (!isSameDay) {
-                        const monthStr = currDate.toLocaleDateString([], { month: 'short' });
-                        const dayStr = currDate.getDate();
-                        return `${monthStr} ${dayStr}, ${timeStr}`;
-                      }
-
-                      return timeStr;
-                    })();
-
-                    return (
-                      <div
-                        key={msg.id}
-                        className={`flex flex-col ${isAgent ? 'items-end' : 'items-start'} space-y-1 mb-3`}
-                      >
-                        <div
-                          className={`flex items-center gap-1.5 text-xs text-slate-500 font-medium px-1 ${isAgent ? 'justify-end' : 'justify-start'
-                            }`}
-                        >
-                          <span className="font-semibold text-slate-700">{senderName}</span>
-                          <span className="text-slate-400">•</span>
-                          <span className="text-slate-500">{formattedTimeHeader}</span>
-                          {isAgent && (
-                            <>
-                              <span className="text-slate-300">•</span>
-                              {renderMessageStatusIndicator(msg.status, msg.errorCode, msg.errorMessage)}
-                            </>
-                          )}
-                        </div>
-
-                        {/* Message Card Bubble */}
-                        <div className="max-w-xl">
-                          <div
-                            className={`rounded-2xl px-5 py-3.5 text-sm leading-relaxed whitespace-pre-wrap shadow-2xs ${isAgent
-                              ? 'bg-[#005cf6] text-white'
-                              : 'bg-white border border-slate-200 text-slate-800'
-                              }`}
-                          >
-                            {/* Media Attachment Rendering */}
-                            {msg.mediaUrl && (() => {
-                              let resolvedMediaUrl = msg.mediaUrl;
-                              if (msg.mediaUrl.startsWith('whatsapp-media:')) {
-                                const rawId = msg.mediaUrl.replace('whatsapp-media:', '');
-                                resolvedMediaUrl = `/api/channels/whatsapp/media/${rawId}?token=${encodeURIComponent(mediaToken ?? '')}`;
-                              }
-                              const mType = (msg.mediaType || msg.type || '').toLowerCase();
-
-                              const cleanCaption =
-                                msg.text &&
-                                  !msg.text.match(/^\[(Image|Video|Audio|Document|Voice)\](\s*(No caption|attachment)?)?$/i) &&
-                                  msg.text !== '[Image] No caption' &&
-                                  msg.text !== '[Video] No caption'
-                                  ? msg.text.trim()
-                                  : '';
-
-                              const fullTimestamp = (() => {
-                                if (msg.createdAt) {
-                                  const d = new Date(msg.createdAt);
-                                  if (!isNaN(d.getTime())) {
-                                    const datePart = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-                                    const timePart = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
-                                    return `${datePart}, ${timePart}`;
-                                  }
-                                }
-                                return formattedTimeHeader || '';
-                              })();
-
-                              if (
-                                mType === 'image' ||
-                                resolvedMediaUrl.match(/\.(jpeg|jpg|gif|png|webp)($|\?)/i) ||
-                                (mType !== 'video' && mType !== 'audio' && mType !== 'document' && !resolvedMediaUrl.match(/\.(pdf|doc|docx|mp4|mp3|ogg|wav)($|\?)/i))
-                              ) {
-                                return (
-                                  <div className="mb-2 rounded-xl overflow-hidden max-w-sm border border-black/5 bg-black/5 group relative">
-                                    <img
-                                      src={resolvedMediaUrl}
-                                      alt="Attachment"
-                                      className="w-full h-auto max-h-72 object-contain rounded-xl cursor-pointer hover:opacity-95 transition-opacity"
-                                      onClick={() =>
-                                        setPreviewMedia({
-                                          url: resolvedMediaUrl,
-                                          type: 'image',
-                                          senderName,
-                                          timestamp: fullTimestamp,
-                                          caption: cleanCaption,
-                                        })
-                                      }
-                                    />
-                                  </div>
-                                );
-                              }
-
-                              if (mType === 'video' || resolvedMediaUrl.match(/\.(mp4|mov|webm)($|\?)/i)) {
-                                return (
-                                  <div className="mb-2 rounded-xl overflow-hidden max-w-sm">
-                                    <video src={resolvedMediaUrl} controls controlsList="nodownload nofullscreen noplaybackrate"
-                                      disablePictureInPicture className="w-full rounded-xl max-h-72" />
-                                    <div className="flex justify-end pt-1 pr-2">
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setPreviewMedia({
-                                            url: resolvedMediaUrl,
-                                            type: 'video',
-                                            senderName,
-                                            timestamp: fullTimestamp,
-                                            caption: cleanCaption,
-                                          })
-                                        }
-                                        className={`text-[10px] font-semibold flex items-center gap-1 cursor-pointer hover:underline ${isAgent ? 'text-white/80 hover:text-white' : 'text-blue-600'}`}
-                                      >
-                                        <ExternalLink className="w-3 h-3" /> Expand Video
-                                      </button>
-                                    </div>
-                                  </div>
-                                );
-                              }
-
-                              if (mType === 'audio' || mType === 'voice' || resolvedMediaUrl.match(/\.(mp3|ogg|wav|m4a|aac)($|\?)/i)) {
-                                return (
-                                  <div className="mb-2 rounded-xl p-1">
-                                    <audio src={resolvedMediaUrl} controls className="w-full min-w-[220px]" />
-                                  </div>
-                                );
-                              }
-
-                              const docTitle = msg.text && msg.text.startsWith('[Document]') ? msg.text.replace('[Document]', '').trim() : 'View Document';
-                              return (
-                                <div
-                                  onClick={() =>
-                                    setPreviewMedia({
-                                      url: resolvedMediaUrl,
-                                      type: 'document',
-                                      senderName,
-                                      timestamp: fullTimestamp,
-                                      caption: cleanCaption || docTitle,
-                                    })
-                                  }
-                                  className={`mb-2 p-3 rounded-xl flex items-center gap-3 transition-all cursor-pointer border ${isAgent
-                                    ? 'bg-white/15 hover:bg-white/25 border-white/20 text-white'
-                                    : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                                    }`}
-                                >
-                                  <div className={`p-2 rounded-lg ${isAgent ? 'bg-white/20 text-white' : 'bg-[#eff6ff] text-[#2563eb]'}`}>
-                                    <FileText className="w-5 h-5" />
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <p className="font-semibold text-xs truncate">
-                                      {docTitle}
-                                    </p>
-                                    <p className={`text-[10px] ${isAgent ? 'text-white/80' : 'text-slate-400'}`}>Click to preview document</p>
-                                  </div>
-                                  <Download className={`w-4 h-4 shrink-0 ${isAgent ? 'text-white/80' : 'text-slate-400'}`} />
-                                </div>
-                              );
-                            })()}
-
-                            {msg.text &&
-                              !msg.text.match(/^\[(Image|Video|Audio|Document|Voice)\](\s*(No caption|attachment)?)?$/i) &&
-                              msg.text !== '[Image] No caption' &&
-                              msg.text !== '[Video] No caption' &&
-                              msg.text.trim() !== '' && (
-                                <p className="break-words">{renderMessageWithLinks(msg.text, isAgent)}</p>
-                              )}
-                          </div>
-                        </div>
-
-                        {/* Reaction Badges & React Button in a clean unified row */}
-                        <div className={`flex items-center gap-1.5 mt-1 relative flex-wrap ${isAgent ? 'justify-end' : 'justify-start'}`}>
-                          {/* Each Reaction Badge */}
-                          {groupedReactions.map((g) => (
-                            <button
-                              key={g.emoji}
-                              type="button"
-                              onClick={() => handleToggleReaction(msg.id, g.emoji)}
-                              title={g.hasMyReaction ? 'Click to remove your reaction' : 'Click to react'}
-                              className={`px-2.5 py-1 min-w-7  rounded-full border shadow-2xs text-xs flex items-center justify-center gap-1 transition-all cursor-pointer hover:scale-110 ${g.hasMyReaction
-                                ? 'bg-blue-50 border-blue-300 text-blue-800 font-bold'
-                                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                                }`}
-                            >
-                              <span>{g.emoji}</span>
-                              {g.count > 1 && (
-                                <span className="text-[10px] text-slate-500 font-bold">{g.count}</span>
-                              )}
-                            </button>
-                          ))}
-
-                          {/* React Pill Button */}
-                          <div className="relative">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                if (reactionPickerMsgId === msg.id) {
-                                  setReactionPickerMsgId(null);
-                                  setShowFullReactionPicker(false);
-                                } else {
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  // If less than 340px from top of viewport, open downwards
-                                  if (rect.top < 340) {
-                                    setReactionPickerPlacement('bottom');
-                                  } else {
-                                    setReactionPickerPlacement('top');
-                                  }
-                                  setReactionPickerMsgId(msg.id);
-                                  setShowFullReactionPicker(false);
-                                }
-                              }}
-                              className="flex items-center gap-1.5 px-3 py-1 rounded-full border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 text-xs font-medium shadow-2xs transition-all cursor-pointer"
-                            >
-                              <Smile className="w-3.5 h-3.5 text-slate-400" />
-                              <span>React</span>
-                            </button>
-
-                            {/* Floating Reaction Picker Popup */}
-                            {reactionPickerMsgId === msg.id && (
-                              <div
-                                ref={reactionPickerRef}
-                                className={`absolute ${reactionPickerPlacement === 'bottom'
-                                  ? 'top-full mt-1.5'
-                                  : 'bottom-full mb-1.5'
-                                  } ${isAgent ? 'right-0' : 'left-0'} z-50 animate-in fade-in zoom-in-95`}
-                              >
-                                {showFullReactionPicker ? (
-                                  <div className="bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
-                                    <EmojiPicker
-                                      className="h-[280px] rounded-xl border-none shadow-none bg-white text-slate-800"
-                                      onEmojiSelect={({ emoji }) => {
-                                        const val = typeof emoji === 'string' ? emoji : (emoji as any)?.emoji || '';
-                                        if (val) handleToggleReaction(msg.id, val);
-                                        setReactionPickerMsgId(null);
-                                        setShowFullReactionPicker(false);
-                                      }}
-                                    >
-                                      <EmojiPickerSearch className="border-slate-100" />
-                                      <EmojiPickerContent />
-                                      <EmojiPickerFooter className="border-slate-100" />
-                                    </EmojiPicker>
-                                  </div>
-                                ) : (
-                                  <div className="p-1.5 bg-white border border-slate-200 rounded-full shadow-lg flex items-center gap-1">
-                                    {['👍', '❤️', '😂', '😮', '😢', '🙏', '🎉', '💡', '🔥'].map((emoji) => (
-                                      <button
-                                        key={emoji}
-                                        type="button"
-                                        onClick={() => {
-                                          handleToggleReaction(msg.id, emoji);
-                                          setReactionPickerMsgId(null);
-                                        }}
-                                        className="w-7 h-7 rounded-full hover:bg-slate-100 flex items-center justify-center text-sm transition-transform hover:scale-125 cursor-pointer"
-                                      >
-                                        {emoji}
-                                      </button>
-                                    ))}
-                                    <button
-                                      type="button"
-                                      onClick={() => setShowFullReactionPicker(true)}
-                                      title="More emojis"
-                                      className="w-7 h-7 rounded-full hover:bg-blue-50 hover:text-[#2563eb] text-slate-400 flex items-center justify-center text-xs transition-colors cursor-pointer border border-dashed border-slate-200 ml-0.5"
-                                    >
-                                      <Plus className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                      </div>
-                    );
-                  })}
-                  <div ref={messagesEndRef} />
-                </div>
-              )}
-
-              {/* Composer Box */}
-              <div className="bg-white p-3 border-t border-slate-200 shrink-0">
-                <div className="border border-slate-200 rounded-xl focus-within:border-[#2563eb] focus-within:ring-1 focus-within:ring-[#2563eb] transition-all bg-white relative">
-                  {/* Attachment Preview Bar */}
-                  {selectedFile && (
-                    <div className="p-2.5 px-3 bg-slate-50 border-b border-slate-200 rounded-t-xl flex items-center justify-between gap-3 animate-in fade-in duration-150">
-                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                        {filePreviewUrl ? (
-                          <div className="w-10 h-10 rounded-lg overflow-hidden border border-slate-200 shrink-0 bg-white shadow-2xs">
-                            <img src={filePreviewUrl} alt="Preview" className="w-full h-full object-cover" />
+                ) : (
+                  <VirtualMessageList
+                    key={activeConvKey}
+                    items={activeMessages}
+                    renderItem={renderMessage}
+                    hasMore={Boolean(activePaging?.hasMore)}
+                    isLoadingOlder={isLoadingOlder}
+                    onLoadOlder={handleLoadOlder}
+                    shouldScrollToNewItem={isOwnNewMessage}
+                    header={
+                      <div className="space-y-3 pb-3">
+                        {isLoadingOlder ? (
+                          <div className="flex items-center justify-center gap-2 py-1 text-[11px] text-slate-400">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Loading earlier messages…
                           </div>
                         ) : (
-                          <div className="w-10 h-10 rounded-lg bg-[#eff6ff] text-[#2563eb] border border-[#bfdbfe] flex items-center justify-center shrink-0 shadow-2xs">
-                            {selectedFile.type.startsWith('video/') ? (
-                              <Film className="w-5 h-5" />
-                            ) : selectedFile.type.startsWith('audio/') ? (
-                              <Music className="w-5 h-5" />
-                            ) : (
-                              <FileText className="w-5 h-5" />
-                            )}
+                          !activePaging?.hasMore && (
+                            <p className="py-1 text-center text-[11px] text-slate-400">Start of conversation</p>
+                          )
+                        )}
+                        {activeConv.aiSummary && (
+                          <div className="rounded-xl border border-slate-200 px-4 py-3 bg-white">
+                            <p className="text-[10px] font-semibold tracking-wider text-[#3440a8]">AI SUMMARY</p>
+                            <p className="mt-1 text-[13px] text-slate-700 leading-relaxed">{activeConv.aiSummary}</p>
                           </div>
                         )}
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-bold text-slate-800 truncate leading-tight">
-                            {selectedFile.name}
-                          </p>
-                          <p className="text-[10px] text-slate-500 mt-0.5">
-                            {(selectedFile.size / 1024 > 1024
-                              ? `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`
-                              : `${(selectedFile.size / 1024).toFixed(0)} KB`
-                            )} • Direct Meta Upload
-                          </p>
-                        </div>
                       </div>
+                    }
+                  />
+                )}
 
-                      <button
-                        type="button"
-                        onClick={handleClearSelectedFile}
-                        className="p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-colors cursor-pointer"
-                        title="Remove attachment"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
+                {/* Composer */}
+                <div className="border-t border-slate-200 px-4 pb-3 shrink-0">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4 text-[13px]">
+                      {(['reply', 'note', 'template'] as ComposerMode[]).map((mode) => (
+                        <button
+                          key={mode}
+                          onClick={() => setComposerMode(mode)}
+                          className={`py-2.5 border-b-2 capitalize cursor-pointer ${composerMode === mode
+                              ? 'border-[#3440a8] text-[#3440a8] font-semibold'
+                              : 'border-transparent text-slate-600 hover:text-slate-900'
+                            }`}
+                        >
+                          {mode}
+                        </button>
+                      ))}
                     </div>
+
+                    <div className="relative" ref={copilotRef}>
+                      <button
+                        onClick={() => setShowCopilot((v) => !v)}
+                        className="px-2.5 py-1 rounded-md bg-[#eef0fb] text-[#3440a8] text-xs font-medium cursor-pointer hover:bg-[#e3e6f8]"
+                      >
+                        Copilot · {suggestions.length} {suggestions.length === 1 ? 'idea' : 'ideas'}
+                      </button>
+                      {showCopilot && (
+                        <div className="absolute right-0 bottom-full mb-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl p-2 z-30">
+                          <p className="px-2 pt-1 pb-2 text-[11px] font-semibold text-slate-500 tracking-wider flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-[#3440a8]" />
+                            COPILOT IDEAS
+                          </p>
+                          {suggestions.length === 0 ? (
+                            <p className="px-2 pb-2 text-xs text-slate-500">
+                              No reply ideas yet. They appear here once the AI agent has read this conversation.
+                            </p>
+                          ) : (
+                            suggestions.map((idea, i) => (
+                              <button
+                                key={i}
+                                onClick={() => applySuggestion(idea)}
+                                className="w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 text-[13px] text-slate-700 cursor-pointer"
+                              >
+                                {idea}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {composerMode === 'template' ? (
+                    <div className="mt-1 border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-48 overflow-y-auto">
+                      {SAVED_REPLIES.map((tpl) => (
+                        <button
+                          key={tpl.title}
+                          onClick={() => applySuggestion(tpl.text)}
+                          className="w-full text-left px-3 py-2 hover:bg-slate-50 cursor-pointer"
+                        >
+                          <span className="block text-[13px] font-medium text-slate-900">{tpl.title}</span>
+                          <span className="block text-xs text-slate-500 truncate">{tpl.text}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <>
+                      {selectedFile && composerMode === 'reply' && (
+                        <div className="mt-1 mb-1.5 p-2 rounded-lg bg-slate-50 border border-slate-200 flex items-center gap-2.5">
+                          {filePreviewUrl ? (
+                            <img src={filePreviewUrl} alt="Preview" className="w-9 h-9 rounded-md object-cover border border-slate-200" />
+                          ) : (
+                            <div className="w-9 h-9 rounded-md bg-[#eef0fb] text-[#3440a8] flex items-center justify-center">
+                              {selectedFile.type.startsWith('video/') ? (
+                                <Film className="w-4 h-4" />
+                              ) : selectedFile.type.startsWith('audio/') ? (
+                                <Music className="w-4 h-4" />
+                              ) : (
+                                <FileText className="w-4 h-4" />
+                              )}
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-medium text-slate-800 truncate">{selectedFile.name}</p>
+                            <p className="text-[10px] text-slate-500">
+                              {selectedFile.size / 1024 > 1024
+                                ? `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`
+                                : `${(selectedFile.size / 1024).toFixed(0)} KB`}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleClearSelectedFile}
+                            title="Remove attachment"
+                            className="p-1 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-200 cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
+
+                      <div
+                        className={`mt-1 flex items-end gap-2 rounded-lg border px-3 py-2 ${composerMode === 'note'
+                            ? 'bg-amber-50/60 border-amber-200 focus-within:border-amber-400'
+                            : 'border-slate-200 focus-within:border-[#3440a8] focus-within:ring-1 focus-within:ring-[#3440a8]'
+                          }`}
+                      >
+                        <textarea
+                          ref={textareaRef}
+                          rows={1}
+                          value={inputMessage}
+                          onChange={(e) => {
+                            setInputMessage(e.target.value);
+                            e.target.style.height = 'auto';
+                            e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Tab' && !e.shiftKey && composerMode === 'reply' && !inputMessage && suggestions[0]) {
+                              e.preventDefault();
+                              applySuggestion(suggestions[0]);
+                            } else if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleSubmitComposer();
+                            }
+                          }}
+                          placeholder={
+                            composerMode === 'note'
+                              ? 'Add an internal note — only your team sees this…'
+                              : selectedFile
+                                ? 'Add a caption (optional)…'
+                                : `Reply to ${activeConv.customer.name} on ${CHANNEL_LABELS[activeChannelType] || activeChannelType}…`
+                          }
+                          className="flex-1 resize-none bg-transparent text-[13px] leading-5 text-slate-800 placeholder-slate-400 focus:outline-none py-0.5"
+                        />
+                        {composerMode === 'reply' && !inputMessage && suggestions[0] && (
+                          <span className="text-[11px] text-slate-400 shrink-0 pb-0.5">Tab to accept</span>
+                        )}
+                      </div>
+                    </>
                   )}
 
-                  {/* Textarea */}
-                  <textarea
-                    rows={3}
-                    value={inputMessage}
-                    onChange={(e) => setInputMessage(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSend();
-                      }
-                    }}
-                    placeholder={selectedFile ? `Add an optional message / caption for this attachment... (Press Enter to send)` : `Type message to ${activeConv.customer.name}... (Press Enter to send)`}
-                    className="w-full px-3 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none resize-none bg-transparent rounded-t-xl"
-                  />
-
-                  {/* Hidden File Input */}
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -2103,33 +1770,19 @@ export const InboxView: React.FC<InboxViewProps> = ({
                     accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv"
                   />
 
-                  {/* Bottom Toolbar */}
-                  <div className="px-3 py-2 bg-white border-t border-slate-100 rounded-b-xl flex items-center justify-between">
-                    <div className="flex items-center gap-1 text-slate-400">
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        title="Attach file (Direct Meta upload)"
-                        className={`p-1.5 rounded-lg transition-colors cursor-pointer ${selectedFile ? 'bg-blue-50 text-[#2563eb]' : 'hover:text-slate-700 hover:bg-slate-100 text-slate-400'
-                          }`}
-                      >
-                        <Paperclip className="w-4 h-4" />
-                      </button>
-
+                  <div className="mt-2.5 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-1 min-w-0">
                       <div className="relative" ref={emojiPickerRef}>
                         <button
                           type="button"
                           onClick={() => setShowEmojiPicker(!showEmojiPicker)}
                           title="Insert emoji"
-                          className={`p-1.5 rounded-lg transition-colors cursor-pointer ${showEmojiPicker
-                            ? 'bg-blue-50 text-[#2563eb]'
-                            : 'hover:text-slate-700 hover:bg-slate-100 text-slate-400'
-                            }`}
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 cursor-pointer"
                         >
-                          <Smile className="w-4 h-4" />
+                          <Smile className="w-[18px] h-[18px]" />
                         </button>
                         {showEmojiPicker && (
-                          <div className="absolute bottom-full left-0 mb-2 z-50 animate-in bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+                          <div className="absolute bottom-full left-0 mb-2 z-50 bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
                             <EmojiPicker
                               className="h-[326px] rounded-xl border-none shadow-none bg-white text-slate-800"
                               onEmojiSelect={({ emoji }) => {
@@ -2145,338 +1798,115 @@ export const InboxView: React.FC<InboxViewProps> = ({
                           </div>
                         )}
                       </div>
-
                       <button
                         type="button"
-                        title="Record voice note"
-                        className="p-1.5 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={composerMode !== 'reply' || !canSendOnChannel}
+                        title="Attach file"
+                        className={`p-1.5 rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${selectedFile ? 'text-[#3440a8] bg-[#eef0fb]' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                          }`}
                       >
-                        <Mic className="w-4 h-4" />
+                        <Paperclip className="w-[18px] h-[18px]" />
                       </button>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {/* Fast Replies Dropdown */}
-                      <div className="relative shrink-0" ref={fastRepliesRef}>
-                        <button
-                          type="button"
-                          onClick={() => setShowFastReplies(!showFastReplies)}
-                          className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-[#2563eb] hover:bg-[#eff6ff] flex items-center gap-1 transition-colors cursor-pointer"
-                        >
-                          <Zap className="w-3.5 h-3.5" />
-                          <span>Fast Replies</span>
-                          <ChevronDown className="w-3 h-3 ml-0.5" />
-                        </button>
-
-                        {showFastReplies && (
-                          <div className="absolute right-0 bottom-full mb-2 w-72 bg-white border border-slate-200 rounded-xl shadow-xl p-2 z-50 animate-in fade-in zoom-in-95">
-                            <div className="px-2 py-1 border-b border-slate-100 font-bold text-xs text-slate-800 flex items-center justify-between">
-                              <span>Saved Fast Replies</span>
-                              <Sparkles className="w-3.5 h-3.5 text-[#2563eb]" />
-                            </div>
-                            <div className="max-h-60 overflow-y-auto divide-y divide-slate-50 mt-1">
-                              {fastRepliesList.map((tpl, idx) => (
-                                <button
-                                  key={idx}
-                                  type="button"
-                                  onClick={() => {
-                                    setInputMessage(tpl.text);
-                                    setShowFastReplies(false);
-                                  }}
-                                  className="w-full p-2 text-left hover:bg-slate-50 rounded-lg transition-colors cursor-pointer group"
-                                >
-                                  <p className="font-semibold text-xs text-slate-800 group-hover:text-[#2563eb]">
-                                    {tpl.title}
-                                  </p>
-                                  <p className="text-[11px] text-slate-500 truncate mt-0.5">
-                                    {tpl.text}
-                                  </p>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Direct Meta Send Button */}
                       <button
                         type="button"
-                        onClick={() => handleSend()}
-                        disabled={(!inputMessage.trim() && !selectedFile) || isSendingMeta}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
+                        onClick={() => setShowProductPicker(true)}
+                        disabled={composerMode !== 'reply' || !shopifyStore.isConnected}
+                        title={shopifyStore.isConnected ? 'Share a Shopify product' : 'Connect your Shopify store to share products'}
+                        className="p-1.5 rounded-lg cursor-pointer text-slate-500 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
-                        {isSendingMeta ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Send className="w-3.5 h-3.5" />
-                        )}
-                        <span>{isSendingMeta ? 'Sending via Meta...' : 'Send'}</span>
+                        <ShoppingBag className="w-[18px] h-[18px]" />
                       </button>
+                      {composerStatus && (
+                        <span className={`ml-2 text-xs truncate ${composerStatus.className}`}>{composerStatus.text}</span>
+                      )}
                     </div>
-                  </div>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-center p-8 bg-[#f8fafc] select-none">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-100 border border-blue-200/60 text-[#2563eb] flex items-center justify-center mb-4 shadow-sm">
-                <MessageSquare className="w-8 h-8 stroke-[1.8]" />
-              </div>
-              <h3 className="text-base font-bold text-slate-900 mb-1.5">
-                No Conversation Selected
-              </h3>
-              <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
-                Select a customer from the list on the left to view message history, customer details, and reply across WhatsApp in real time.
-              </p>
-            </div>
-          )}
-        </div>
 
-        {/* ====================================================== */}
-        {/* PANE 4: SHOPIFY CONTEXT DESK (RIGHT COLUMN)            */}
-        {/* ====================================================== */}
-        <div className="w-[300px] lg:w-[330px] bg-white flex flex-col shrink-0 h-full overflow-y-auto select-none border-l border-slate-200">
-          {/* Header */}
-          <div className="p-3.5 pb-2.5 border-b border-slate-100 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-[#96bf48] text-white flex items-center justify-center font-bold text-xs shadow-2xs">
-                S
-              </div>
-              <div>
-                <h3 className="font-bold text-xs text-slate-900 leading-tight">
-                  DEMO : Shopify Context Desk
-                </h3>
-                <p className="text-[11px] text-slate-500 truncate max-w-[150px]">
-                  omnichannel-support.myshopify.com
-                </p>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setShowShopifyConnectModal(true)}
-              className="px-2.5 py-1 rounded-lg border border-[#bfdbfe] text-[#2563eb] hover:bg-[#eff6ff] text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
-            >
-              <Plus className="w-3 h-3" />
-              <span>Connect</span>
-            </button>
-          </div>
-
-          {/* Shopify Navigation Tabs: Orders, Catalog Share, Store Setup */}
-          <div className="flex items-center border-b border-slate-200 text-xs px-2">
-            <button
-              onClick={() => setShopifyTab('orders')}
-              className={`flex-1 py-2 text-center font-semibold transition-all border-b-2 cursor-pointer ${shopifyTab === 'orders'
-                ? 'border-[#2563eb] text-[#2563eb]'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-                }`}
-            >
-              Orders
-            </button>
-            <button
-              onClick={() => setShopifyTab('catalog')}
-              className={`flex-1 py-2 text-center font-semibold transition-all border-b-2 cursor-pointer ${shopifyTab === 'catalog'
-                ? 'border-[#2563eb] text-[#2563eb]'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-                }`}
-            >
-              Catalog Share
-            </button>
-            <button
-              onClick={() => setShopifyTab('setup')}
-              className={`flex-1 py-2 text-center font-semibold transition-all border-b-2 cursor-pointer ${shopifyTab === 'setup'
-                ? 'border-[#2563eb] text-[#2563eb]'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-                }`}
-            >
-              Store Setup
-            </button>
-          </div>
-
-          {/* Tab Content: Orders View */}
-          {shopifyTab === 'orders' && (
-            !activeConv ? (
-              <div className="p-6 flex-1 flex flex-col items-center justify-center text-center text-slate-400 my-auto">
-                <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mb-3 shadow-2xs">
-                  <User className="w-6 h-6 text-slate-400 stroke-[1.8]" />
-                </div>
-                <h4 className="font-bold text-slate-800 text-xs mb-1">No Customer Selected</h4>
-                <p className="text-[11px] text-slate-400 max-w-[210px] leading-relaxed">
-                  Customer profile, Shopify orders, and lifetime stats will appear here when a conversation is opened.
-                </p>
-              </div>
-            ) : (
-              <div className="p-3 space-y-4">
-                {/* Order Filter search input */}
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={orderSearchQuery}
-                    onChange={(e) => setOrderSearchQuery(e.target.value)}
-                    placeholder="Filter orders..."
-                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-[#2563eb] focus:ring-1 focus:ring-[#2563eb] transition-all"
-                  />
-                </div>
-
-                {/* Customer Profile Accordion */}
-                <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
-                  <button
-                    onClick={() => setIsCustomerProfileOpen(!isCustomerProfileOpen)}
-                    className="w-full px-3 py-2.5 flex items-center justify-between text-xs font-bold text-slate-900 bg-white border-b border-slate-100 cursor-pointer"
-                  >
-                    <span>Customer Profile</span>
-                    {isCustomerProfileOpen ? (
-                      <ChevronUp className="w-4 h-4 text-slate-400" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-slate-400" />
-                    )}
-                  </button>
-
-                  {isCustomerProfileOpen && (
-                    <div className="p-3 text-xs space-y-2 text-slate-700 bg-white">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">Channel:</span>
-                        <span className="font-semibold text-emerald-700 flex items-center gap-1 truncate max-w-[170px]" title={conversationChannel?.verified_name || 'WhatsApp'}>
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>
-                          <span className="truncate">{conversationChannel?.verified_name || 'Default WhatsApp'}</span>
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">Name:</span>
-                        <span className="font-semibold text-slate-900">
-                          {activeConv.customer.name}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">Phone:</span>
-                        <span className="font-semibold text-slate-900 font-mono">
-                          {activeConv.customer.phone || 'Not provided'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">Email:</span>
-                        <span className="font-semibold text-slate-900">
-                          {activeConv.customer.email || 'Not provided'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">Lifetime Spend:</span>
-                        <span className="font-semibold text-slate-900">
-                          ₹0.00 (0 orders)
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Order History Section */}
-                <div className="space-y-3">
-                  <h4 className="text-xs font-bold text-slate-900">Order History</h4>
-
-                  <div className="p-4 text-center text-slate-400 text-xs border border-dashed border-slate-200 rounded-xl bg-slate-50/50 flex flex-col items-center justify-center gap-2 py-6">
-                    <ShoppingBag className="w-5 h-5 text-slate-300" />
-                    <div>
-                      <p className="font-semibold text-slate-600 text-xs">No orders found</p>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        No Shopify orders synced yet for this customer.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )
-          )}
-
-          {/* Tab Content: Catalog Share */}
-          {shopifyTab === 'catalog' && (
-            <div className="p-3 space-y-3 text-xs">
-              <p className="text-slate-500">
-                Share product links or interactive buy cards directly to WhatsApp:
-              </p>
-              <div className="space-y-2">
-                {[
-                  { name: 'Organic Cotton Oversized Hoodie', price: '$89.00', stock: 'In Stock' },
-                  { name: 'Stainless Steel Thermal Bottle', price: '$39.50', stock: 'In Stock' },
-                  { name: 'Eco-friendly Canvas Tote Bag', price: '$45.00', stock: 'Low Stock' },
-                ].map((prod, i) => (
-                  <div
-                    key={i}
-                    className="p-2.5 bg-white border border-slate-200 rounded-xl flex items-center justify-between"
-                  >
-                    <div>
-                      <p className="font-bold text-slate-900 text-xs">{prod.name}</p>
-                      <p className="text-[11px] text-slate-500">
-                        {prod.price} • <span className="text-emerald-600 font-semibold">{prod.stock}</span>
-                      </p>
-                    </div>
                     <button
-                      onClick={() => {
-                        setInputMessage(`Check out ${prod.name} (${prod.price}): https://omnichannel-support.myshopify.com/products/${prod.name.toLowerCase().replace(/\s+/g, '-')}`);
-                      }}
-                      className="px-2 py-1 bg-[#eff6ff] text-[#2563eb] font-semibold text-[11px] rounded-lg hover:bg-[#dbeafe] flex items-center gap-1 cursor-pointer"
+                      type="button"
+                      onClick={handleSubmitComposer}
+                      disabled={
+                        composerMode === 'template' ||
+                        isSending ||
+                        (composerMode === 'note' ? !inputMessage.trim() : (!inputMessage.trim() && !selectedFile) || !canSendOnChannel)
+                      }
+                      className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-[#3440a8] hover:bg-[#2b3590] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold cursor-pointer shrink-0"
                     >
-                      <Share2 className="w-3 h-3" />
-                      <span>Send</span>
+                      {isSending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      {composerMode === 'note' ? 'Add note' : 'Send'}
                     </button>
                   </div>
-                ))}
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
+                <div className="w-14 h-14 rounded-2xl bg-[#eef0fb] text-[#3440a8] flex items-center justify-center mb-4">
+                  <MessageSquare className="w-7 h-7 stroke-[1.8]" />
+                </div>
+                <h3 className="text-[15px] font-semibold text-slate-900 mb-1">No conversation selected</h3>
+                <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
+                  Pick a conversation from the list to see the thread, AI agent activity and customer details.
+                </p>
               </div>
-            </div>
-          )}
+            )}
+          </section>
 
-          {/* Tab Content: Store Setup */}
-          {shopifyTab === 'setup' && (
-            <div className="p-3 space-y-3 text-xs">
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                <div className="flex items-center gap-2">
-                  <Store className="w-4 h-4 text-[#2563eb]" />
-                  <span className="font-bold text-slate-900">Shopify Store Details</span>
-                </div>
-                <div className="text-[11px] space-y-1 text-slate-600">
-                  <p><strong>Domain:</strong> omnichannel-support.myshopify.com</p>
-                  <p><strong>Sync Status:</strong> Realtime Webhooks Active</p>
-                  <p><strong>Currency:</strong> USD ($)</p>
-                </div>
-              </div>
-            </div>
-          )}
+          <CustomerPanel
+            conversation={activeConv}
+            lastAiAction={lastAiAction}
+            shopify={{ connected: shopifyStore.isConnected, needsReauth: shopifyStore.needsReauth }}
+            onShareProduct={handleShareProduct}
+            onInsertProductText={handleInsertProductText}
+            shareDisabledReason={shareDisabledReason}
+          />
         </div>
       </div>
 
       {/* ======================================================== */}
-      {/* MODALS: ADD CHANNEL, NEW CONTACT, SHOPIFY CONNECT        */}
+      {/* MODALS                                                   */}
       {/* ======================================================== */}
-
-      {/* Add Channel Modal */}
       <AddChannelModal
         isOpen={showAddChannelModal}
         onClose={() => setShowAddChannelModal(false)}
         onSuccess={() => {
-          fetchWhatsAppChannels();
+          fetchChannels();
         }}
       />
 
-      {/* New Contact Modal */}
+      <Modal
+        isOpen={showProductPicker && Boolean(activeConv)}
+        onClose={() => setShowProductPicker(false)}
+        title={`Share a product with ${activeConv?.customer.name ?? 'customer'}`}
+        icon={<ShoppingBag className="w-4 h-4 text-[#3440a8]" />}
+        maxWidth="md"
+      >
+        <ProductBrowser
+          className="h-[min(560px,70vh)]"
+          onShare={handleShareProduct}
+          onInsertText={handleInsertProductText}
+          shareDisabledReason={shareDisabledReason}
+        />
+      </Modal>
+
       <Modal
         isOpen={showNewContactModal}
         onClose={() => setShowNewContactModal(false)}
-        title="Add New Customer"
-        icon={<User className="w-4 h-4 text-[#2563eb]" />}
+        title="New WhatsApp contact"
+        icon={<User className="w-4 h-4 text-[#3440a8]" />}
         maxWidth="sm"
       >
         <form onSubmit={handleCreateContact} className="space-y-3 text-xs">
-          {/* Channel Selector */}
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Assigned Channel</label>
+            <label className="block font-semibold text-slate-700 mb-1">WhatsApp number</label>
             {whatsappChannels.length > 0 ? (
               <select
-                value={newContactChannelId || (whatsappChannels[0]?.id ?? '')}
+                value={newContactChannelId ?? whatsappChannels[0]?.id ?? ''}
                 onChange={(e) => setNewContactChannelId(Number(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#2563eb]"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#3440a8]"
               >
                 {whatsappChannels.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.verified_name || 'WhatsApp'} {c.phoneNumber ? `(${c.phoneNumber})` : ''}
+                    {c.verified_name || 'WhatsApp'} {c.phoneNumber ? `(${formatPhone(c.phoneNumber)})` : ''}
                   </option>
                 ))}
               </select>
@@ -2489,16 +1919,16 @@ export const InboxView: React.FC<InboxViewProps> = ({
                     setShowNewContactModal(false);
                     setShowAddChannelModal(true);
                   }}
-                  className="font-bold underline text-amber-900 hover:text-amber-950 cursor-pointer ml-2"
+                  className="font-bold underline text-amber-900 cursor-pointer ml-2"
                 >
-                  Connect Channel
+                  Connect channel
                 </button>
               </div>
             )}
           </div>
 
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Customer Name</label>
+            <label className="block font-semibold text-slate-700 mb-1">Customer name</label>
             <input
               type="text"
               required
@@ -2506,24 +1936,22 @@ export const InboxView: React.FC<InboxViewProps> = ({
               value={newContactName}
               onChange={(e) => setNewContactName(e.target.value)}
               placeholder="e.g. Rachel Adams"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:bg-slate-100 disabled:cursor-not-allowed"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#3440a8] disabled:bg-slate-100 disabled:cursor-not-allowed"
             />
           </div>
 
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">WhatsApp Phone Number</label>
+            <label className="block font-semibold text-slate-700 mb-1">Phone number</label>
             <input
               type="text"
               required
               disabled={whatsappChannels.length === 0}
               value={newContactPhone}
               onChange={(e) => setNewContactPhone(e.target.value)}
-              placeholder="e.g. 919876543210 (digits with country code, without +)"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:bg-slate-100 disabled:cursor-not-allowed"
+              placeholder="e.g. 919876543210"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#3440a8] disabled:bg-slate-100 disabled:cursor-not-allowed"
             />
-            <p className="text-[11px] text-slate-400 mt-1">
-              Enter digits only with country code (e.g. 919876543210). Stored cleanly without +.
-            </p>
+            <p className="text-[11px] text-slate-400 mt-1">Digits only, with country code and without +.</p>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
@@ -2536,44 +1964,13 @@ export const InboxView: React.FC<InboxViewProps> = ({
             </button>
             <button
               type="submit"
-              disabled={whatsappChannels.length === 0}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${whatsappChannels.length === 0
-                ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-200 shadow-none'
-                : 'text-white bg-[#2563eb] hover:bg-[#1d4ed8] cursor-pointer shadow-xs'
-                }`}
-              title={whatsappChannels.length === 0 ? 'Please connect a WhatsApp channel first' : undefined}
+              disabled={whatsappChannels.length === 0 || isCreatingContact}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg text-white bg-[#3440a8] hover:bg-[#2b3590] disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed cursor-pointer"
             >
-              Create Customer
+              {isCreatingContact ? 'Creating…' : 'Create contact'}
             </button>
           </div>
         </form>
-      </Modal>
-
-      {/* Shopify Connect Modal */}
-      <Modal
-        isOpen={showShopifyConnectModal}
-        onClose={() => setShowShopifyConnectModal(false)}
-        title="Connect Shopify Store"
-        icon={<ShoppingBag className="w-4 h-4 text-[#96bf48]" />}
-        maxWidth="sm"
-      >
-        <div className="space-y-3 text-xs">
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">Store URL</label>
-            <input
-              type="text"
-              defaultValue="omnichannel-support.myshopify.com"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#2563eb]"
-            />
-          </div>
-
-          <button
-            onClick={() => setShowShopifyConnectModal(false)}
-            className="w-full py-2 bg-[#96bf48] hover:bg-[#83aa3d] text-white font-semibold rounded-lg transition-colors cursor-pointer"
-          >
-            Connect Store
-          </button>
-        </div>
       </Modal>
 
       {/* Media Preview Modal */}
@@ -2583,55 +1980,42 @@ export const InboxView: React.FC<InboxViewProps> = ({
           onClose={() => setPreviewMedia(null)}
           title={
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="font-bold text-slate-900 text-sm">
-                {previewMedia.senderName || 'Attachment Preview'}
-              </span>
+              <span className="font-bold text-slate-900 text-sm">{previewMedia.senderName || 'Attachment preview'}</span>
               {previewMedia.timestamp && (
                 <>
                   <span className="text-slate-300">•</span>
-                  <span className="text-xs font-normal text-slate-500">
-                    {previewMedia.timestamp}
-                  </span>
+                  <span className="text-xs font-normal text-slate-500">{previewMedia.timestamp}</span>
                 </>
               )}
             </div>
           }
           icon={
             previewMedia.type === 'image' ? (
-              <ImageIcon className="w-4 h-4 text-[#2563eb]" />
+              <ImageIcon className="w-4 h-4 text-[#3440a8]" />
             ) : previewMedia.type === 'video' ? (
-              <Film className="w-4 h-4 text-[#2563eb]" />
+              <Film className="w-4 h-4 text-[#3440a8]" />
             ) : previewMedia.type === 'audio' ? (
-              <Music className="w-4 h-4 text-[#2563eb]" />
+              <Music className="w-4 h-4 text-[#3440a8]" />
             ) : (
-              <FileText className="w-4 h-4 text-[#2563eb]" />
+              <FileText className="w-4 h-4 text-[#3440a8]" />
             )
           }
-          maxWidth={
-            previewMedia.type === 'image' || previewMedia.type === 'video' || previewMedia.type === 'document'
-              ? '3xl'
-              : 'md'
-          }
+          maxWidth={previewMedia.type === 'image' || previewMedia.type === 'video' || previewMedia.type === 'document' ? '3xl' : 'md'}
         >
           <div className="space-y-4">
             {previewMedia.type === 'image' && (
               <div className="w-full max-h-[70vh] flex items-center justify-center bg-slate-950/5 rounded-xl overflow-hidden p-2 border border-slate-100">
                 <img
                   src={previewMedia.url}
-                  alt={previewMedia.caption || 'Attachment Preview'}
-                  className="max-h-[65vh] w-auto max-w-full object-contain rounded-lg shadow-xs"
+                  alt={previewMedia.caption || 'Attachment preview'}
+                  className="max-h-[65vh] w-auto max-w-full object-contain rounded-lg"
                 />
               </div>
             )}
 
             {previewMedia.type === 'video' && (
-              <div className="w-full max-h-[70vh] flex items-center justify-center bg-black rounded-xl overflow-hidden shadow-xs">
-                <video
-                  src={previewMedia.url}
-                  controls
-                  autoPlay
-                  className="max-h-[65vh] w-full object-contain rounded-lg"
-                />
+              <div className="w-full max-h-[70vh] flex items-center justify-center bg-black rounded-xl overflow-hidden">
+                <video src={previewMedia.url} controls autoPlay className="max-h-[65vh] w-full object-contain rounded-lg" />
               </div>
             )}
 
@@ -2644,28 +2028,21 @@ export const InboxView: React.FC<InboxViewProps> = ({
             {previewMedia.type === 'document' && (
               <div className="w-full space-y-3">
                 {previewMedia.url.match(/\.pdf($|\?)/i) || previewMedia.url.startsWith('blob:') ? (
-                  <iframe
-                    src={previewMedia.url}
-                    title="Document Preview"
-                    className="w-full h-[65vh] rounded-xl border border-slate-200 bg-white"
-                  />
+                  <iframe src={previewMedia.url} title="Document preview" className="w-full h-[65vh] rounded-xl border border-slate-200 bg-white" />
                 ) : (
                   <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                    <FileText className="w-12 h-12 text-[#2563eb] mx-auto opacity-80" />
-                    <p className="text-sm font-semibold text-slate-800">{previewMedia.caption || 'Document File'}</p>
+                    <FileText className="w-12 h-12 text-[#3440a8] mx-auto opacity-80" />
+                    <p className="text-sm font-semibold text-slate-800">{previewMedia.caption || 'Document file'}</p>
                     <p className="text-xs text-slate-500">Document preview ready for download or external viewing.</p>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Modal Footer Actions */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
               {previewMedia.caption ? (
                 <div className="bg-slate-50 border border-slate-200/80 rounded-xl px-3.5 py-2 max-w-lg">
-                  <p className="text-xs text-slate-800 leading-relaxed font-normal break-words">
-                    {renderMessageWithLinks(previewMedia.caption, false)}
-                  </p>
+                  <p className="text-xs text-slate-800 leading-relaxed break-words">{renderMessageWithLinks(previewMedia.caption)}</p>
                 </div>
               ) : (
                 <div />
@@ -2675,15 +2052,15 @@ export const InboxView: React.FC<InboxViewProps> = ({
                   href={previewMedia.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg flex items-center gap-1.5 font-medium transition-colors cursor-pointer border border-slate-200"
+                  className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg flex items-center gap-1.5 font-medium border border-slate-200"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
-                  Open in Tab
+                  Open in tab
                 </a>
                 <a
                   href={previewMedia.url}
                   download
-                  className="px-3 py-1.5 bg-[#2563eb] hover:bg-[#1d4ed8] text-white rounded-lg flex items-center gap-1.5 font-semibold transition-colors shadow-xs cursor-pointer"
+                  className="px-3 py-1.5 bg-[#3440a8] hover:bg-[#2b3590] text-white rounded-lg flex items-center gap-1.5 font-semibold"
                 >
                   <Download className="w-3.5 h-3.5" />
                   Download
