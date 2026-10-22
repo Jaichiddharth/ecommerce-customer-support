@@ -156,6 +156,12 @@ body {
     @apply font-sans;
     color: #09090b;
   }
+
+  /* Hide Microsoft Edge's default password reveal and clear buttons */
+  input[type="password"]::-ms-reveal,
+  input[type="password"]::-ms-clear {
+    display: none;
+  }
 }
 
 @keyframes fadeIn {
