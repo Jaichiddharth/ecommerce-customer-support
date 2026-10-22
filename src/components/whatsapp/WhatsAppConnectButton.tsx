@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { gooeyToast } from '@/components/ui/goey-toaster';
 import { useWhatsAppConnect } from './useWhatsAppConnect';
 
 export interface WhatsAppConnectButtonProps {
@@ -23,6 +24,9 @@ export const WhatsAppConnectButton: React.FC<WhatsAppConnectButtonProps> = ({
     storeId,
     onSuccess,
     onError,
+    onCancel: (msg) => {
+      gooeyToast.info(msg);
+    },
   });
 
   return (
@@ -68,6 +72,7 @@ export const WhatsAppConnectButton: React.FC<WhatsAppConnectButtonProps> = ({
           </>
         )}
       </button>
+
 
       {error && (
         <span className="text-[11px] text-red-600 flex items-center gap-1">
