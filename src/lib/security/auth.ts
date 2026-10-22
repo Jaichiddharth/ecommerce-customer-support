@@ -9,6 +9,9 @@ import { createLogger, setRequestContext } from "../logger";
 
 const log = createLogger("auth");
 
+/** Longest a sign-in may last ("Keep me signed in"); the client enforces the shorter default itself. */
+const MAX_SESSION_AGE_SECONDS = 30 * 24 * 60 * 60;
+
 export interface AuthUser {
   id: number;
   organizationId: number;
@@ -47,11 +50,17 @@ export async function verifyFirebaseToken(req: NextRequest): Promise<DecodedIdTo
   if (!token) {
     throw new AppError("AUTH_TOKEN_MISSING", { expected: true });
   }
+  let decoded: DecodedIdToken;
   try {
-    return await adminAuth.verifyIdToken(token);
+    decoded = await adminAuth.verifyIdToken(token);
   } catch (err) {
     throw toAppError(err);
   }
+  // auth_time is when the user last actually signed in; token refreshes don't move it
+  if (Date.now() / 1000 - decoded.auth_time > MAX_SESSION_AGE_SECONDS) {
+    throw new AppError("AUTH_TOKEN_EXPIRED", { expected: true });
+  }
+  return decoded;
 }
 
 /**
