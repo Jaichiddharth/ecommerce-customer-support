@@ -27,6 +27,45 @@ export const NO_WORKSPACE_MESSAGE =
 /** Error codes thrown by the auth flows whose message is already set on `error` for inline display. */
 const INLINE_ERROR_CODES = ['auth/no-workspace', 'auth/sync-failed', 'auth/email-not-verified', 'auth/email-verification-sent'];
 
+// ─── Session lifetime ("Keep me signed in") ────────────────────────────────
+// Firebase refresh tokens never expire on their own, so the session deadline is tracked here.
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const SESSION_DAYS_REMEMBERED = 30;
+export const SESSION_DAYS_DEFAULT = 10;
+const SESSION_EXPIRY_KEY = 'unocx_session_expires_at';
+const SESSION_CHECK_INTERVAL_MS = 60 * 1000;
+
+function setSessionExpiry(rememberMe: boolean) {
+  const days = rememberMe ? SESSION_DAYS_REMEMBERED : SESSION_DAYS_DEFAULT;
+  try { localStorage.setItem(SESSION_EXPIRY_KEY, String(Date.now() + days * DAY_MS)); } catch { }
+}
+
+function clearSessionExpiry() {
+  try { localStorage.removeItem(SESSION_EXPIRY_KEY); } catch { }
+}
+
+/** True once the stored deadline has passed. A session restored without one gets the default lifetime. */
+function isSessionExpired(): boolean {
+  try {
+    const raw = localStorage.getItem(SESSION_EXPIRY_KEY);
+    if (!raw) {
+      setSessionExpiry(false);
+      return false;
+    }
+    return Date.now() >= Number(raw);
+  } catch {
+    return false;
+  }
+}
+
+export const SESSION_EXPIRED_MESSAGE = 'Your session has expired. Please sign in again.';
+
+/** Workspace to create for a Google sign-up, resolved once the Google account's email is known. */
+export interface GoogleWorkspace {
+  slug: string;
+  name: string;
+}
+
 export interface DbUser {
   id: number;
   organizationId: number;
@@ -44,12 +83,13 @@ interface AuthContextType {
   dbUser: DbUser | null;
   loading: boolean;
   error: string | null;
-  loginWithEmail: (email: string, password: string, workspaceSlug?: string) => Promise<UserCredential>;
+  loginWithEmail: (email: string, password: string, rememberMe?: boolean) => Promise<UserCredential>;
   signupWithEmail: (email: string, password: string, displayName?: string, workspaceSlug?: string) => Promise<UserCredential>;
-  loginWithGoogle: (workspaceSlug?: string) => Promise<UserCredential>;
+  /** Sign-in when `resolveWorkspace` is omitted; sign-up (creates a workspace) when it is given. */
+  loginWithGoogle: (rememberMe?: boolean, resolveWorkspace?: (email: string) => Promise<GoogleWorkspace>) => Promise<UserCredential>;
   logout: () => Promise<void>;
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
-  syncDbUser: (currentUser: User, workspaceSlug?: string) => Promise<DbUser | null>;
+  syncDbUser: (currentUser: User, workspaceSlug?: string, workspaceName?: string) => Promise<DbUser | null>;
   resendVerificationEmail: (email: string, password: string) => Promise<void>;
   clearError: () => void;
 }
@@ -74,7 +114,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
    * Pass workspaceSlug to create a new workspace (sign-up path).
    * Throws when the server rejects the user (e.g. 404 = not mapped to any workspace).
    */
-  const syncDbUser = useCallback(async (currentUser: User, workspaceSlug?: string): Promise<DbUser | null> => {
+  const syncDbUser = useCallback(async (currentUser: User, workspaceSlug?: string, workspaceName?: string): Promise<DbUser | null> => {
     const idToken = await currentUser.getIdToken();
     const response = await axios.post(
       '/api/auth/sync',
@@ -82,6 +122,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         name: currentUser.displayName || currentUser.email?.split('@')[0] || 'Team Member',
         avatarUrl: currentUser.photoURL || null,
         ...(workspaceSlug ? { workspaceSlug } : {}),
+        ...(workspaceSlug && workspaceName ? { workspaceName } : {}),
       },
       { headers: { Authorization: `Bearer ${idToken}` } }
     );
@@ -141,6 +182,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
 
+        if (currentUser && isSessionExpired()) {
+          await signOut(auth);
+          clearSessionExpiry();
+          setUser(null);
+          setDbUser(null);
+          setError(SESSION_EXPIRED_MESSAGE);
+          setLoading(false);
+          return;
+        }
+
         if (currentUser && currentUser.email) {
           try {
             await syncDbUser(currentUser);
@@ -177,9 +228,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, [syncDbUser]);
 
+  // End an open session once its deadline passes (polled: a 30-day setTimeout would overflow)
+  useEffect(() => {
+    if (!user) return;
+    const id = setInterval(async () => {
+      if (!isSessionExpired()) return;
+      try { await signOut(auth); } catch { }
+      clearSessionExpiry();
+      setUser(null);
+      setDbUser(null);
+      setError(SESSION_EXPIRED_MESSAGE);
+    }, SESSION_CHECK_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [user]);
+
   const clearError = () => setError(null);
 
-  const loginWithEmail = async (email: string, password: string, workspaceSlug?: string) => {
+  const loginWithEmail = async (email: string, password: string, rememberMe = false) => {
     authInFlight.current = true;
     try {
       const result = await signInWithEmailAndPassword(auth, email, password);
@@ -191,11 +256,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       // The user must belong to a workspace before the session is kept
       try {
-        await syncDbUser(result.user, workspaceSlug);
+        await syncDbUser(result.user);
       } catch (syncErr) {
         await abortSession(result.user, false);
         throw syncFailure(syncErr, 'AuthContext.loginWithEmail');
       }
+      setSessionExpiry(rememberMe);
       setUser(result.user);
       return result;
     } catch (err: any) {
@@ -260,18 +326,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loginWithGoogle = async (workspaceSlug?: string) => {
+  const loginWithGoogle = async (rememberMe = false, resolveWorkspace?: (email: string) => Promise<GoogleWorkspace>) => {
     authInFlight.current = true;
     try {
       const result = await signInWithPopup(auth, googleProvider);
-      // Sign-in (no slug) requires an existing workspace; sign-up (slug) creates one.
+      // Sign-in (no resolver) requires an existing workspace; sign-up creates one named after the Google email.
       // A Google account Firebase just created for this attempt is removed on failure.
       try {
-        await syncDbUser(result.user, workspaceSlug);
+        const workspace = resolveWorkspace && result.user.email
+          ? await resolveWorkspace(result.user.email)
+          : undefined;
+        await syncDbUser(result.user, workspace?.slug, workspace?.name);
       } catch (syncErr) {
         await abortSession(result.user, !!getAdditionalUserInfo(result)?.isNewUser);
         throw syncFailure(syncErr, 'AuthContext.loginWithGoogle');
       }
+      setSessionExpiry(rememberMe);
       setUser(result.user);
       return result;
     } catch (err: any) {
@@ -288,6 +358,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = async () => {
     try {
       await signOut(auth);
+      clearSessionExpiry();
       setUser(null);
       setDbUser(null);
     } catch (err: any) {

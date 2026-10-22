@@ -12,7 +12,7 @@ const log = createLogger("auth.sync");
  * POST /api/auth/sync
  * Registers / refreshes the signed-in Firebase user in PostgreSQL.
  * Identity (uid, email) comes from the verified ID token; organization and role are decided by the server.
- * Body (optional): { name, avatarUrl, firebaseGcmToken, workspaceSlug }
+ * Body (optional): { name, avatarUrl, firebaseGcmToken, workspaceSlug, workspaceName }
  */
 export const POST = apiHandler(async (req: NextRequest) => {
   // Throws AUTH_TOKEN_MISSING / AUTH_TOKEN_EXPIRED / AUTH_TOKEN_INVALID (401)
@@ -20,7 +20,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
 
   // The body is optional, so a missing/invalid one is treated as empty
   const body = await req.json().catch(() => ({}));
-  const { name, avatarUrl, firebaseGcmToken, workspaceSlug } = body ?? {};
+  const { name, avatarUrl, firebaseGcmToken, workspaceSlug, workspaceName } = body ?? {};
 
   const user = await userService.syncUser(
     decodedToken,
@@ -30,6 +30,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       firebaseGcmToken: typeof firebaseGcmToken === "string" ? firebaseGcmToken : undefined,
     },
     typeof workspaceSlug === "string" ? workspaceSlug.trim().toLowerCase() : undefined,
+    typeof workspaceName === "string" && workspaceName.trim() ? workspaceName.trim().slice(0, 255) : undefined,
   );
 
   setRequestContext({ userId: user.id, orgId: user.organizationId });

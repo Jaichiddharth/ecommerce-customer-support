@@ -32,6 +32,11 @@ function toSlug(s: string) {
   return s.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 }
 
+/** Workspace slug for a Google sign-up: jane.doe@acme.com → jane-doe-acme-com (room left for a -N suffix). */
+function emailToSlug(email: string) {
+  return email.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 90);
+}
+
 /** Returns true if password has ≥8 chars, ≥1 letter, ≥1 digit */
 function validatePassword(pw: string): { ok: boolean; msg: string } {
   if (pw.length < 8) return { ok: false, msg: 'Password must be at least 8 characters.' };
@@ -236,7 +241,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
+  const [rememberMe, setRememberMe] = useState(false);
 
   // Sign-up
   const [companyInput, setCompanyInput] = useState('');
@@ -300,7 +305,7 @@ export default function LoginPage() {
     if (!email.trim() || !password) return setLocalError('Please enter your email and password.');
     setSubmitting(true);
     try {
-      await loginWithEmail(email.trim(), password);
+      await loginWithEmail(email.trim(), password, rememberMe);
       router.replace('/');
     } catch (err: any) {
       if (err.code === 'auth/email-not-verified') setLocalError(err.message);
@@ -310,7 +315,7 @@ export default function LoginPage() {
   const handleGoogleSignIn = async () => {
     resetErr();
     setGoogleLoading(true);
-    try { await loginWithGoogle(); router.replace('/'); }
+    try { await loginWithGoogle(rememberMe); router.replace('/'); }
     catch { } finally { setGoogleLoading(false); }
   };
 
@@ -361,13 +366,20 @@ export default function LoginPage() {
     } finally { setSubmitting(false); }
   };
 
+  // Google sign-up needs no company name: the workspace is named after the Google email
+  const resolveGoogleWorkspace = async (googleEmail: string) => {
+    const slug = emailToSlug(googleEmail);
+    const r = await lookupWorkspace(slug);
+    const free = r.available ? slug : r.suggestion;
+    if (!free) throw new Error(`A workspace for ${googleEmail} already exists. Sign in instead, or sign up with email.`);
+    return { slug: free, name: googleEmail.trim().toLowerCase() };
+  };
+
   const handleGoogleSignUp = async () => {
     resetErr();
     setGoogleLoading(true);
     try {
-      const slug = await resolveWorkspace();
-      if (!slug) return;
-      await loginWithGoogle(slug);
+      await loginWithGoogle(false, resolveGoogleWorkspace);
       router.replace('/');
     } catch { } finally { setGoogleLoading(false); }
   };
@@ -473,6 +485,7 @@ export default function LoginPage() {
                 <h1 className="text-[24px] font-bold tracking-tight leading-tight">Create your workspace</h1>
                 <p className="mt-1 text-[14px] text-slate-500">Set up UnoCX for your team in under a minute.</p>
 
+                {/* Group 1: manual sign-up with company + personal details */}
                 <form onSubmit={handleSignUp} className="mt-5 space-y-3" noValidate>
                   {/* Company */}
                   <div>
@@ -544,7 +557,12 @@ export default function LoginPage() {
                 </form>
 
                 <OrDivider />
+
+                {/* Group 2: Google sign-up — no form; the workspace is named after the Google email */}
                 <GoogleBtn onClick={handleGoogleSignUp} loading={googleLoading} label="Sign up with Google" />
+                <p className="mt-1.5 text-[12px] text-slate-400 text-center">
+                  No form needed — your workspace is named after your Google email.
+                </p>
 
                 <p className="mt-3 text-[11px] text-slate-400 text-center leading-relaxed">
                   By creating an account you agree to our{' '}

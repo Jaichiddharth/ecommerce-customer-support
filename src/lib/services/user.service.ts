@@ -23,8 +23,9 @@ export class UserService {
    *   The slug must NOT yet exist — it will be created.
    *   Throws CONFLICT if the slug is already taken.
    *   The first user in a new workspace becomes ADMIN.
+   *   workspaceName overrides the display name derived from the slug (Google sign-up uses the email).
    */
-  async syncUser(decodedToken: DecodedIdToken, profile: SyncProfileDTO = {}, workspaceSlug?: string): Promise<User> {
+  async syncUser(decodedToken: DecodedIdToken, profile: SyncProfileDTO = {}, workspaceSlug?: string, workspaceName?: string): Promise<User> {
     const uid = decodedToken.uid;
     const email = decodedToken.email?.toLowerCase().trim();
     if (!email) {
@@ -77,7 +78,7 @@ export class UserService {
 
     // Create the new organization
     const org = await organizationService.createOrganization({
-      name: workspaceSlug
+      name: workspaceName ?? workspaceSlug
         .split('-')
         .map(w => w.charAt(0).toUpperCase() + w.slice(1))
         .join(' '),
