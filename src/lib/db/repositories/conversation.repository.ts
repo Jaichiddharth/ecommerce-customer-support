@@ -9,6 +9,7 @@ import {
   ConversationHandler,
   TicketStatus,
   MessageStatus,
+  ChannelStatus,
   type Ticket,
   type Message,
 } from "../schema";
@@ -184,7 +185,14 @@ export class ConversationRepository {
       })
       .from(tickets)
       .innerJoin(customers, eq(tickets.customerId, customers.id))
-      .leftJoin(channels, eq(sql`coalesce(${tickets.channelId}, ${customers.channelId})`, channels.id))
+      // Conversations live under a channel: none on a disconnected channel (or with no channel) are listed
+      .innerJoin(
+        channels,
+        and(
+          eq(sql`coalesce(${tickets.channelId}, ${customers.channelId})`, channels.id),
+          ne(channels.status, ChannelStatus.DISCONNECTED)
+        )
+      )
       .leftJoin(users, eq(tickets.assigneeId, users.id))
       .where(and(eq(tickets.organizationId, organizationId), inArray(tickets.id, latestPerCustomer)))
       .orderBy(sql`${tickets.lastMessageAt} desc nulls last`);

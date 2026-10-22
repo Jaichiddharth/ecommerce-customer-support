@@ -1,38 +1,37 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { channels } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { channels } from "@/lib/services";
+import { channelRepository } from "@/lib/db/repositories/channel.repository";
 import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
+import { AppError } from "@/lib/errors";
+import { ChannelStatus } from "@/lib/db/schema";
+import { publish } from "@/lib/realtime";
 
-// DELETE /api/channels/:id — disconnect (soft delete) a channel
+// DELETE /api/channels/:id — disconnect a channel at the provider and soft-delete it locally.
+// The row is kept so its conversations stay readable; it is hidden everywhere else.
 export const DELETE = withAuth(async (req: AuthenticatedRequest, context?: { params: Promise<{ id: string }> }) => {
   const { id } = await context!.params;
   const channelId = parseInt(id, 10);
 
   if (isNaN(channelId)) {
-    return NextResponse.json({ success: false, error: "Invalid channel ID" }, { status: 400 });
+    throw AppError.validation("Invalid channel ID", "id");
   }
 
-  // Verify the channel belongs to the user's org
-  const [existing] = await db
-    .select({ id: channels.id, organizationId: channels.organizationId })
-    .from(channels)
-    .where(and(eq(channels.id, channelId), eq(channels.organizationId, req.user.organizationId)))
-    .limit(1);
-
-  if (!existing) {
-    return NextResponse.json({ success: false, error: "Channel not found" }, { status: 404 });
+  const channel = await channels.getById(channelId, req.user.organizationId);
+  if (!channel || channel.status === ChannelStatus.DISCONNECTED) {
+    throw AppError.notFound("Channel not found.");
   }
 
-  // Soft-disconnect: mark as disconnected and inactive
-  await db
-    .update(channels)
-    .set({
-      status: "disconnected",
-      isActive: false,
-      updatedAt: new Date(),
-    })
-    .where(eq(channels.id, channelId));
+  let meta: { metaUnsubscribed: boolean; metaSkippedReason?: string } = { metaUnsubscribed: false };
+  if (channel.type === "whatsapp") {
+    meta = await channels.whatsapp.disconnect(channel);
+  } else {
+    await channelRepository.markDisconnected(channel.id, channel.organizationId);
+    publish(channel.organizationId, { type: "channel.updated", channelId: channel.id });
+  }
 
-  return NextResponse.json({ success: true, message: "Channel disconnected successfully" });
+  return NextResponse.json({
+    success: true,
+    message: "Channel disconnected successfully",
+    ...meta,
+  });
 });

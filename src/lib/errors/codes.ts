@@ -51,6 +51,7 @@ export const ERROR_DEFINITIONS = {
   // WhatsApp channel connection
   WHATSAPP_NOT_CONNECTED: { status: 422, source: "whatsapp", message: "No WhatsApp channel is connected. Please connect your WhatsApp account first." },
   WHATSAPP_CHANNEL_NOT_FOUND: { status: 404, source: "whatsapp", message: "The selected WhatsApp channel could not be found." },
+  WHATSAPP_CHANNEL_DISCONNECTED: { status: 409, source: "whatsapp", message: "This contact's WhatsApp number was disconnected. Reconnect it to see and reply to this conversation." },
   WHATSAPP_CHANNEL_MISCONFIGURED: { status: 422, source: "whatsapp", message: "This WhatsApp channel is not fully set up. Please reconnect it." },
   WHATSAPP_REAUTH_REQUIRED: { status: 422, source: "whatsapp", message: "The WhatsApp connection has expired. Please reconnect your WhatsApp account." },
   WHATSAPP_CONNECT_FAILED: { status: 502, source: "whatsapp", message: "Could not connect your WhatsApp account. Please try again." },

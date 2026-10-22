@@ -74,7 +74,7 @@ export default function Home() {
               <IntegrationsView openIntegration={openIntegration} onOpenIntegration={setOpenIntegration} />
             )}
 
-            {activeTab === 'settings' && <SettingsView onOpenIntegrations={() => setActiveTab('integrations')} />}
+            {activeTab === 'settings' && <SettingsView />}
           </main>
         </div>
       </div>

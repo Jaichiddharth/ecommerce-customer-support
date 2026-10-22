@@ -3,45 +3,30 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Settings,
-  Radio,
   ChevronDown,
   AlertTriangle,
-  CheckCircle2,
-  Clock,
-  XCircle,
-  MessageCircle,
-  Mail,
-  Globe,
   Loader2,
   Unplug,
   CalendarDays,
   Hash,
   Phone,
   Layers,
-  AtSign,
   Copy,
   Check,
   Plus,
   RefreshCw,
-  WifiOff,
+  Clock,
 } from 'lucide-react';
 
-const InstagramGlyph = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="3" width="18" height="18" rx="5" />
-    <circle cx="12" cy="12" r="4" />
-    <circle cx="17.5" cy="6.5" r="0.6" fill="currentColor" stroke="none" />
-  </svg>
-);
-
-const MessengerGlyph = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 24 24" className={className} fill="currentColor">
-    <path d="M12 2C6.36 2 2 6.13 2 11.7c0 2.91 1.19 5.44 3.14 7.17.16.14.26.35.27.57l.05 1.78a.8.8 0 0 0 1.12.71l1.99-.88a.8.8 0 0 1 .53-.04c.91.25 1.88.39 2.9.39 5.64 0 10-4.13 10-9.7S17.64 2 12 2zm6 7.46-2.94 4.66a1.5 1.5 0 0 1-2.17.4l-2.34-1.75a.6.6 0 0 0-.72 0l-3.16 2.4c-.42.32-.97-.18-.69-.63l2.94-4.66a1.5 1.5 0 0 1 2.17-.4l2.34 1.75a.6.6 0 0 0 .72 0l3.16-2.4c.42-.32.97.18.69.63z" />
-  </svg>
-);
-
 import apiClient from '@/lib/api/client';
+import { notifyError } from '@/lib/api/notify';
+import { useRealtime } from '@/lib/hooks/useRealtime';
+import { gooeyToast } from '@/components/ui/goey-toaster';
+import { AddChannelModal } from './channels/AddChannelModal';
+import { ChannelIcon } from './inbox/ChannelIcon';
+import { formatPhone } from './inbox/inbox-types';
 
+/** Row returned by GET /api/channels (disconnected channels are never returned) */
 interface Channel {
   id: number;
   type: string;
@@ -62,106 +47,27 @@ interface DetailField {
   icon: React.ReactNode;
   label: string;
   value?: string | null;
-  copyable?: boolean;
 }
 
-interface ChannelTypeConfig {
-  type: string;
-  label: string;
-  summary: (ch: Channel) => string | null | undefined;
-  fields: (ch: Channel) => DetailField[];
-}
+// ─── Channel catalogue ────────────────────────────────────────────────────────
 
-// ─── Icon map ─────────────────────────────────────────────────────────────────
-
-const CHANNEL_ICON_BG: Record<string, string> = {
-  whatsapp: 'bg-[#25D366]',
-  email: 'bg-blue-500',
-  instagram: 'bg-gradient-to-br from-[#f58529] via-[#dd2a7b] to-[#8134af]',
-  messenger: 'bg-gradient-to-br from-[#00b2ff] to-[#006aff]',
-  webchat: 'bg-slate-500',
-};
-
-const CHANNEL_ICONS: Record<string, React.ReactNode> = {
-  whatsapp: (
-    <svg viewBox="0 0 24 24" className="w-[14px] h-[14px] fill-current" xmlns="http://www.w3.org/2000/svg">
-      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" />
-    </svg>
-  ),
-  email: <Mail className="w-[14px] h-[14px]" />,
-  instagram: <InstagramGlyph className="w-[14px] h-[14px]" />,
-  messenger: <MessengerGlyph className="w-[14px] h-[14px]" />,
-  webchat: <Globe className="w-[14px] h-[14px]" />,
-};
-
-const withAt = (h?: string | null) => (h ? `@${h.replace(/^@/, '')}` : null);
-const fmtDate = (d?: string | null) => {
-  if (!d) return null;
-  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-};
-
-const CHANNEL_TYPES: ChannelTypeConfig[] = [
-  {
-    type: 'whatsapp',
-    label: 'WhatsApp',
-    summary: (ch) => ch.phoneNumber ?? ch.verified_name,
-    fields: (ch) => [
-      { icon: <Phone className="w-3.5 h-3.5" />, label: 'Phone number', value: ch.phoneNumber, copyable: true },
-      { icon: <Hash className="w-3.5 h-3.5" />, label: 'Phone number ID', value: ch.metaPhoneNumberId, copyable: true },
-      { icon: <Layers className="w-3.5 h-3.5" />, label: 'WABA ID', value: ch.wabaId, copyable: true },
-    ],
-  },
-  {
-    type: 'email',
-    label: 'Email',
-    summary: (ch) => ch.handle ?? ch.verified_name,
-    fields: (ch) => [
-      { icon: <AtSign className="w-3.5 h-3.5" />, label: 'Email address', value: ch.handle, copyable: true },
-    ],
-  },
-  {
-    type: 'instagram',
-    label: 'Instagram',
-    summary: (ch) => withAt(ch.handle) ?? ch.verified_name,
-    fields: (ch) => [
-      { icon: <AtSign className="w-3.5 h-3.5" />, label: 'Username', value: withAt(ch.handle), copyable: true },
-    ],
-  },
-  {
-    type: 'messenger',
-    label: 'Facebook Messenger',
-    summary: (ch) => ch.handle ?? ch.verified_name,
-    fields: (ch) => [
-      { icon: <AtSign className="w-3.5 h-3.5" />, label: 'Page', value: ch.handle, copyable: true },
-    ],
-  },
+/** Channel types that will be connectable from Settings; only WhatsApp is live today */
+const UPCOMING_CHANNELS: { type: string; label: string; description: string }[] = [
+  { type: 'instagram', label: 'Instagram Direct', description: 'DMs, story mentions and replies.' },
+  { type: 'messenger', label: 'Facebook Messenger', description: 'Conversations from your Facebook Page.' },
+  { type: 'email', label: 'Email', description: 'A shared support mailbox.' },
 ];
 
-const FALLBACK_TYPE = (type: string): ChannelTypeConfig => ({
-  type,
-  label: type.charAt(0).toUpperCase() + type.slice(1),
-  summary: (ch) => ch.phoneNumber ?? ch.handle ?? ch.verified_name,
-  fields: (ch) => [
-    { icon: <Phone className="w-3.5 h-3.5" />, label: 'Phone number', value: ch.phoneNumber, copyable: true },
-    { icon: <Radio className="w-3.5 h-3.5" />, label: 'Handle', value: ch.handle, copyable: true },
-  ],
-});
+const fmtDate = (d?: string | null) =>
+  d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null;
 
-// ─── Status dot ───────────────────────────────────────────────────────────────
-
-const STATUS_DOT: Record<string, string> = {
-  connected: 'bg-emerald-500',
-  token_expired: 'bg-amber-400',
-  error: 'bg-red-500',
-  disconnected: 'bg-slate-300',
+const STATUS_META: Record<string, { label: string; dot: string; pill: string }> = {
+  connected: { label: 'Connected', dot: 'bg-emerald-500', pill: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  token_expired: { label: 'Token expired', dot: 'bg-amber-500', pill: 'bg-amber-50 text-amber-700 border-amber-200' },
+  error: { label: 'Error', dot: 'bg-red-500', pill: 'bg-red-50 text-red-700 border-red-200' },
 };
 
-const STATUS_LABEL: Record<string, string> = {
-  connected: 'Connected',
-  token_expired: 'Token expired',
-  error: 'Error',
-  disconnected: 'Disconnected',
-};
+const needsReconnect = (ch: Channel) => ch.status === 'token_expired' || ch.status === 'error';
 
 // ─── CopyField ────────────────────────────────────────────────────────────────
 
@@ -169,21 +75,24 @@ function CopyField({ icon, label, value }: DetailField) {
   const [copied, setCopied] = useState(false);
   if (!value) return null;
   const copy = async () => {
-    try { await navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch {}
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {}
   };
   return (
-    <div className="group flex items-center justify-between gap-2 py-2.5 border-b border-slate-100 last:border-0">
-      <div className="flex items-center gap-2.5 min-w-0">
-        <span className="text-slate-400 shrink-0">{icon}</span>
-        <div className="min-w-0">
-          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</p>
-          <p className="text-xs font-medium text-slate-700 truncate">{value}</p>
-        </div>
+    <div className="group flex items-center gap-2.5 min-w-0">
+      <span className="text-slate-400 shrink-0">{icon}</span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</p>
+        <p className="text-xs font-medium text-slate-700 truncate">{value}</p>
       </div>
       <button
         type="button"
         onClick={copy}
-        className="opacity-0 group-hover:opacity-100 shrink-0 p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all cursor-pointer"
+        title={`Copy ${label.toLowerCase()}`}
+        className="opacity-0 group-hover:opacity-100 focus:opacity-100 shrink-0 p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all cursor-pointer"
       >
         {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
       </button>
@@ -191,200 +100,177 @@ function CopyField({ icon, label, value }: DetailField) {
   );
 }
 
-// ─── ConnectionRow ────────────────────────────────────────────────────────────
+// ─── DisconnectDialog ─────────────────────────────────────────────────────────
 
-function ConnectionRow({
+function DisconnectDialog({
   channel,
-  config,
-  expanded,
-  onToggle,
-  onDisconnected,
+  busy,
+  onConfirm,
+  onCancel,
 }: {
   channel: Channel;
-  config: ChannelTypeConfig;
-  expanded: boolean;
-  onToggle: () => void;
-  onDisconnected: (id: number) => void;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
 }) {
-  const [disconnecting, setDisconnecting] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [disconnectError, setDisconnectError] = useState<string | null>(null);
+  const number = formatPhone(channel.phoneNumber) || channel.verified_name;
 
-  const iconBg = CHANNEL_ICON_BG[channel.type] ?? 'bg-slate-500';
-  const icon = CHANNEL_ICONS[channel.type] ?? <MessageCircle className="w-[14px] h-[14px]" />;
-  const dot = STATUS_DOT[channel.status] ?? STATUS_DOT.disconnected;
-  const statusLabel = STATUS_LABEL[channel.status] ?? channel.status;
-  const summary = config.summary(channel);
-
-  const handleDisconnect = async () => {
-    setDisconnecting(true);
-    setDisconnectError(null);
-    try {
-      await apiClient.delete(`/api/channels/${channel.id}`);
-      onDisconnected(channel.id);
-    } catch (err: any) {
-      setDisconnectError(err?.message ?? 'Failed to disconnect');
-      setDisconnecting(false);
-      setShowConfirm(false);
-    }
-  };
-
-  const fields: DetailField[] = [
-    ...config.fields(channel),
-    { icon: <Hash className="w-3.5 h-3.5" />, label: 'Channel ID', value: String(channel.id), copyable: true },
-    { icon: <CalendarDays className="w-3.5 h-3.5" />, label: 'Connected', value: fmtDate(channel.createdAt) },
-    { icon: <Clock className="w-3.5 h-3.5" />, label: 'Token expires', value: channel.tokenExpiresAt ? fmtDate(channel.tokenExpiresAt) : null },
-  ].filter((f) => f.value);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !busy) onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [busy, onCancel]);
 
   return (
-    <div className={`transition-colors ${expanded ? 'bg-slate-50/60' : ''}`}>
-      {/* Row */}
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors cursor-pointer text-left group"
-      >
-        {/* Brand icon */}
-        <div className={`w-7 h-7 rounded-lg shrink-0 flex items-center justify-center text-white ${iconBg}`}>
-          {icon}
-        </div>
-
-        {/* Name + subtitle */}
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-slate-800 truncate">{channel.verified_name}</p>
-          <p className="text-xs text-slate-400 truncate">{summary}</p>
-        </div>
-
-        {/* Status */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className={`w-1.5 h-1.5 rounded-full ${dot} ${channel.status === 'connected' ? 'animate-pulse' : ''}`} />
-          <span className="text-xs text-slate-500 hidden sm:inline">{statusLabel}</span>
-        </div>
-
-        {/* Chevron */}
-        <ChevronDown className={`w-3.5 h-3.5 text-slate-300 group-hover:text-slate-400 transition-transform duration-150 ${expanded ? 'rotate-180 text-slate-400' : ''}`} />
-      </button>
-
-      {/* Expanded detail panel */}
-      {expanded && (
-        <div className="px-4 pb-4 border-t border-slate-100">
-          {/* Detail fields */}
-          <div className="mt-1">
-            {fields.map((f) => <CopyField key={f.label} {...f} />)}
+    <div
+      className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !busy) onCancel();
+      }}
+    >
+      <div role="alertdialog" aria-modal="true" className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 p-6">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-red-50 text-red-500 flex items-center justify-center shrink-0">
+            <Unplug className="w-5 h-5" />
           </div>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-slate-900">Disconnect {number}?</h3>
+            <p className="mt-0.5 text-xs text-slate-500">{channel.verified_name}</p>
+          </div>
+        </div>
 
-          {/* Last error */}
+        <ul className="mt-4 space-y-2 text-[13px] text-slate-600">
+          <li className="flex gap-2">
+            <span className="mt-2 w-1 h-1 rounded-full bg-slate-400 shrink-0" />
+            UnoCX is removed from this WhatsApp Business Account at Meta, so new messages stop arriving.
+          </li>
+          <li className="flex gap-2">
+            <span className="mt-2 w-1 h-1 rounded-full bg-slate-400 shrink-0" />
+            The number disappears from the inbox and settings. Its past conversations stay readable but can&apos;t be replied to.
+          </li>
+          <li className="flex gap-2">
+            <span className="mt-2 w-1 h-1 rounded-full bg-slate-400 shrink-0" />
+            Reconnect the same number any time to pick those conversations back up.
+          </li>
+        </ul>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-red-500 hover:bg-red-600 transition-colors cursor-pointer disabled:opacity-60 flex items-center gap-1.5"
+          >
+            {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            {busy ? 'Disconnecting…' : 'Disconnect'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ConnectionCard ───────────────────────────────────────────────────────────
+
+function ConnectionCard({
+  channel,
+  expanded,
+  onToggle,
+  onDisconnect,
+  onReconnect,
+}: {
+  channel: Channel;
+  expanded: boolean;
+  onToggle: () => void;
+  onDisconnect: () => void;
+  onReconnect: () => void;
+}) {
+  const status = STATUS_META[channel.status] ?? STATUS_META.error;
+  const number = formatPhone(channel.phoneNumber);
+
+  const fields: DetailField[] = [
+    { icon: <Phone className="w-3.5 h-3.5" />, label: 'Phone number', value: number || null },
+    { icon: <Hash className="w-3.5 h-3.5" />, label: 'Phone number ID', value: channel.metaPhoneNumberId },
+    { icon: <Layers className="w-3.5 h-3.5" />, label: 'WABA ID', value: channel.wabaId },
+    { icon: <CalendarDays className="w-3.5 h-3.5" />, label: 'Connected on', value: fmtDate(channel.createdAt) },
+    { icon: <Clock className="w-3.5 h-3.5" />, label: 'Token expires', value: fmtDate(channel.tokenExpiresAt) },
+    { icon: <Hash className="w-3.5 h-3.5" />, label: 'Channel ID', value: String(channel.id) },
+  ];
+
+  return (
+    <div className={`rounded-xl border bg-white transition-shadow ${expanded ? 'border-slate-300 shadow-sm' : 'border-slate-200'}`}>
+      <div className="flex items-center gap-3 px-4 py-3.5">
+        <ChannelIcon type={channel.type} size="lg" />
+
+        <button type="button" onClick={onToggle} aria-expanded={expanded} className="flex-1 min-w-0 text-left cursor-pointer">
+          <p className="text-sm font-semibold text-slate-900 truncate">{number || channel.verified_name}</p>
+          <p className="text-xs text-slate-500 truncate">
+            {number ? channel.verified_name : 'WhatsApp Business'}
+            <span className="text-slate-400"> · since {fmtDate(channel.createdAt)}</span>
+          </p>
+        </button>
+
+        <span className={`hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px] font-semibold ${status.pill}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
+          {status.label}
+        </span>
+
+        {needsReconnect(channel) && (
+          <button
+            type="button"
+            onClick={onReconnect}
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#3440a8] hover:bg-[#2b358c] transition-colors cursor-pointer"
+          >
+            Reconnect
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={onToggle}
+          title={expanded ? 'Hide details' : 'Show details'}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+        >
+          <ChevronDown className={`w-4 h-4 transition-transform duration-150 ${expanded ? 'rotate-180' : ''}`} />
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="px-4 pb-4 pt-3 border-t border-slate-100">
           {channel.lastError && (
-            <div className="mt-3 flex gap-2 p-3 rounded-lg bg-red-50 border border-red-100">
+            <div className="mb-3 flex gap-2 p-3 rounded-lg bg-red-50 border border-red-100">
               <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
               <p className="text-xs text-red-600 leading-relaxed">{channel.lastError}</p>
             </div>
           )}
 
-          {/* Disconnect */}
-          <div className="mt-4 flex items-center justify-between gap-3">
-            {disconnectError && <p className="text-xs text-red-500">{disconnectError}</p>}
-            {!disconnectError && <span />}
-
-            {!showConfirm ? (
-              <button
-                type="button"
-                onClick={() => setShowConfirm(true)}
-                className="text-xs text-red-500 hover:text-red-600 font-medium transition-colors cursor-pointer flex items-center gap-1"
-              >
-                <Unplug className="w-3 h-3" />
-                Disconnect
-              </button>
-            ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">Sure?</span>
-                <button
-                  type="button"
-                  onClick={handleDisconnect}
-                  disabled={disconnecting}
-                  className="px-2.5 py-1 rounded-md text-[11px] font-bold text-white bg-red-500 hover:bg-red-600 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-1"
-                >
-                  {disconnecting && <Loader2 className="w-3 h-3 animate-spin" />}
-                  {disconnecting ? 'Removing…' : 'Remove'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowConfirm(false)}
-                  className="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3">
+            {fields.map((f) => (
+              <CopyField key={f.label} {...f} />
+            ))}
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
-// ─── ChannelGroup ─────────────────────────────────────────────────────────────
-
-function ChannelGroup({
-  config,
-  channels,
-  expandedIds,
-  onToggle,
-  onDisconnected,
-  onConnect,
-}: {
-  config: ChannelTypeConfig;
-  channels: Channel[];
-  expandedIds: Set<number>;
-  onToggle: (id: number) => void;
-  onDisconnected: (id: number) => void;
-  onConnect?: () => void;
-}) {
-  return (
-    <div>
-      {/* Group label row */}
-      <div className="flex items-center justify-between px-4 py-2">
-        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">{config.label}</span>
-        {onConnect && (
-          <button
-            type="button"
-            onClick={onConnect}
-            className="flex items-center gap-1 text-[11px] font-semibold text-slate-400 hover:text-[#3440a8] transition-colors cursor-pointer"
-          >
-            <Plus className="w-3 h-3" />
-            Add
-          </button>
-        )}
-      </div>
-
-      {/* Connections */}
-      {channels.length === 0 ? (
-        <div className="mx-4 mb-1 px-3 py-3 rounded-lg border border-dashed border-slate-200 flex items-center gap-2.5">
-          <WifiOff className="w-3.5 h-3.5 text-slate-300 shrink-0" />
-          <p className="text-xs text-slate-400">No {config.label} accounts connected</p>
-          {onConnect && (
+          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
+            <p className="text-[11px] text-slate-400">Disconnecting also removes UnoCX from this account at Meta.</p>
             <button
               type="button"
-              onClick={onConnect}
-              className="ml-auto text-xs font-semibold text-[#3440a8] hover:underline cursor-pointer shrink-0"
+              onClick={onDisconnect}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-600 border border-red-200 hover:bg-red-50 transition-colors cursor-pointer"
             >
-              Connect →
+              <Unplug className="w-3.5 h-3.5" />
+              Disconnect
             </button>
-          )}
-        </div>
-      ) : (
-        <div className="mx-4 mb-1 rounded-xl border border-slate-200 overflow-hidden divide-y divide-slate-100">
-          {channels.map((ch) => (
-            <ConnectionRow
-              key={ch.id}
-              channel={ch}
-              config={config}
-              expanded={expandedIds.has(ch.id)}
-              onToggle={() => onToggle(ch.id)}
-              onDisconnected={onDisconnected}
-            />
-          ))}
+          </div>
         </div>
       )}
     </div>
@@ -393,77 +279,208 @@ function ChannelGroup({
 
 // ─── ChannelsSection ──────────────────────────────────────────────────────────
 
-function ChannelsSection({ onConnect }: { onConnect?: () => void }) {
+function ChannelsSection() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [showConnect, setShowConnect] = useState(false);
+  const [pendingDisconnect, setPendingDisconnect] = useState<Channel | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
 
-  const fetchChannels = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const fetchChannels = useCallback(async ({ quiet = false }: { quiet?: boolean } = {}) => {
+    if (!quiet) setLoading(true);
     try {
       const res = await apiClient.get<{ channels: Channel[] }>('/api/channels');
       setChannels(res.data.channels ?? []);
+      setLoadError(null);
     } catch (err: any) {
-      setError(err?.message ?? 'Failed to load channels');
+      setLoadError(err?.message ?? 'Failed to load channels');
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchChannels(); }, [fetchChannels]);
+  useEffect(() => {
+    fetchChannels();
+  }, [fetchChannels]);
+
+  // Stay in sync with connects/disconnects made in other tabs or by teammates
+  useRealtime({ onChannelUpdated: () => fetchChannels({ quiet: true }) });
 
   const toggle = (id: number) =>
     setExpandedIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
-  const handleDisconnected = (id: number) => {
-    setChannels((prev) => prev.filter((c) => c.id !== id));
-    setExpandedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+  const confirmDisconnect = async () => {
+    if (!pendingDisconnect) return;
+    const channel = pendingDisconnect;
+    setDisconnecting(true);
+    try {
+      const res = await apiClient.delete<{ metaUnsubscribed: boolean; metaSkippedReason?: string }>(`/api/channels/${channel.id}`);
+      setChannels((prev) => prev.filter((c) => c.id !== channel.id));
+      setPendingDisconnect(null);
+
+      const number = formatPhone(channel.phoneNumber) || channel.verified_name;
+      if (res.data.metaSkippedReason === 'meta_error' || res.data.metaSkippedReason === 'missing_credentials') {
+        gooeyToast.warning(`${number} disconnected`, {
+          description:
+            "Removed from UnoCX, but Meta didn't confirm the unlink. You can also remove UnoCX in Meta Business Settings → Integrations.",
+        });
+      } else {
+        gooeyToast.success(`${number} disconnected`, {
+          description:
+            res.data.metaSkippedReason === 'waba_shared'
+              ? 'Other numbers on this WhatsApp Business Account are still connected, so the account stays linked at Meta.'
+              : 'Removed from UnoCX and unlinked at Meta.',
+        });
+      }
+    } catch (err) {
+      notifyError(err, { where: 'SettingsView.disconnect', title: "Couldn't disconnect channel" });
+    } finally {
+      setDisconnecting(false);
+    }
   };
+
+  const whatsapp = channels.filter((c) => c.type === 'whatsapp');
+  const attention = channels.filter(needsReconnect).length;
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+      <div className="px-8 space-y-3 max-w-4xl">
+        {[0, 1].map((i) => (
+          <div key={i} className="h-[68px] rounded-xl bg-slate-100 animate-pulse" />
+        ))}
       </div>
     );
   }
 
-  if (error) {
+  if (loadError) {
     return (
       <div className="flex flex-col items-center gap-3 py-20">
         <AlertTriangle className="w-5 h-5 text-amber-400" />
-        <p className="text-sm text-slate-500">{error}</p>
-        <button onClick={fetchChannels} className="inline-flex items-center gap-1.5 text-sm text-[#3440a8] hover:underline cursor-pointer">
+        <p className="text-sm text-slate-500">{loadError}</p>
+        <button
+          onClick={() => fetchChannels()}
+          className="inline-flex items-center gap-1.5 text-sm text-[#3440a8] hover:underline cursor-pointer"
+        >
           <RefreshCw className="w-3.5 h-3.5" /> Retry
         </button>
       </div>
     );
   }
 
-  const activeChannels = channels.filter((c) => c.status !== 'disconnected');
-  const knownTypes = new Set(CHANNEL_TYPES.map((t) => t.type));
-  const extraTypes = Array.from(new Set(activeChannels.map((c) => c.type))).filter((t) => !knownTypes.has(t)).map(FALLBACK_TYPE);
-  const groups = [...CHANNEL_TYPES, ...extraTypes];
-
   return (
-    <div className="space-y-5">
-      {groups.map((config) => (
-        <ChannelGroup
-          key={config.type}
-          config={config}
-          channels={activeChannels.filter((c) => c.type === config.type)}
-          expandedIds={expandedIds}
-          onToggle={toggle}
-          onDisconnected={handleDisconnected}
-          onConnect={onConnect}
+    <div className="px-8 pb-10 space-y-8 max-w-4xl">
+      {/* Summary */}
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-xs text-slate-500 flex items-center gap-2">
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${attention > 0 ? 'bg-amber-500' : channels.length ? 'bg-emerald-500' : 'bg-slate-300'}`}
+          />
+          {channels.length === 0
+            ? 'No channels connected yet'
+            : `${channels.length} connected${attention > 0 ? ` · ${attention} need${attention === 1 ? 's' : ''} attention` : ''}`}
+        </p>
+        <button
+          type="button"
+          onClick={() => setShowConnect(true)}
+          className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold text-white bg-[#3440a8] hover:bg-[#2b358c] transition-colors cursor-pointer"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Connect channel
+        </button>
+      </div>
+
+      {/* WhatsApp */}
+      <section>
+        <div className="flex items-end justify-between mb-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">WhatsApp</h2>
+            <p className="text-xs text-slate-500">Official Meta Cloud API. Every connected number feeds the shared inbox.</p>
+          </div>
+          {whatsapp.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowConnect(true)}
+              className="flex items-center gap-1 text-xs font-semibold text-[#3440a8] hover:underline cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add number
+            </button>
+          )}
+        </div>
+
+        {whatsapp.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/50 px-6 py-8 flex flex-col items-center text-center">
+            <ChannelIcon type="whatsapp" size="lg" />
+            <p className="mt-3 text-sm font-semibold text-slate-800">Connect your WhatsApp Business number</p>
+            <p className="mt-1 text-xs text-slate-500 max-w-sm">
+              Sign in with Facebook to link a number through Meta. Messages to it will land in your UnoCX inbox.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowConnect(true)}
+              className="mt-4 flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold text-white bg-[#3440a8] hover:bg-[#2b358c] transition-colors cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Connect WhatsApp
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {whatsapp.map((ch) => (
+              <ConnectionCard
+                key={ch.id}
+                channel={ch}
+                expanded={expandedIds.has(ch.id)}
+                onToggle={() => toggle(ch.id)}
+                onDisconnect={() => setPendingDisconnect(ch)}
+                onReconnect={() => setShowConnect(true)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Coming soon */}
+      <section>
+        <h2 className="text-sm font-semibold text-slate-900">More channels</h2>
+        <p className="text-xs text-slate-500 mb-3">Coming soon. They&apos;ll be connectable from here.</p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          {UPCOMING_CHANNELS.map((c) => (
+            <div key={c.type} className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 flex items-start gap-3">
+              <ChannelIcon type={c.type} size="md" className="opacity-60" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="text-[13px] font-semibold text-slate-700 truncate">{c.label}</p>
+                  <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-full shrink-0">SOON</span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-0.5">{c.description}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <AddChannelModal
+        isOpen={showConnect}
+        onClose={() => setShowConnect(false)}
+        onSuccess={() => fetchChannels({ quiet: true })}
+      />
+
+      {pendingDisconnect && (
+        <DisconnectDialog
+          channel={pendingDisconnect}
+          busy={disconnecting}
+          onConfirm={confirmDisconnect}
+          onCancel={() => setPendingDisconnect(null)}
         />
-      ))}
+      )}
     </div>
   );
 }
@@ -490,7 +507,12 @@ function GeneralSection() {
 
 type Section = 'general' | 'channels';
 
-export const SettingsView: React.FC<{ onOpenIntegrations?: () => void }> = ({ onOpenIntegrations }) => {
+const SECTION_COPY: Record<Section, { title: string; subtitle: string }> = {
+  general: { title: 'General', subtitle: 'Manage your workspace preferences' },
+  channels: { title: 'Channels', subtitle: 'Connect the messaging accounts your team replies from and manage the ones already connected' },
+};
+
+export const SettingsView: React.FC = () => {
   const [activeSection, setActiveSection] = useState<Section>('channels');
 
   const NAV: { key: Section; label: string; badge?: string }[] = [
@@ -516,9 +538,7 @@ export const SettingsView: React.FC<{ onOpenIntegrations?: () => void }> = ({ on
               >
                 <span className="flex-1">{label}</span>
                 {badge && (
-                  <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
-                    {badge}
-                  </span>
+                  <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">{badge}</span>
                 )}
               </button>
             );
@@ -528,22 +548,13 @@ export const SettingsView: React.FC<{ onOpenIntegrations?: () => void }> = ({ on
 
       {/* Content */}
       <main className="flex-1 overflow-y-auto">
-        {/* Page header */}
-        <div className="px-8 pt-7 pb-5 border-b border-slate-100">
-          <h1 className="text-sm font-bold text-slate-900">
-            {activeSection === 'general' ? 'General' : 'Channels'}
-          </h1>
-          <p className="text-xs text-slate-400 mt-0.5">
-            {activeSection === 'general'
-              ? 'Manage your workspace preferences'
-              : 'View and manage connected messaging channels'}
-          </p>
+        <div className="px-8 pt-7 pb-5 mb-6 border-b border-slate-100">
+          <h1 className="text-base font-bold text-slate-900">{SECTION_COPY[activeSection].title}</h1>
+          <p className="text-xs text-slate-500 mt-0.5">{SECTION_COPY[activeSection].subtitle}</p>
         </div>
 
-        <div className="py-5">
-          {activeSection === 'general' && <GeneralSection />}
-          {activeSection === 'channels' && <ChannelsSection onConnect={onOpenIntegrations} />}
-        </div>
+        {activeSection === 'general' && <GeneralSection />}
+        {activeSection === 'channels' && <ChannelsSection />}
       </main>
     </div>
   );

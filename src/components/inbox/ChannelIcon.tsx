@@ -22,6 +22,7 @@ const SIZE_CLASSES = {
   xs: { box: 'w-3.5 h-3.5 rounded-[4px]', glyph: 'w-2.5 h-2.5' },
   sm: { box: 'w-5 h-5 rounded-md', glyph: 'w-3 h-3' },
   md: { box: 'w-7 h-7 rounded-lg', glyph: 'w-4 h-4' },
+  lg: { box: 'w-10 h-10 rounded-xl', glyph: 'w-5 h-5' },
 } as const;
 
 /** Square brand badge for a channel type (WhatsApp green, Instagram gradient, Messenger blue, ...) */

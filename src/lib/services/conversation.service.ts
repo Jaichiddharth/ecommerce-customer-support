@@ -2,6 +2,7 @@ import { conversationRepository, type ConversationListItem, type ConversationUpd
 import { ConversationHandler, TicketStatus, type Ticket } from "../db/schema";
 import { AppError } from "../errors";
 import { publish } from "../realtime";
+import { customerService } from "./customer.service";
 
 const HANDLERS: string[] = Object.values(ConversationHandler);
 const STATUSES: string[] = Object.values(TicketStatus);
@@ -17,6 +18,7 @@ export class ConversationService {
   async update(id: number, organizationId: number, userId: number, input: Record<string, unknown>): Promise<Ticket> {
     const existing = await conversationRepository.findById(id, organizationId);
     if (!existing) throw AppError.notFound("Conversation not found.");
+    await customerService.requireVisible(existing.customerId, organizationId);
 
     const changes: ConversationUpdate = {};
 

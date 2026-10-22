@@ -29,6 +29,13 @@
       "when": 1792575959608,
       "tag": "0003_shopify_multi_store",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792651393537,
+      "tag": "0004_channel_live_ownership",
+      "breakpoints": true
     }
   ]
 }

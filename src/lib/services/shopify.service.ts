@@ -1,4 +1,3 @@
-import { customerRepository } from "../db/repositories/customer.repository";
 import { shopifyRepository, pickPrimaryStore, type ShopifyStoreWithUser } from "../db/repositories/shopify.repository";
 import { ShopifyStoreStatus, type ShopifyStore, type SharedShopifyProduct } from "../db/schema";
 import { AppError, toAppError } from "../errors";
@@ -21,6 +20,7 @@ import type {
   ShopifyContactOrdersResponse,
 } from "../shopify/types";
 import { whatsAppService } from "./channels/whatsapp.service";
+import { customerService } from "./customer.service";
 
 const log = createLogger("ShopifyService");
 
@@ -490,8 +490,7 @@ export class ShopifyService {
     user: AuthUser,
     params: { customerId: number; channelId?: number; productId?: string; variantId: string; caption?: string }
   ) {
-    const customer = await customerRepository.findById(params.customerId, user.organizationId);
-    if (!customer) throw AppError.notFound("Customer not found.");
+    const customer = await customerService.requireVisible(params.customerId, user.organizationId);
     if (!customer.phone) {
       throw AppError.validation(`"${customer.name}" has no phone number, so the product can't be sent on WhatsApp.`, "customerId");
     }
@@ -546,9 +545,7 @@ export class ShopifyService {
   }
 
   private async requireContact(organizationId: number, customerId: number) {
-    const customer = await customerRepository.findById(customerId, organizationId);
-    if (!customer) throw AppError.notFound("Customer not found.");
-    return customer;
+    return await customerService.requireVisible(customerId, organizationId);
   }
 
   async linkCustomer(user: AuthUser, customerId: number, shopifyCustomerId: string) {
