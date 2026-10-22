@@ -9,7 +9,7 @@ import {
   MessageStatus,
   normalizeMessageStatus,
 } from "../schema";
-import { eq, and, asc, ne, getTableColumns } from "drizzle-orm";
+import { eq, and, asc, desc, ne, sql, getTableColumns } from "drizzle-orm";
 import { messageReactionRepository } from "./message-reaction.repository";
 import { conversationRepository } from "./conversation.repository";
 import { createLogger } from "../../logger";
@@ -147,10 +147,49 @@ export class MessageRepository {
       .orderBy(asc(messages.createdAt));
 
     const messageList = limit ? await query.limit(limit) : await query;
+    return this.attachReactions(messageList);
+  }
+
+  /**
+   * One batch of a customer's messages for the inbox thread: the newest `limit` messages
+   * before the `beforeId` message (or the newest overall), returned in chronological order.
+   */
+  async listPageByCustomer(
+    customerId: number,
+    organizationId: number,
+    options: { limit: number; beforeId?: number | null }
+  ): Promise<{ messages: MessageWithReactions[]; hasMore: boolean }> {
+    const conditions = [eq(messages.organizationId, organizationId), eq(messages.customerId, customerId)];
+
+    // Keyset cursor on (created_at, id), compared in SQL to keep Postgres' microsecond precision.
+    // An unknown cursor id yields NULL, so the page is simply empty.
+    if (options.beforeId) {
+      conditions.push(
+        sql`(${messages.createdAt}, ${messages.id}) < (
+          select ${messages.createdAt}, ${messages.id} from ${messages}
+          where ${messages.id} = ${options.beforeId} and ${messages.organizationId} = ${organizationId}
+        )`
+      );
+    }
+
+    // One extra row tells whether an older batch exists
+    const rows = await db
+      .select({ ...getTableColumns(messages), senderName: users.name })
+      .from(messages)
+      .leftJoin(users, eq(messages.senderId, users.id))
+      .where(and(...conditions))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(options.limit + 1);
+
+    const hasMore = rows.length > options.limit;
+    const page = rows.slice(0, options.limit).reverse();
+    return { messages: await this.attachReactions(page), hasMore };
+  }
+
+  private async attachReactions<T extends Message>(messageList: T[]): Promise<(T & { reactions: MessageReaction[] })[]> {
     if (messageList.length === 0) return [];
 
-    const messageIds = messageList.map((m) => m.id);
-    const allReactions = await messageReactionRepository.listByMessageIds(messageIds);
+    const allReactions = await messageReactionRepository.listByMessageIds(messageList.map((m) => m.id));
 
     const reactionsMap = new Map<number, MessageReaction[]>();
     for (const rx of allReactions) {

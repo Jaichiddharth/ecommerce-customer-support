@@ -49,6 +49,7 @@ import { validateWhatsAppMedia } from '@/lib/media-limits';
 import { ChannelsPane } from './inbox/ChannelsPane';
 import { ConversationList, Avatar, StatusFilter } from './inbox/ConversationList';
 import { CustomerPanel } from './inbox/CustomerPanel';
+import { VirtualMessageList } from './inbox/VirtualMessageList';
 import { InboxTopBar } from './inbox/InboxTopBar';
 import { ProductBrowser, type ShareProductArgs } from './shopify/ProductBrowser';
 import { useShopifyStore } from './shopify/useShopifyStore';
@@ -207,6 +208,30 @@ const mapApiMessage = (m: any, channel: string): Message => {
 
 const convKeyFor = (customerId: number | string) => `cust-${customerId}`;
 
+/** Messages fetched per batch when opening a thread or scrolling up */
+const MESSAGE_PAGE_SIZE = 10;
+
+/** Optimistic bubbles get a temporary `msg-<timestamp>` id until the server returns the stored row */
+const isTempMessage = (m: Message) => m.id.startsWith('msg-');
+
+const isOlderThan = (a: Message, b: Message) =>
+  a.createdAt === b.createdAt ? Number(a.id) < Number(b.id) : (a.createdAt ?? '') < (b.createdAt ?? '');
+
+/** Puts a freshly fetched newest batch in place while keeping the older batches already loaded above it */
+const mergeLatestPage = (existing: Message[], page: Message[]): Message[] => {
+  if (page.length === 0) return page;
+  const pageIds = new Set(page.map((m) => m.id));
+  const older = existing.filter((m) => !isTempMessage(m) && !pageIds.has(m.id) && isOlderThan(m, page[0]));
+  return [...older, ...page];
+};
+
+interface ThreadPaging {
+  /** The newest batch has arrived at least once */
+  loaded: boolean;
+  /** Older messages exist above the oldest loaded one */
+  hasMore: boolean;
+}
+
 type ComposerMode = 'reply' | 'note' | 'template';
 
 const SAVED_REPLIES = [
@@ -264,6 +289,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // Messages
   const [messagesMap, setMessagesMap] = useState<Record<string, Message[]>>({});
   const [messagesLoadError, setMessagesLoadError] = useState<{ convId: string; error: ApiError } | null>(null);
+  const [threadPaging, setThreadPaging] = useState<Record<string, ThreadPaging>>({});
+  const [loadingOlderConvId, setLoadingOlderConvId] = useState<string | null>(null);
   const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
   const [reactionPickerPlacement, setReactionPickerPlacement] = useState<'top' | 'bottom'>('top');
   const [showFullReactionPicker, setShowFullReactionPicker] = useState(false);
@@ -277,7 +304,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const loadingOlderRef = useRef<Set<string>>(new Set());
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const reactionPickerRef = useRef<HTMLDivElement>(null);
   const copilotRef = useRef<HTMLDivElement>(null);
@@ -340,14 +367,20 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     }
   }, []);
 
-  // Fetching messages also marks the customer's unread messages as read on the server
+  // Fetches the newest batch (merged under any older batches already loaded).
+  // It also marks the customer's unread messages as read on the server.
   const fetchMessagesForCustomer = useCallback(async (customerId: number, channelType = 'whatsapp'): Promise<ApiError | null> => {
     const convId = convKeyFor(customerId);
     try {
-      const res = await apiClient.get(`/api/messages?customerId=${customerId}`);
+      const res = await apiClient.get(`/api/messages?customerId=${customerId}&limit=${MESSAGE_PAGE_SIZE}`);
       if (res.data?.success && Array.isArray(res.data.messages)) {
         const mapped: Message[] = res.data.messages.map((m: any) => mapApiMessage(m, channelType));
-        setMessagesMap((prev) => ({ ...prev, [convId]: mapped }));
+        setMessagesMap((prev) => ({ ...prev, [convId]: mergeLatestPage(prev[convId] || [], mapped) }));
+        // Once older batches are loaded, their hasMore is the one that matters
+        setThreadPaging((prev) => ({
+          ...prev,
+          [convId]: { loaded: true, hasMore: prev[convId]?.loaded ? prev[convId].hasMore : Boolean(res.data.hasMore) },
+        }));
         setMessagesLoadError((prev) => (prev?.convId === convId ? null : prev));
       }
       return null;
@@ -355,6 +388,31 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       const apiError = toApiError(err);
       setMessagesLoadError({ convId, error: apiError });
       return apiError;
+    }
+  }, []);
+
+  // Fetches the batch above the oldest loaded message, triggered by scrolling to the top of the thread
+  const loadOlderMessages = useCallback(async (customerId: number, beforeId: number, channelType = 'whatsapp') => {
+    const convId = convKeyFor(customerId);
+    if (loadingOlderRef.current.has(convId)) return;
+    loadingOlderRef.current.add(convId);
+    setLoadingOlderConvId(convId);
+    try {
+      const res = await apiClient.get(`/api/messages?customerId=${customerId}&limit=${MESSAGE_PAGE_SIZE}&before=${beforeId}`);
+      if (res.data?.success && Array.isArray(res.data.messages)) {
+        const older: Message[] = res.data.messages.map((m: any) => mapApiMessage(m, channelType));
+        setMessagesMap((prev) => {
+          const existing = prev[convId] || [];
+          const knownIds = new Set(existing.map((m) => m.id));
+          return { ...prev, [convId]: [...older.filter((m) => !knownIds.has(m.id)), ...existing] };
+        });
+        setThreadPaging((prev) => ({ ...prev, [convId]: { loaded: true, hasMore: Boolean(res.data.hasMore) } }));
+      }
+    } catch (err) {
+      notifyError(err, { where: 'InboxView.loadOlderMessages', title: "Couldn't load earlier messages" });
+    } finally {
+      loadingOlderRef.current.delete(convId);
+      setLoadingOlderConvId((prev) => (prev === convId ? null : prev));
     }
   }, []);
 
@@ -385,12 +443,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     setShowModeMenu(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCustomerId, fetchMessagesForCustomer]);
-
-  // Keep the newest message in view
-  useEffect(() => {
-    const t = setTimeout(() => messagesEndRef.current?.scrollIntoView({ block: 'end' }), 60);
-    return () => clearTimeout(t);
-  }, [selectedCustomerId, activeMessages.length]);
 
   // Rail badges: unread conversations total and conversations the AI agent is handling
   useEffect(() => {
@@ -473,17 +525,17 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           const updated: InboxConversation = incomingMsg.isInternalNote
             ? conv
             : {
-                ...conv,
-                lastMessageText: rawMsg.textContent ?? null,
-                lastMessageAt: rawMsg.createdAt || new Date().toISOString(),
-                lastMessage: {
-                  senderType: rawMsg.senderType,
-                  mediaType: rawMsg.mediaType ?? null,
-                  status: rawMsg.status ?? 0,
-                  metadata: rawMsg.metadata ?? null,
-                },
-                unreadCount: rawMsg.senderType === 'customer' && !isOpen ? conv.unreadCount + 1 : conv.unreadCount,
-              };
+              ...conv,
+              lastMessageText: rawMsg.textContent ?? null,
+              lastMessageAt: rawMsg.createdAt || new Date().toISOString(),
+              lastMessage: {
+                senderType: rawMsg.senderType,
+                mediaType: rawMsg.mediaType ?? null,
+                status: rawMsg.status ?? 0,
+                metadata: rawMsg.metadata ?? null,
+              },
+              unreadCount: rawMsg.senderType === 'customer' && !isOpen ? conv.unreadCount + 1 : conv.unreadCount,
+            };
           return [updated, ...prev.slice(0, idx), ...prev.slice(idx + 1)];
         });
         // Agent replies can change who handles the conversation (human takes over from AI)
@@ -1154,9 +1206,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
             type="button"
             onClick={() => handleToggleReaction(msg.id, emoji)}
             title={g.hasMyReaction ? 'Click to remove your reaction' : 'Click to react'}
-            className={`px-2 py-0.5 rounded-full border text-xs flex items-center gap-1 cursor-pointer ${
-              g.hasMyReaction ? 'bg-[#eef0fb] border-[#c7cdf0] text-[#3440a8] font-semibold' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-            }`}
+            className={`px-2 py-0.5 rounded-full border text-xs flex items-center gap-1 cursor-pointer ${g.hasMyReaction ? 'bg-[#eef0fb] border-[#c7cdf0] text-[#3440a8] font-semibold' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+              }`}
           >
             <span>{emoji}</span>
             {g.count > 1 && <span className="text-[10px] text-slate-500 font-semibold">{g.count}</span>}
@@ -1179,9 +1230,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                   setShowFullReactionPicker(false);
                 }
               }}
-              className={`w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 flex items-center justify-center cursor-pointer transition-opacity ${
-                reactionPickerMsgId === msg.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-              }`}
+              className={`w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 flex items-center justify-center cursor-pointer transition-opacity ${reactionPickerMsgId === msg.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                }`}
             >
               <Smile className="w-3.5 h-3.5" />
             </button>
@@ -1189,9 +1239,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
             {reactionPickerMsgId === msg.id && (
               <div
                 ref={reactionPickerRef}
-                className={`absolute ${reactionPickerPlacement === 'bottom' ? 'top-full mt-1.5' : 'bottom-full mb-1.5'} ${
-                  alignRight ? 'right-0' : 'left-0'
-                } z-50`}
+                className={`absolute ${reactionPickerPlacement === 'bottom' ? 'top-full mt-1.5' : 'bottom-full mb-1.5'} ${alignRight ? 'right-0' : 'left-0'
+                  } z-50`}
               >
                 {showFullReactionPicker ? (
                   <div className="bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
@@ -1296,6 +1345,20 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     );
   };
 
+  // Virtualized thread wiring
+  const activeConvKey = activeConv ? convKeyFor(activeConv.customer.id) : null;
+  const activePaging = activeConvKey ? threadPaging[activeConvKey] : undefined;
+  const isLoadingOlder = activeConvKey !== null && loadingOlderConvId === activeConvKey;
+
+  const handleLoadOlder = useCallback(() => {
+    if (!activeConv) return;
+    const oldest = activeMessages.find((m) => !isTempMessage(m));
+    if (oldest) loadOlderMessages(activeConv.customer.id, Number(oldest.id), activeChannelType);
+  }, [activeConv, activeMessages, activeChannelType, loadOlderMessages]);
+
+  // The agent's own optimistic bubble always brings the thread back to the bottom
+  const isOwnNewMessage = useCallback((m: Message) => m.sender === 'agent' && isTempMessage(m), []);
+
   // -------------------------------------------------------------
   // RENDER
   // -------------------------------------------------------------
@@ -1393,9 +1456,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                     <div className="relative" ref={modeMenuRef}>
                       <button
                         onClick={() => setShowModeMenu((v) => !v)}
-                        className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-[13px] font-medium cursor-pointer ${
-                          isAiHandling ? 'bg-[#eef0fb] text-[#3440a8]' : 'bg-slate-100 text-slate-700'
-                        }`}
+                        className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-[13px] font-medium cursor-pointer ${isAiHandling ? 'bg-[#eef0fb] text-[#3440a8]' : 'bg-slate-100 text-slate-700'
+                          }`}
                       >
                         {isAiHandling ? <Sparkles className="w-4 h-4" /> : <User className="w-4 h-4" />}
                         {isAiHandling ? 'AI agent' : activeConv.assigneeName || 'Human'}
@@ -1480,7 +1542,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       onRetry={() => fetchMessagesForCustomer(activeConv.customer.id, activeChannelType)}
                     />
                   </div>
-                ) : (
+                ) : activeMessages.length === 0 ? (
                   <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
                     {activeConv.aiSummary && (
                       <div className="rounded-xl border border-slate-200 px-4 py-3 bg-white">
@@ -1489,7 +1551,12 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       </div>
                     )}
 
-                    {activeMessages.length === 0 ? (
+                    {!activePaging?.loaded ? (
+                      <div className="py-16 flex items-center justify-center gap-2 text-xs text-slate-400">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Loading messages…
+                      </div>
+                    ) : (
                       <div className="py-16 flex flex-col items-center text-center text-slate-400">
                         <div className="w-11 h-11 rounded-full bg-slate-100 flex items-center justify-center mb-3">
                           <MessageSquare className="w-5 h-5" />
@@ -1499,11 +1566,38 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                           Start a {threadLabel} conversation with <span className="font-medium text-slate-600">{activeConv.customer.name}</span>.
                         </p>
                       </div>
-                    ) : (
-                      activeMessages.map(renderMessage)
                     )}
-                    <div ref={messagesEndRef} />
                   </div>
+                ) : (
+                  <VirtualMessageList
+                    key={activeConvKey}
+                    items={activeMessages}
+                    renderItem={renderMessage}
+                    hasMore={Boolean(activePaging?.hasMore)}
+                    isLoadingOlder={isLoadingOlder}
+                    onLoadOlder={handleLoadOlder}
+                    shouldScrollToNewItem={isOwnNewMessage}
+                    header={
+                      <div className="space-y-3 pb-3">
+                        {isLoadingOlder ? (
+                          <div className="flex items-center justify-center gap-2 py-1 text-[11px] text-slate-400">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Loading earlier messages…
+                          </div>
+                        ) : (
+                          !activePaging?.hasMore && (
+                            <p className="py-1 text-center text-[11px] text-slate-400">Start of conversation</p>
+                          )
+                        )}
+                        {activeConv.aiSummary && (
+                          <div className="rounded-xl border border-slate-200 px-4 py-3 bg-white">
+                            <p className="text-[10px] font-semibold tracking-wider text-[#3440a8]">AI SUMMARY</p>
+                            <p className="mt-1 text-[13px] text-slate-700 leading-relaxed">{activeConv.aiSummary}</p>
+                          </div>
+                        )}
+                      </div>
+                    }
+                  />
                 )}
 
                 {/* Composer */}
@@ -1514,11 +1608,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                         <button
                           key={mode}
                           onClick={() => setComposerMode(mode)}
-                          className={`py-2.5 border-b-2 capitalize cursor-pointer ${
-                            composerMode === mode
+                          className={`py-2.5 border-b-2 capitalize cursor-pointer ${composerMode === mode
                               ? 'border-[#3440a8] text-[#3440a8] font-semibold'
                               : 'border-transparent text-slate-600 hover:text-slate-900'
-                          }`}
+                            }`}
                         >
                           {mode}
                         </button>
@@ -1608,11 +1701,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       )}
 
                       <div
-                        className={`mt-1 flex items-end gap-2 rounded-lg border px-3 py-2 ${
-                          composerMode === 'note'
+                        className={`mt-1 flex items-end gap-2 rounded-lg border px-3 py-2 ${composerMode === 'note'
                             ? 'bg-amber-50/60 border-amber-200 focus-within:border-amber-400'
                             : 'border-slate-200 focus-within:border-[#3440a8] focus-within:ring-1 focus-within:ring-[#3440a8]'
-                        }`}
+                          }`}
                       >
                         <textarea
                           ref={textareaRef}
@@ -1689,9 +1781,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                         onClick={() => fileInputRef.current?.click()}
                         disabled={composerMode !== 'reply' || !canSendOnChannel}
                         title="Attach file"
-                        className={`p-1.5 rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                          selectedFile ? 'text-[#3440a8] bg-[#eef0fb]' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
-                        }`}
+                        className={`p-1.5 rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${selectedFile ? 'text-[#3440a8] bg-[#eef0fb]' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                          }`}
                       >
                         <Paperclip className="w-[18px] h-[18px]" />
                       </button>
