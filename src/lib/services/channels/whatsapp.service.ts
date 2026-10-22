@@ -32,19 +32,15 @@ export class WhatsAppService {
   }> {
     const orgId = dto.organizationId;
 
-    // 0. Early conflict check if WABA ID or Phone Number ID was provided in signup data
-    if (dto.wabaId || dto.phoneNumberId) {
+    // 0. Early conflict check if Phone Number ID was provided in signup data
+    //    (WABA ID is not checked: one WABA can have several phone numbers connected)
+    if (dto.phoneNumberId) {
       const earlyConflict = await channelRepository.findConflictingWhatsAppChannel({
-        wabaId: dto.wabaId,
         metaPhoneNumberId: dto.phoneNumberId,
       });
 
       if (earlyConflict) {
         const isSameOrg = earlyConflict.channel.organizationId === orgId;
-        const label =
-          earlyConflict.conflictType === "waba"
-            ? `WABA ID "${earlyConflict.matchedValue}"`
-            : `Phone Number ID "${earlyConflict.matchedValue}"`;
 
         const message = isSameOrg
           ? "This WhatsApp account is already connected."
@@ -130,23 +126,15 @@ export class WhatsAppService {
       });
     }
 
-    // 3. Authoritative conflict check on all 3 criteria: WABA ID, Phone Number ID, and Phone Number
+    // 3. Authoritative conflict check on Phone Number ID and Phone Number
+    //    (same WABA with a different phone number is allowed)
     const conflict = await channelRepository.findConflictingWhatsAppChannel({
-      wabaId: resolvedWabaId,
       metaPhoneNumberId: activePhoneId,
       phoneNumber: displayPhone,
     });
 
     if (conflict) {
       const isSameOrg = conflict.channel.organizationId === orgId;
-      let label = "";
-      if (conflict.conflictType === "waba") {
-        label = `WABA ID "${conflict.matchedValue}"`;
-      } else if (conflict.conflictType === "phone_number_id") {
-        label = `Phone Number ID "${conflict.matchedValue}"`;
-      } else {
-        label = `Phone Number "${conflict.matchedValue}"`;
-      }
 
       const message = isSameOrg
         ? "This WhatsApp account is already connected."

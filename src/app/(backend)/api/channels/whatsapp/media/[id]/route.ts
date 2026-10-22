@@ -8,9 +8,9 @@ import { AppError, toAppError } from "@/lib/errors";
 type MediaRouteContext = { params: Promise<{ id: string }> };
 
 /**
- * GET /api/channels/whatsapp/media/[id]?token=<firebase id token>
+ * GET /api/channels/whatsapp/media/[id]
  * Authenticated proxy to stream media directly from Meta Cloud API using the caller's organization channel.
- * The token query param is accepted because <img>/<video> tags cannot send an Authorization header.
+ * Authenticated via standard "Authorization: Bearer <firebase id token>" header (zero tokens in query params).
  * No local disk or S3 storage required.
  */
 export const GET = withAuth<MediaRouteContext>(async (req: AuthenticatedRequest, context) => {
