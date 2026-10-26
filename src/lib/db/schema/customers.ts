@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, varchar, text, boolean, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, varchar, text, boolean, timestamp, index, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { sql, relations } from "drizzle-orm";
 import { organizations } from "./organizations";
 import { channels } from "./channels";
@@ -22,6 +22,9 @@ export const customers = pgTable(
     language: varchar("language", { length: 20 }), // Preferred language code, e.g. "en"
     avatarUrl: text("avatar_url"),
     shopifyCustomerId: varchar("shopify_customer_id", { length: 100 }),
+    // Set when this contact is another channel identity (Instagram, Messenger, another number, ...) of the same person.
+    // Points at the profile's primary contact, which holds shared data such as the Shopify customer link. Never chained.
+    primaryCustomerId: integer("primary_customer_id").references((): AnyPgColumn => customers.id, { onDelete: "set null" }),
     tags: text("tags")
       .array()
       .default(sql`'{}'::text[]`),
@@ -35,6 +38,7 @@ export const customers = pgTable(
     index("idx_customers_org_channel").on(table.organizationId, table.channelId),
     index("idx_customers_channel").on(table.channelId),
     index("idx_customers_org_external").on(table.organizationId, table.externalId),
+    index("idx_customers_primary").on(table.primaryCustomerId),
   ]
 );
 
@@ -47,6 +51,12 @@ export const customersRelations = relations(customers, ({ one, many }) => ({
     fields: [customers.channelId],
     references: [channels.id],
   }),
+  primaryCustomer: one(customers, {
+    fields: [customers.primaryCustomerId],
+    references: [customers.id],
+    relationName: "customer_identities",
+  }),
+  identities: many(customers, { relationName: "customer_identities" }),
   tickets: many(tickets),
   messages: many(messages),
   reactions: many(messageReactions),

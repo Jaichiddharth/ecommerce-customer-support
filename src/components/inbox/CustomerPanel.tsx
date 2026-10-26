@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { CreditCard, RefreshCw, Truck, User, X } from 'lucide-react';
 import { ProductBrowser, type ShareProductArgs } from '../shopify/ProductBrowser';
 import { ShopifyOrdersSection } from '../shopify/ShopifyOrdersSection';
+import { ContactIdentities } from './ContactIdentities';
 import {
   CHANNEL_LABELS,
   InboxConversation,
@@ -61,6 +62,8 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
   shareDisabledReason,
 }) => {
   const [view, setView] = useState<PanelView>('details');
+  // Bumped when channels are linked or unlinked, so the orders reload for the (possibly different) Shopify customer
+  const [profileVersion, setProfileVersion] = useState(0);
 
   if (!conversation) {
     return (
@@ -156,6 +159,11 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
         {conversation.customer.email && identifier !== conversation.customer.email && (
           <p className="mt-1 text-xs text-slate-500 truncate">{conversation.customer.email}</p>
         )}
+        <ContactIdentities
+          key={conversation.customer.id}
+          contact={conversation.customer}
+          onChange={() => setProfileVersion((v) => v + 1)}
+        />
       </section>
 
       {/* AI agent */}
@@ -175,7 +183,7 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
       <section className="p-4 border-b border-slate-100 select-text">
         <SectionLabel>ORDERS</SectionLabel>
         <ShopifyOrdersSection
-          key={conversation.customer.id}
+          key={`${conversation.customer.id}:${profileVersion}`}
           contact={conversation.customer}
           storeConnected={shopify.connected}
           storeNeedsReauth={shopify.needsReauth}

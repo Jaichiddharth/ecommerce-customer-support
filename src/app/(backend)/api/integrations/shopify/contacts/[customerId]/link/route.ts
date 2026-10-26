@@ -22,9 +22,9 @@ export const PUT = withAuth<LinkRouteContext>(async (req: AuthenticatedRequest, 
   return NextResponse.json({ success: true, shopifyCustomer });
 });
 
-/** DELETE /api/integrations/shopify/contacts/[customerId]/link — remove the link */
+/** DELETE /api/integrations/shopify/contacts/[customerId]/link — remove the link; the contact is then not matched automatically again */
 export const DELETE = withAuth<LinkRouteContext>(async (req: AuthenticatedRequest, context) => {
   const customerId = await contactIdFrom(context);
-  await shopifyService.unlinkCustomer(req.user.organizationId, customerId);
+  await shopifyService.unlinkCustomer(req.user, customerId);
   return NextResponse.json({ success: true });
 });

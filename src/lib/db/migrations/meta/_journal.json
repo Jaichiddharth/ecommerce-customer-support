@@ -36,6 +36,13 @@
       "when": 1792651393537,
       "tag": "0004_channel_live_ownership",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792756770026,
+      "tag": "0005_customer_identities",
+      "breakpoints": true
     }
   ]
 }

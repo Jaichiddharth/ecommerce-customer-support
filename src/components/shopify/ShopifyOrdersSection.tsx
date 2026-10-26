@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { ExternalLink, Link2Off, Loader2, ShoppingBag, UserSearch } from 'lucide-react';
+import { Link2Off, Loader2, ShoppingBag, Sparkles, UserSearch } from 'lucide-react';
 import apiClient from '@/lib/api/client';
 import { ApiError, toApiError } from '@/lib/api/api-error';
 import { notifyError } from '@/lib/api/notify';
@@ -9,8 +9,9 @@ import { gooeyToast } from '@/components/ui/goey-toaster';
 import { Modal } from '@/components/ui/Modal';
 import { ErrorState } from '@/components/ui/states';
 import { formatShopifyPrice } from '@/lib/shopify/product-message';
-import type { ShopifyContactOrdersResponse, ShopifyOrder } from '@/lib/shopify/types';
+import type { ShopifyAutoMatchStatus, ShopifyContactOrdersResponse, ShopifyCustomerSummary } from '@/lib/shopify/types';
 import { LinkCustomerModal } from './LinkCustomerModal';
+import { ShopifyOrderCard } from './ShopifyOrderCard';
 
 interface ShopifyOrdersSectionProps {
   contact: { id: number; name: string; email: string | null; phone: string | null };
@@ -19,65 +20,12 @@ interface ShopifyOrdersSectionProps {
   storeNeedsReauth: boolean;
 }
 
-/** "PARTIALLY_FULFILLED" → "Partially fulfilled" */
-const humanize = (value: string | null) =>
-  value ? value.charAt(0) + value.slice(1).toLowerCase().replace(/_/g, ' ') : null;
-
-function orderState(order: ShopifyOrder) {
-  if (order.cancelledAt) return { label: 'Cancelled', className: 'bg-red-50 text-red-600' };
-  if (order.closed) return { label: 'Archived', className: 'bg-slate-100 text-slate-600' };
-  return { label: 'Open', className: 'bg-[#eef0fb] text-[#3440a8]' };
-}
-
-const OrderCard: React.FC<{ order: ShopifyOrder }> = ({ order }) => {
-  const state = orderState(order);
-  return (
-    <li className="rounded-lg border border-slate-200 p-2.5 text-xs space-y-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <a
-          href={order.adminUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-semibold text-slate-900 hover:text-[#3440a8] inline-flex items-center gap-1"
-          title="Open in Shopify admin"
-        >
-          {order.name} <ExternalLink className="w-3 h-3" />
-        </a>
-        <span className="text-slate-800 font-medium">
-          {order.total ? formatShopifyPrice(order.total.amount, order.total.currencyCode) : '—'}
-        </span>
-      </div>
-      <p className="text-[11px] text-slate-500">
-        {new Date(order.createdAt).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}
-      </p>
-      <div className="flex flex-wrap gap-1">
-        <span className={`px-1.5 py-0.5 rounded text-[10.5px] font-medium ${state.className}`}>{state.label}</span>
-        {order.financialStatus && (
-          <span className="px-1.5 py-0.5 rounded text-[10.5px] bg-slate-100 text-slate-700">{humanize(order.financialStatus)}</span>
-        )}
-        {order.fulfillmentStatus && (
-          <span className="px-1.5 py-0.5 rounded text-[10.5px] bg-slate-100 text-slate-700">{humanize(order.fulfillmentStatus)}</span>
-        )}
-      </div>
-      <ul className="pt-1 space-y-1 border-t border-slate-100">
-        {order.lineItems.map((li) => (
-          <li key={li.id} className="flex items-start gap-2">
-            {li.imageUrl ? (
-              <img src={li.imageUrl} alt="" className="w-7 h-7 rounded object-cover shrink-0" />
-            ) : (
-              <span className="w-7 h-7 rounded bg-slate-100 shrink-0" />
-            )}
-            <span className="min-w-0 flex-1">
-              <span className="block text-slate-800 truncate">{li.title}</span>
-              {li.variantTitle && <span className="block text-[11px] text-slate-500 truncate">{li.variantTitle}</span>}
-            </span>
-            <span className="text-slate-500 shrink-0">× {li.quantity}</span>
-          </li>
-        ))}
-        {order.moreLineItems && <li className="text-[11px] text-slate-400">More items in Shopify admin</li>}
-      </ul>
-    </li>
-  );
+/** What the panel says when automatic matching found no single customer */
+const UNLINKED_MESSAGES: Record<ShopifyAutoMatchStatus, string> = {
+  none: 'No Shopify customer has this contact’s phone number or email. Search by name, email or order number to link one.',
+  review: 'Several Shopify customers match this contact. Choose the right one.',
+  dismissed: 'Not linked to a Shopify customer. Search by name, email or order number to link one.',
+  no_details: 'This contact has no phone number or email to match. Search by name, email or order number to link one.',
 };
 
 export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ contact, storeConnected, storeNeedsReauth }) => {
@@ -88,6 +36,7 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false);
   const [isUnlinking, setIsUnlinking] = useState(false);
+  const [linkingId, setLinkingId] = useState<string | null>(null);
 
   const load = useCallback(
     async (after?: string | null) => {
@@ -131,8 +80,32 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
     }
   };
 
+  /** Links one of the customers automatic matching found */
+  const handleLinkCandidate = async (candidate: ShopifyCustomerSummary) => {
+    setLinkingId(candidate.id);
+    try {
+      await apiClient.put(`/api/integrations/shopify/contacts/${contact.id}/link`, { shopifyCustomerId: candidate.id });
+      gooeyToast.success(`${contact.name} is now linked to ${candidate.displayName}`);
+      load();
+    } catch (err) {
+      notifyError(err, { where: 'ShopifyOrdersSection.handleLinkCandidate', title: 'Customer not linked' });
+    } finally {
+      setLinkingId(null);
+    }
+  };
+
   const box = (children: React.ReactNode) => (
     <div className="mt-2.5 rounded-lg bg-slate-100/80 px-3 py-2.5 text-xs text-slate-600 leading-relaxed">{children}</div>
+  );
+
+  const searchButton = (
+    <button
+      type="button"
+      onClick={() => setShowLinkModal(true)}
+      className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-[12.5px] font-semibold text-slate-800 hover:bg-slate-50 cursor-pointer"
+    >
+      <UserSearch className="w-4 h-4" /> Search customers or orders
+    </button>
   );
 
   let body: React.ReactNode;
@@ -150,20 +123,42 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
   } else if (isLoading || !data) {
     body = (
       <div className="mt-2.5 flex items-center gap-2 text-xs text-slate-400">
-        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading orders…
+        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Looking up Shopify customer…
       </div>
     );
   } else if (!data.link) {
+    const match = data.autoMatch ?? { status: 'none' as const, candidates: [] };
     body = (
       <>
-        {box('This contact isn’t linked to a Shopify customer yet. Link them to see their order history.')}
-        <button
-          type="button"
-          onClick={() => setShowLinkModal(true)}
-          className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-[12.5px] font-semibold text-slate-800 hover:bg-slate-50 cursor-pointer"
-        >
-          <UserSearch className="w-4 h-4" /> Find Shopify customer
-        </button>
+        {box(
+          match.status === 'review' && match.candidates.length === 1
+            ? 'A Shopify customer has this contact’s phone number or email, but is linked to another contact. Link it here only if it’s the same person.'
+            : UNLINKED_MESSAGES[match.status]
+        )}
+        {match.candidates.length > 0 && (
+          <ul className="mt-2 space-y-1.5">
+            {match.candidates.map((c) => (
+              <li key={c.id} className="rounded-lg border border-slate-200 px-2.5 py-2 text-xs flex items-start gap-2">
+                <span className="min-w-0 flex-1">
+                  <span className="block font-semibold text-slate-900 truncate">{c.displayName}</span>
+                  <span className="block text-slate-600 truncate">{c.email || c.phone}</span>
+                  <span className="block text-[11px] text-slate-400">
+                    {c.numberOfOrders} order{c.numberOfOrders === 1 ? '' : 's'}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleLinkCandidate(c)}
+                  disabled={linkingId !== null}
+                  className="shrink-0 px-2 py-1 rounded-md bg-[#3440a8] hover:bg-[#2b3590] text-white text-[11px] font-semibold cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
+                >
+                  {linkingId === c.id && <Loader2 className="w-3 h-3 animate-spin" />} Link
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {searchButton}
       </>
     );
   } else {
@@ -183,6 +178,15 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
           ) : (
             <p className="text-amber-700">The linked Shopify customer no longer exists. Link another customer.</p>
           )}
+          <p className="mt-1 text-[11px] text-slate-500 flex items-center gap-1">
+            {data.link.source === 'auto' ? (
+              <>
+                <Sparkles className="w-3 h-3 text-emerald-600" /> Matched by phone number or email
+              </>
+            ) : (
+              `Linked${data.link.linkedByName ? ` by ${data.link.linkedByName}` : ''}`
+            )}
+          </p>
           <div className="mt-1.5 flex gap-3 text-[11.5px] font-semibold">
             <button type="button" onClick={() => setShowLinkModal(true)} className="text-[#3440a8] hover:underline cursor-pointer">
               Change
@@ -201,7 +205,7 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
         {data.orders.items.length > 0 && (
           <ul className="space-y-2">
             {data.orders.items.map((order) => (
-              <OrderCard key={order.id} order={order} />
+              <ShopifyOrderCard key={order.id} order={order} />
             ))}
           </ul>
         )}
@@ -231,7 +235,8 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
       />
       <Modal isOpen={showUnlinkConfirm} onClose={() => setShowUnlinkConfirm(false)} title="Unlink Shopify customer?" maxWidth="sm">
         <p className="text-xs text-slate-600">
-          {contact.name} will no longer show orders from {data?.shopifyCustomer?.displayName ?? 'this Shopify customer'}. Nothing changes in
+          {contact.name} and their other channels will no longer show orders from{' '}
+          {data?.shopifyCustomer?.displayName ?? 'this Shopify customer'}, and won&apos;t be matched automatically again. Nothing changes in
           Shopify, and you can link again at any time.
         </p>
         <div className="flex justify-end gap-2">
