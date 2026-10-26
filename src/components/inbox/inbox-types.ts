@@ -46,6 +46,7 @@ export interface InboxConversation {
     name: string;
     handle: string | null;
     phoneNumber: string | null;
+    status?: string | null;
   } | null;
 }
 

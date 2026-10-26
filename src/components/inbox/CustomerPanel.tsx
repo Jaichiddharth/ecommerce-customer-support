@@ -156,6 +156,12 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
         {conversation.customer.email && identifier !== conversation.customer.email && (
           <p className="mt-1 text-xs text-slate-500 truncate">{conversation.customer.email}</p>
         )}
+        {conversation.channel?.status === 'disconnected' && (
+          <div className="mt-2.5 px-2.5 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-800 font-medium flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+            <span>Channel disconnected · Messaging paused</span>
+          </div>
+        )}
       </section>
 
       {/* AI agent */}
