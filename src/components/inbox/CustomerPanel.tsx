@@ -106,9 +106,8 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
           role="tab"
           aria-selected={view === v}
           onClick={() => setView(v)}
-          className={`flex-1 py-2.5 text-[12.5px] font-semibold cursor-pointer border-b-2 -mb-px ${
-            view === v ? 'border-[#3440a8] text-[#3440a8]' : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
+          className={`flex-1 py-2.5 text-[12.5px] font-semibold cursor-pointer border-b-2 -mb-px ${view === v ? 'border-[#3440a8] text-[#3440a8]' : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
         >
           {v === 'details' ? 'Details' : 'Products'}
         </button>
@@ -159,11 +158,12 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
         {conversation.customer.email && identifier !== conversation.customer.email && (
           <p className="mt-1 text-xs text-slate-500 truncate">{conversation.customer.email}</p>
         )}
-        <ContactIdentities
-          key={conversation.customer.id}
-          contact={conversation.customer}
-          onChange={() => setProfileVersion((v) => v + 1)}
-        />
+        {conversation.channel?.status === 'disconnected' && (
+          <div className="mt-2.5 px-2.5 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-800 font-medium flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+            <span>Channel disconnected · Messaging paused</span>
+          </div>
+        )}
       </section>
 
       {/* AI agent */}

@@ -38,17 +38,10 @@ const likePattern = (term: string) => `%${term.replace(/[\\%_]/g, (c) => `\\${c}
 
 export class CustomerRepository {
     /**
-     * Find a customer whose channel is still connected. Use this for anything a user can see or act on.
+     * Find a customer within an organization
      */
     async findVisibleById(id: number, organizationId: number): Promise<Customer | null> {
-        const [row] = await db
-            .select({ customer: customers })
-            .from(customers)
-            .innerJoin(channels, onLiveChannel)
-            .where(and(eq(customers.id, id), eq(customers.organizationId, organizationId)))
-            .limit(1);
-
-        return row?.customer ?? null;
+        return await this.findById(id, organizationId);
     }
 
     async createCustomer(
@@ -223,18 +216,18 @@ export class CustomerRepository {
      * List all customers for an organization, optionally filtered by channel
      */
     async listByOrg(organizationId: number, channelId?: number): Promise<Customer[]> {
-        const rows = await db
-            .select({ customer: customers })
-            .from(customers)
-            .innerJoin(channels, onLiveChannel)
-            .where(
-                and(
-                    eq(customers.organizationId, organizationId),
-                    channelId !== undefined ? eq(customers.channelId, channelId) : undefined
-                )
-            );
+        const conditions = [eq(customers.organizationId, organizationId)];
+        if (channelId !== undefined) {
+            conditions.push(eq(customers.channelId, channelId));
+        }
 
-        return rows.map((r) => r.customer);
+        const rows = await db
+            .select()
+            .from(customers)
+            .where(and(...conditions))
+            .orderBy(desc(customers.createdAt));
+
+        return rows;
     }
 
     /**

@@ -45,17 +45,15 @@ export class CustomerService {
   }
 
   /**
-   * A customer the user may see and act on: it must exist and its channel must still be connected.
-   * Contacts of a disconnected channel are hidden until the same number is reconnected.
+   * Require a customer to exist within the organization.
+   * Customers and their logs remain visible even after their channel is disconnected.
    */
   async requireVisible(id: number, organizationId: number): Promise<Customer> {
-    const visible = await customerRepository.findVisibleById(id, organizationId);
-    if (visible) return visible;
-
-    if (await customerRepository.findById(id, organizationId)) {
-      throw new AppError("WHATSAPP_CHANNEL_DISCONNECTED", { details: { customerId: id }, expected: true });
+    const customer = await customerRepository.findById(id, organizationId);
+    if (!customer) {
+      throw AppError.notFound("Customer not found.");
     }
-    throw AppError.notFound("Customer not found.");
+    return customer;
   }
 
   /** The primary contact of the profile this contact belongs to (itself when it has no other channel identities) */

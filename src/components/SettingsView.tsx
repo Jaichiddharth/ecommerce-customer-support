@@ -1,12 +1,11 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Settings,
   ChevronDown,
+  ChevronRight,
   AlertTriangle,
-  Loader2,
-  Unplug,
   CalendarDays,
   Hash,
   Phone,
@@ -16,32 +15,25 @@ import {
   Plus,
   RefreshCw,
   Clock,
+  Users,
+  Route,
+  ShieldCheck,
+  Languages,
+  CreditCard,
+  Webhook,
+  Unplug,
+  type LucideIcon,
 } from 'lucide-react';
 
 import apiClient from '@/lib/api/client';
 import { notifyError } from '@/lib/api/notify';
 import { useRealtime } from '@/lib/hooks/useRealtime';
-import { gooeyToast } from '@/components/ui/goey-toaster';
 import { AddChannelModal } from './channels/AddChannelModal';
 import { ChannelIcon } from './inbox/ChannelIcon';
-import { formatPhone } from './inbox/inbox-types';
-
-/** Row returned by GET /api/channels (disconnected channels are never returned) */
-interface Channel {
-  id: number;
-  type: string;
-  verified_name: string;
-  handle?: string | null;
-  phoneNumber?: string | null;
-  metaPhoneNumberId?: string | null;
-  wabaId?: string | null;
-  status: string;
-  tokenExpiresAt?: string | null;
-  lastError?: string | null;
-  isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
+import { InboxConversation, formatPhone, isChannelHealthy } from './inbox/inbox-types';
+import { ContactSearch, TopBar } from './TopBar';
+import { Channel, STATUS_META, fmtDate, needsReconnect, useDisconnectChannel } from './settings/channel-settings';
+import { WhatsAppNumberSection } from './settings/WhatsAppNumberSection';
 
 interface DetailField {
   icon: React.ReactNode;
@@ -58,17 +50,6 @@ const UPCOMING_CHANNELS: { type: string; label: string; description: string }[] 
   { type: 'email', label: 'Email', description: 'A shared support mailbox.' },
 ];
 
-const fmtDate = (d?: string | null) =>
-  d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null;
-
-const STATUS_META: Record<string, { label: string; dot: string; pill: string }> = {
-  connected: { label: 'Connected', dot: 'bg-emerald-500', pill: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  token_expired: { label: 'Token expired', dot: 'bg-amber-500', pill: 'bg-amber-50 text-amber-700 border-amber-200' },
-  error: { label: 'Error', dot: 'bg-red-500', pill: 'bg-red-50 text-red-700 border-red-200' },
-};
-
-const needsReconnect = (ch: Channel) => ch.status === 'token_expired' || ch.status === 'error';
-
 // ─── CopyField ────────────────────────────────────────────────────────────────
 
 function CopyField({ icon, label, value }: DetailField) {
@@ -79,7 +60,7 @@ function CopyField({ icon, label, value }: DetailField) {
       await navigator.clipboard.writeText(value);
       setCopied(true);
       setTimeout(() => setCopied(false), 1400);
-    } catch {}
+    } catch { }
   };
   return (
     <div className="group flex items-center gap-2.5 min-w-0">
@@ -100,103 +81,28 @@ function CopyField({ icon, label, value }: DetailField) {
   );
 }
 
-// ─── DisconnectDialog ─────────────────────────────────────────────────────────
-
-function DisconnectDialog({
-  channel,
-  busy,
-  onConfirm,
-  onCancel,
-}: {
-  channel: Channel;
-  busy: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  const number = formatPhone(channel.phoneNumber) || channel.verified_name;
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !busy) onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [busy, onCancel]);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !busy) onCancel();
-      }}
-    >
-      <div role="alertdialog" aria-modal="true" className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 p-6">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-red-50 text-red-500 flex items-center justify-center shrink-0">
-            <Unplug className="w-5 h-5" />
-          </div>
-          <div className="min-w-0">
-            <h3 className="text-base font-semibold text-slate-900">Disconnect {number}?</h3>
-            <p className="mt-0.5 text-xs text-slate-500">{channel.verified_name}</p>
-          </div>
-        </div>
-
-        <ul className="mt-4 space-y-2 text-[13px] text-slate-600">
-          <li className="flex gap-2">
-            <span className="mt-2 w-1 h-1 rounded-full bg-slate-400 shrink-0" />
-            UnoCX is removed from this WhatsApp Business Account at Meta, so new messages stop arriving.
-          </li>
-          <li className="flex gap-2">
-            <span className="mt-2 w-1 h-1 rounded-full bg-slate-400 shrink-0" />
-            The number disappears from the inbox and settings. Its past conversations stay readable but can&apos;t be replied to.
-          </li>
-          <li className="flex gap-2">
-            <span className="mt-2 w-1 h-1 rounded-full bg-slate-400 shrink-0" />
-            Reconnect the same number any time to pick those conversations back up.
-          </li>
-        </ul>
-
-        <div className="mt-6 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={busy}
-            className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-red-500 hover:bg-red-600 transition-colors cursor-pointer disabled:opacity-60 flex items-center gap-1.5"
-          >
-            {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            {busy ? 'Disconnecting…' : 'Disconnect'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── ConnectionCard ───────────────────────────────────────────────────────────
 
 function ConnectionCard({
   channel,
   expanded,
   onToggle,
-  onDisconnect,
   onReconnect,
+  onDisconnect,
 }: {
   channel: Channel;
   expanded: boolean;
   onToggle: () => void;
-  onDisconnect: () => void;
   onReconnect: () => void;
+  onDisconnect: (channel: Channel) => void;
 }) {
   const status = STATUS_META[channel.status] ?? STATUS_META.error;
   const number = formatPhone(channel.phoneNumber);
+  const isApproved =
+    channel.status !== 'disconnected' &&
+    (channel.name_status === 'APPROVED' ||
+      channel.name_status === 'AVAILABLE_WITHOUT_REVIEW' ||
+      (!channel.name_status && channel.type === 'whatsapp' && channel.status === 'connected'));
 
   const fields: DetailField[] = [
     { icon: <Phone className="w-3.5 h-3.5" />, label: 'Phone number', value: number || null },
@@ -216,7 +122,13 @@ function ConnectionCard({
           <p className="text-sm font-semibold text-slate-900 truncate">{number || channel.verified_name}</p>
           <p className="text-xs text-slate-500 truncate">
             {number ? channel.verified_name : 'WhatsApp Business'}
-            <span className="text-slate-400"> · since {fmtDate(channel.createdAt)}</span>
+            {isApproved && (
+              <>
+                {' · '}
+                <span className="font-bold text-emerald-600">Approved</span>
+              </>
+            )}
+            <span className="text-slate-400"> · connected {fmtDate(channel.createdAt)}</span>
           </p>
         </button>
 
@@ -260,17 +172,18 @@ function ConnectionCard({
             ))}
           </div>
 
-          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
-            <p className="text-[11px] text-slate-400">Disconnecting also removes UnoCX from this account at Meta.</p>
-            <button
-              type="button"
-              onClick={onDisconnect}
-              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-600 border border-red-200 hover:bg-red-50 transition-colors cursor-pointer"
-            >
-              <Unplug className="w-3.5 h-3.5" />
-              Disconnect
-            </button>
-          </div>
+          {channel.status !== 'disconnected' && (
+            <div className="mt-4 pt-3 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => onDisconnect(channel)}
+                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 border border-red-200 transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                <Unplug className="w-3.5 h-3.5" />
+                Disconnect
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -285,8 +198,11 @@ function ChannelsSection() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [showConnect, setShowConnect] = useState(false);
-  const [pendingDisconnect, setPendingDisconnect] = useState<Channel | null>(null);
-  const [disconnecting, setDisconnecting] = useState(false);
+
+  const handleDisconnected = (updatedChannel: Channel) => {
+    setChannels((prev) => prev.map((c) => (c.id === updatedChannel.id ? updatedChannel : c)));
+  };
+  const { requestDisconnect, dialog: disconnectDialog } = useDisconnectChannel(handleDisconnected);
 
   const fetchChannels = useCallback(async ({ quiet = false }: { quiet?: boolean } = {}) => {
     if (!quiet) setLoading(true);
@@ -315,36 +231,6 @@ function ChannelsSection() {
       else next.add(id);
       return next;
     });
-
-  const confirmDisconnect = async () => {
-    if (!pendingDisconnect) return;
-    const channel = pendingDisconnect;
-    setDisconnecting(true);
-    try {
-      const res = await apiClient.delete<{ metaUnsubscribed: boolean; metaSkippedReason?: string }>(`/api/channels/${channel.id}`);
-      setChannels((prev) => prev.filter((c) => c.id !== channel.id));
-      setPendingDisconnect(null);
-
-      const number = formatPhone(channel.phoneNumber) || channel.verified_name;
-      if (res.data.metaSkippedReason === 'meta_error' || res.data.metaSkippedReason === 'missing_credentials') {
-        gooeyToast.warning(`${number} disconnected`, {
-          description:
-            "Removed from UnoCX, but Meta didn't confirm the unlink. You can also remove UnoCX in Meta Business Settings → Integrations.",
-        });
-      } else {
-        gooeyToast.success(`${number} disconnected`, {
-          description:
-            res.data.metaSkippedReason === 'waba_shared'
-              ? 'Other numbers on this WhatsApp Business Account are still connected, so the account stays linked at Meta.'
-              : 'Removed from UnoCX and unlinked at Meta.',
-        });
-      }
-    } catch (err) {
-      notifyError(err, { where: 'SettingsView.disconnect', title: "Couldn't disconnect channel" });
-    } finally {
-      setDisconnecting(false);
-    }
-  };
 
   const whatsapp = channels.filter((c) => c.type === 'whatsapp');
   const attention = channels.filter(needsReconnect).length;
@@ -439,8 +325,8 @@ function ChannelsSection() {
                 channel={ch}
                 expanded={expandedIds.has(ch.id)}
                 onToggle={() => toggle(ch.id)}
-                onDisconnect={() => setPendingDisconnect(ch)}
                 onReconnect={() => setShowConnect(true)}
+                onDisconnect={requestDisconnect}
               />
             ))}
           </div>
@@ -472,32 +358,22 @@ function ChannelsSection() {
         onClose={() => setShowConnect(false)}
         onSuccess={() => fetchChannels({ quiet: true })}
       />
-
-      {pendingDisconnect && (
-        <DisconnectDialog
-          channel={pendingDisconnect}
-          busy={disconnecting}
-          onConfirm={confirmDisconnect}
-          onCancel={() => setPendingDisconnect(null)}
-        />
-      )}
+      {disconnectDialog}
     </div>
   );
 }
 
-// ─── GeneralSection ───────────────────────────────────────────────────────────
+// ─── ComingSoonSection ────────────────────────────────────────────────────────
 
-function GeneralSection() {
+function ComingSoonSection({ icon: Icon, title, description }: { icon: LucideIcon; title: string; description: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
       <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center">
-        <Settings className="w-5 h-5 text-slate-400" />
+        <Icon className="w-5 h-5 text-slate-400" />
       </div>
       <div>
-        <p className="text-sm font-semibold text-slate-700">General settings coming soon</p>
-        <p className="text-xs text-slate-400 mt-1 max-w-xs leading-relaxed">
-          Workspace preferences, timezone, and notification settings will be available here.
-        </p>
+        <p className="text-sm font-semibold text-slate-700">{title} is coming soon</p>
+        <p className="text-xs text-slate-400 mt-1 max-w-xs leading-relaxed">{description}</p>
       </div>
     </div>
   );
@@ -505,57 +381,125 @@ function GeneralSection() {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-type Section = 'general' | 'channels';
+type Section = 'general' | 'channels' | 'whatsapp' | 'team' | 'routing' | 'consent' | 'languages' | 'billing' | 'api';
 
-const SECTION_COPY: Record<Section, { title: string; subtitle: string }> = {
-  general: { title: 'General', subtitle: 'Manage your workspace preferences' },
-  channels: { title: 'Channels', subtitle: 'Connect the messaging accounts your team replies from and manage the ones already connected' },
-};
+/** Sections with `soon` are listed but open a "coming soon" panel */
+const SECTIONS: { key: Section; label: string; subtitle: string; icon: LucideIcon; soon?: boolean }[] = [
+  { key: 'general', label: 'General', subtitle: 'Workspace name, timezone and notification preferences.', icon: Settings, soon: true },
+  { key: 'channels', label: 'Channels', subtitle: 'Connect the messaging accounts your team replies from and manage the ones already connected', icon: Layers },
+  { key: 'whatsapp', label: 'WhatsApp number', subtitle: 'Your connected number, its health at Meta and the business profile customers see', icon: Phone },
+  { key: 'team', label: 'Team & roles', subtitle: 'Invite teammates, assign roles and control who can reply.', icon: Users, soon: true },
+  { key: 'routing', label: 'Routing & hours', subtitle: 'Assign conversations automatically and set business hours and away messages.', icon: Route, soon: true },
+  { key: 'consent', label: 'Consent & privacy', subtitle: 'Opt-in collection, opt-out keywords and data retention.', icon: ShieldCheck, soon: true },
+  { key: 'languages', label: 'Languages', subtitle: 'The languages your AI agent and templates reply in.', icon: Languages, soon: true },
+  { key: 'billing', label: 'Billing & usage', subtitle: 'Your plan, seats, AI resolutions and invoices.', icon: CreditCard, soon: true },
+  { key: 'api', label: 'API & webhooks', subtitle: 'API keys and webhooks to connect UnoCX to your own systems.', icon: Webhook, soon: true },
+];
 
-export const SettingsView: React.FC = () => {
-  const [activeSection, setActiveSection] = useState<Section>('channels');
+interface SettingsViewProps {
+  /** Opens a contact picked in the top-bar search in the inbox (id is `cust-<customerId>`) */
+  onOpenConversation?: (id: string) => void;
+}
 
-  const NAV: { key: Section; label: string; badge?: string }[] = [
-    { key: 'general', label: 'General', badge: 'Soon' },
-    { key: 'channels', label: 'Channels' },
-  ];
+/** Top-bar data: the live WhatsApp number, and contacts for the search (loaded on first use) */
+function useSettingsTopBar() {
+  const [whatsappChannels, setWhatsappChannels] = useState<Channel[]>([]);
+  const [conversations, setConversations] = useState<InboxConversation[]>([]);
+  const conversationsRequested = useRef(false);
+
+  const fetchChannels = useCallback(async () => {
+    try {
+      const res = await apiClient.get<{ channels: Channel[] }>('/api/channels', { params: { type: 'whatsapp' } });
+      setWhatsappChannels(res.data.channels ?? []);
+    } catch {
+      // The number pill is decorative here; the sections below show their own load errors
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchChannels();
+  }, [fetchChannels]);
+
+  const { isConnected } = useRealtime({ onChannelUpdated: () => fetchChannels() });
+
+  const loadConversations = useCallback(async () => {
+    if (conversationsRequested.current) return;
+    conversationsRequested.current = true;
+    try {
+      const res = await apiClient.get<{ conversations: InboxConversation[] }>('/api/conversations');
+      setConversations(res.data.conversations ?? []);
+    } catch (err) {
+      conversationsRequested.current = false;
+      notifyError(err, { where: 'SettingsView.search', title: "Couldn't load contacts" });
+    }
+  }, []);
+
+  const primaryNumber = (whatsappChannels.find(isChannelHealthy) || whatsappChannels[0])?.phoneNumber ?? null;
+  return { primaryNumber, isLive: isConnected, conversations, loadConversations };
+}
+
+export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }) => {
+  const [activeSection, setActiveSection] = useState<Section>('whatsapp');
+  const active = SECTIONS.find((s) => s.key === activeSection)!;
+  const topBar = useSettingsTopBar();
 
   return (
-    <div className="flex h-full">
-      {/* Sidebar */}
-      <aside className="w-[180px] shrink-0 border-r border-slate-100 flex flex-col pt-6">
-        <p className="px-4 mb-3 text-[11px] font-bold text-slate-400 uppercase tracking-widest">Settings</p>
-        <nav className="px-2 space-y-0.5">
-          {NAV.map(({ key, label, badge }) => {
-            const active = activeSection === key;
-            return (
-              <button
-                key={key}
-                onClick={() => setActiveSection(key)}
-                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-left ${
-                  active ? 'bg-slate-100 text-slate-900 font-semibold' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-                }`}
-              >
-                <span className="flex-1">{label}</span>
-                {badge && (
-                  <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">{badge}</span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
-      </aside>
-
-      {/* Content */}
-      <main className="flex-1 overflow-y-auto">
-        <div className="px-8 pt-7 pb-5 mb-6 border-b border-slate-100">
-          <h1 className="text-base font-bold text-slate-900">{SECTION_COPY[activeSection].title}</h1>
-          <p className="text-xs text-slate-500 mt-0.5">{SECTION_COPY[activeSection].subtitle}</p>
+    <div className="flex flex-col h-full bg-[#f8f9fc]">
+      <TopBar
+        primaryNumber={topBar.primaryNumber}
+        isLive={topBar.isLive}
+        search={
+          <ContactSearch
+            conversations={topBar.conversations}
+            onActivate={topBar.loadConversations}
+            onOpenConversation={(conv) => onOpenConversation?.(`cust-${conv.customer.id}`)}
+          />
+        }
+      >
+        <div className="min-w-0">
+          <p className="flex items-center gap-1 text-[12px] text-slate-500 leading-tight">
+            Settings <ChevronRight className="w-3 h-3" /> <span className="text-slate-800">{active.label}</span>
+          </p>
+          <h1 className="mt-0.5 text-[18px] font-semibold text-slate-900 leading-tight truncate">{active.label}</h1>
         </div>
+      </TopBar>
 
-        {activeSection === 'general' && <GeneralSection />}
-        {activeSection === 'channels' && <ChannelsSection />}
-      </main>
+      <div className="flex flex-1 min-h-0">
+        {/* Sidebar */}
+        <aside className="w-[220px] shrink-0 border-r border-slate-200 bg-white flex flex-col pt-6">
+          <p className="px-5 mb-3 text-[11px] font-bold text-slate-400 uppercase tracking-widest">Settings</p>
+          <nav className="px-3 space-y-0.5">
+            {SECTIONS.map(({ key, label, soon }) => {
+              const isActive = activeSection === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setActiveSection(key)}
+                  title={soon ? `${label} · coming soon` : label}
+                  className={`w-full flex items-center px-3 py-2 rounded-lg border text-[13px] transition-colors cursor-pointer text-left ${isActive
+                      ? 'bg-[#eef0fb] border-[#dfe3f7] text-[#3440a8] font-semibold'
+                      : 'border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
+
+        {/* Content */}
+        <main className="flex-1 overflow-y-auto pt-4">
+          {active.soon && <ComingSoonSection icon={active.icon} title={active.label} description={active.subtitle} />}
+          {activeSection === 'channels' && (
+            <>
+              <p className="px-8 pt-2 pb-5 text-xs text-slate-500">{active.subtitle}</p>
+              <ChannelsSection />
+            </>
+          )}
+          {activeSection === 'whatsapp' && <WhatsAppNumberSection onOpenChannels={() => setActiveSection('channels')} />}
+        </main>
+      </div>
     </div>
   );
 };

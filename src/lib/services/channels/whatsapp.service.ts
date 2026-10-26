@@ -10,6 +10,11 @@ import { publish } from "@/lib/realtime";
 import { AppError, toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { validateWhatsAppMedia } from "@/lib/media-limits";
+import {
+  WHATSAPP_BUSINESS_VERTICALS,
+  WHATSAPP_PROFILE_LIMITS,
+  type WhatsAppBusinessProfile,
+} from "@/types/whatsapp";
 
 const log = createLogger("WhatsAppService");
 
@@ -345,6 +350,81 @@ export class WhatsAppService {
     };
   }
 
+  /** Decrypted credentials for calls made on a number's behalf; throws when the channel can't reach Meta */
+  private requireCredentials(channel: Channel): { phoneNumberId: string; token: string } {
+    const token = channel.metaAccessToken ? decryptToken(channel.metaAccessToken) : "";
+    if (!channel.metaPhoneNumberId || !token) {
+      throw new AppError("WHATSAPP_CHANNEL_MISCONFIGURED", {
+        message: "This WhatsApp number has no valid Meta credentials. Please reconnect it.",
+        details: { channelId: channel.id },
+      });
+    }
+    return { phoneNumberId: channel.metaPhoneNumberId, token };
+  }
+
+  /**
+   * Settings → WhatsApp number: live number health and the business profile customers see
+   */
+  async getNumberSettings(channel: Channel) {
+    const { phoneNumberId, token } = this.requireCredentials(channel);
+    const [phone, profile] = await Promise.all([
+      metaApi.getPhoneNumberStatus(phoneNumberId, token),
+      metaApi.getBusinessProfile(phoneNumberId, token),
+    ]);
+    return { phone, profile };
+  }
+
+  /**
+   * Update the WhatsApp Business Profile. Only the fields present in `input` are sent to Meta.
+   */
+  async updateBusinessProfile(channel: Channel, input: Record<string, unknown>): Promise<WhatsAppBusinessProfile> {
+    const { phoneNumberId, token } = this.requireCredentials(channel);
+    const update: Omit<WhatsAppBusinessProfile, "profile_picture_url"> = {};
+
+    const text = (field: "about" | "address" | "description" | "email", label: string) => {
+      if (input[field] === undefined) return;
+      if (typeof input[field] !== "string") throw AppError.validation(`${label} must be text.`, field);
+      const value = (input[field] as string).trim();
+      if (value.length > WHATSAPP_PROFILE_LIMITS[field]) {
+        throw AppError.validation(`${label} can be at most ${WHATSAPP_PROFILE_LIMITS[field]} characters.`, field);
+      }
+      update[field] = value;
+    };
+    text("about", "About");
+    text("address", "Address");
+    text("description", "Description");
+    text("email", "Business email");
+
+    if (update.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(update.email)) {
+      throw AppError.validation("Enter a valid business email.", "email");
+    }
+
+    if (input.vertical !== undefined) {
+      if (!WHATSAPP_BUSINESS_VERTICALS.some((v) => v.value === input.vertical)) {
+        throw AppError.validation("Choose a business category from the list.", "vertical");
+      }
+      update.vertical = input.vertical as string;
+    }
+
+    if (input.websites !== undefined) {
+      if (!Array.isArray(input.websites)) throw AppError.validation("Websites must be a list.", "websites");
+      const websites = input.websites.map((w) => String(w ?? "").trim()).filter(Boolean);
+      if (websites.length > 2) throw AppError.validation("You can add at most 2 websites.", "websites");
+      for (const w of websites) {
+        if (!/^https?:\/\/[^\s.]+\.[^\s]+$/i.test(w) || w.length > WHATSAPP_PROFILE_LIMITS.website) {
+          throw AppError.validation(`"${w}" isn't a valid website address.`, "websites");
+        }
+      }
+      update.websites = websites;
+    }
+
+    if (Object.keys(update).length > 0) {
+      await metaApi.updateBusinessProfile(phoneNumberId, token, update);
+      log.info("WhatsApp business profile updated", { channelId: channel.id, fields: Object.keys(update) });
+    }
+    return metaApi.getBusinessProfile(phoneNumberId, token);
+  }
+
   /**
    * Send WhatsApp message (Text, Template, or Media with Caption) to a recipient using Meta Cloud API
    */
@@ -395,6 +475,17 @@ export class WhatsAppService {
     }
 
     if (!targetChannel) {
+      const chId = params.channelId || contact?.channelId;
+      if (chId) {
+        const found = await channelRepository.findById(chId, orgId);
+        if (found && found.status === ChannelStatus.DISCONNECTED) {
+          throw new AppError("WHATSAPP_CHANNEL_DISCONNECTED", {
+            message: "This WhatsApp number is disconnected. Reconnect it in Settings to send messages.",
+            details: { channelId: chId },
+            expected: true,
+          });
+        }
+      }
       throw new AppError("WHATSAPP_CHANNEL_NOT_FOUND", {
         details: { channelId: params.channelId, phoneNumberId: params.phoneNumberId },
         expected: true,

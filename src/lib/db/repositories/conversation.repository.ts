@@ -60,6 +60,7 @@ export interface ConversationListItem {
     name: string;
     handle: string | null;
     phoneNumber: string | null;
+    status?: string | null;
   } | null;
 }
 
@@ -185,13 +186,10 @@ export class ConversationRepository {
       })
       .from(tickets)
       .innerJoin(customers, eq(tickets.customerId, customers.id))
-      // Conversations live under a channel: none on a disconnected channel (or with no channel) are listed
-      .innerJoin(
+      // Left join channels: conversations from disconnected channels remain visible for history
+      .leftJoin(
         channels,
-        and(
-          eq(sql`coalesce(${tickets.channelId}, ${customers.channelId})`, channels.id),
-          ne(channels.status, ChannelStatus.DISCONNECTED)
-        )
+        eq(sql`coalesce(${tickets.channelId}, ${customers.channelId})`, channels.id)
       )
       .leftJoin(users, eq(tickets.assigneeId, users.id))
       .where(and(eq(tickets.organizationId, organizationId), inArray(tickets.id, latestPerCustomer)))
@@ -273,7 +271,14 @@ export class ConversationRepository {
           createdAt: customer.createdAt,
         },
         channel: channel
-          ? { id: channel.id, type: channel.type, name: channel.name, handle: channel.handle, phoneNumber: channel.phoneNumber }
+          ? {
+              id: channel.id,
+              type: channel.type,
+              name: channel.name,
+              handle: channel.handle,
+              phoneNumber: channel.phoneNumber,
+              status: channel.status,
+            }
           : null,
       };
     });

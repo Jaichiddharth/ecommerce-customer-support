@@ -74,7 +74,14 @@ export default function Home() {
               <IntegrationsView openIntegration={openIntegration} onOpenIntegration={setOpenIntegration} />
             )}
 
-            {activeTab === 'settings' && <SettingsView />}
+            {activeTab === 'settings' && (
+              <SettingsView
+                onOpenConversation={(id) => {
+                  setSelectedConversationId(id);
+                  setActiveTab('inbox');
+                }}
+              />
+            )}
           </main>
         </div>
       </div>
