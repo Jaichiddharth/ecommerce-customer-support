@@ -26,8 +26,8 @@ export const DELETE = withAuth(async (req: AuthenticatedRequest, context?: { par
     meta = await channels.whatsapp.disconnect(channel);
   } else {
     await channelRepository.markDisconnected(channel.id, channel.organizationId);
-    publish(channel.organizationId, { type: "channel.updated", channelId: channel.id });
   }
+  publish(channel.organizationId, { type: "channel.updated", channelId: channel.id });
 
   return NextResponse.json({
     success: true,

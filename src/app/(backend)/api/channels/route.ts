@@ -8,7 +8,8 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
   const orgId = req.user.organizationId;
   const type = searchParams.get("type") || undefined;
 
-  const list = await channels.list(orgId, type);
+  const includeDisconnected = searchParams.get("includeDisconnected") !== "false";
+  const list = await channels.list(orgId, type, { includeDisconnected });
 
   const formatted = list.map((c) => ({
     id: c.id,
@@ -19,8 +20,13 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
     phoneNumber: c.phoneNumber,
     metaPhoneNumberId: c.metaPhoneNumberId,
     wabaId: c.wabaId,
-    // An expired token needs a reconnect even if no webhook has flagged it yet
-    status: c.tokenExpiresAt && c.tokenExpiresAt.getTime() < Date.now() ? ChannelStatus.TOKEN_EXPIRED : c.status,
+    // Disconnected channel stays disconnected; an expired token needs reconnect even if no webhook has flagged it
+    status:
+      c.status === ChannelStatus.DISCONNECTED
+        ? ChannelStatus.DISCONNECTED
+        : c.tokenExpiresAt && c.tokenExpiresAt.getTime() < Date.now()
+        ? ChannelStatus.TOKEN_EXPIRED
+        : c.status,
     tokenExpiresAt: c.tokenExpiresAt,
     lastError: c.lastError,
     isActive: c.isActive,
