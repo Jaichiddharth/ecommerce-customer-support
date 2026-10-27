@@ -122,8 +122,9 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
           <div className="space-y-0.5">
             {groups.map(({ type, items }) => {
               const needsReconnect = items.some(channelNeedsReconnect);
+              const isDisconnected = items.every((c) => c.status === 'disconnected');
               const single = items.length === 1 ? items[0] : null;
-              const subtitle = needsReconnect
+              const subtitle = needsReconnect || isDisconnected
                 ? null
                 : type === 'whatsapp'
                   ? items.length > 1
@@ -161,6 +162,20 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                             Reconnect
                           </span>
                         </span>
+                      ) : isDisconnected ? (
+                        <span className="block whitespace-nowrap text-[11px] text-amber-600">
+                          Disconnected ·{' '}
+                          <span
+                            role="link"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onConnect(type);
+                            }}
+                            className="font-medium hover:underline"
+                          >
+                            Reconnect
+                          </span>
+                        </span>
                       ) : (
                         subtitle && <span className="block truncate text-[11px] text-slate-500">{subtitle}</span>
                       )}
@@ -177,14 +192,18 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                           <button
                             key={channel.id}
                             onClick={() => onFilterChange({ kind: 'channel', id: channel.id })}
-                            title={channel.lastError || undefined}
+                            title={channel.lastError || (channel.status === 'disconnected' ? 'Channel is disconnected' : undefined)}
                             className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left cursor-pointer transition-colors ${
                               channelActive ? 'bg-[#eef0fb]' : 'hover:bg-slate-50'
                             }`}
                           >
                             <span
                               className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                isChannelHealthy(channel) ? 'bg-emerald-500' : 'bg-orange-500'
+                                channel.status === 'disconnected'
+                                  ? 'bg-amber-500'
+                                  : isChannelHealthy(channel)
+                                  ? 'bg-emerald-500'
+                                  : 'bg-orange-500'
                               }`}
                             />
                             <span className="flex-1 min-w-0">
@@ -193,6 +212,7 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                               </span>
                               <span className="block truncate text-[11px] text-slate-500">
                                 {formatPhone(channel.phoneNumber) || formatHandle(channel.handle)}
+                                {channel.status === 'disconnected' ? ' · Disconnected' : ''}
                               </span>
                             </span>
                             <CountPill count={byChannel.get(channel.id) ?? 0} active={channelActive} />

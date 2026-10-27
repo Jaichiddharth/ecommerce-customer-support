@@ -225,6 +225,11 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                 </span>
                 <span className="flex items-center gap-1.5 flex-wrap min-w-0">
                   <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[11px]">{CHANNEL_LABELS[type] || type}</span>
+                  {conv.channel?.status === 'disconnected' && (
+                    <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-medium">
+                      Disconnected
+                    </span>
+                  )}
                   {conv.handledBy === 'ai' && (
                     <span className="px-1.5 py-0.5 rounded bg-[#eef0fb] text-[#3440a8] text-[11px] font-medium">AI</span>
                   )}

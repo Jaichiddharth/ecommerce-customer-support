@@ -323,7 +323,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   );
   const activeChannelType = activeConv ? conversationChannelType(activeConv) : 'whatsapp';
   const activeMessages = activeConv ? messagesMap[convKeyFor(activeConv.customer.id)] || [] : [];
-  const canSendOnChannel = SENDABLE_CHANNEL_TYPES.includes(activeChannelType);
+  const isChannelDisconnected = activeConv?.channel?.status === 'disconnected';
+  const canSendOnChannel = SENDABLE_CHANNEL_TYPES.includes(activeChannelType) && !isChannelDisconnected;
 
   // -------------------------------------------------------------
   // DATA LOADING
@@ -446,7 +447,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCustomerId, fetchMessagesForCustomer]);
 
-  // The open thread's channel was disconnected, so it's no longer listed: close it
+  // If the selected customer is no longer listed in conversations, close the thread
   useEffect(() => {
     if (isLoadingConversations || !selectedCustomerId || activeConv) return;
     setInternalSelectedId('');
@@ -910,6 +911,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     if ((!inputMessage.trim() && !selectedFile) || !activeConv) return;
 
     if (!canSendOnChannel) {
+      if (isChannelDisconnected) {
+        gooeyToast.error("This WhatsApp number is disconnected. Reconnect it in Settings to send messages.");
+        return;
+      }
       gooeyToast.error(`Replying on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet.`);
       return;
     }
@@ -1056,13 +1061,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
   const shareDisabledReason = !activeConv
     ? null
-    : !canSendOnChannel
-      ? `Sending on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet. Use "Insert as text" instead.`
-      : !activeConv.customer.phone
-        ? `${activeConv.customer.name} has no phone number.`
-        : !conversationSendChannel
-          ? 'No connected WhatsApp channel found.'
-          : null;
+    : isChannelDisconnected
+      ? 'This WhatsApp number is disconnected. Messaging is paused.'
+      : !canSendOnChannel
+        ? `Sending on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet. Use "Insert as text" instead.`
+        : !activeConv.customer.phone
+          ? `${activeConv.customer.name} has no phone number.`
+          : !conversationSendChannel
+            ? 'No connected WhatsApp channel found.'
+            : null;
 
   /** Sends the selected variant through the regular WhatsApp send path (the server re-checks it with Shopify) */
   const handleShareProduct = async ({ product, variant, caption }: ShareProductArgs): Promise<boolean> => {
@@ -1396,6 +1403,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const composerStatus = (() => {
     if (!activeConv) return null;
     if (composerMode === 'note') return { text: 'Notes are only visible to your team', className: 'text-amber-700' };
+    if (isChannelDisconnected) {
+      return { text: 'Messaging is paused · This WhatsApp number is disconnected', className: 'text-amber-700 font-medium' };
+    }
     if (!canSendOnChannel) {
       return { text: `Replying on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet`, className: 'text-amber-700' };
     }
@@ -1469,7 +1479,14 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                   <div className="flex items-center gap-3 min-w-0">
                     <Avatar name={activeConv.customer.name} src={activeConv.customer.avatarUrl} size="lg" />
                     <div className="min-w-0">
-                      <h2 className="font-semibold text-[15px] text-slate-900 truncate">{activeConv.customer.name}</h2>
+                      <div className="flex items-center gap-2">
+                        <h2 className="font-semibold text-[15px] text-slate-900 truncate">{activeConv.customer.name}</h2>
+                        {isChannelDisconnected && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                            Disconnected
+                          </span>
+                        )}
+                      </div>
                       <p className="text-[11.5px] text-slate-500 truncate">{headerSubtitle}</p>
                     </div>
                   </div>
@@ -1541,6 +1558,21 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                     )}
                   </div>
                 </div>
+
+                {isChannelDisconnected && (
+                  <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center justify-between text-xs text-amber-900 shrink-0">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>This WhatsApp number is disconnected. All past message logs and customer details are preserved, but messaging from this number is paused.</span>
+                    </div>
+                    <a
+                      href="/settings"
+                      className="ml-3 px-2.5 py-1 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs shrink-0 cursor-pointer"
+                    >
+                      Manage in Settings
+                    </a>
+                  </div>
+                )}
 
                 {messagesLoadError?.convId === convKeyFor(activeConv.customer.id) && activeMessages.length > 0 && (
                   <div role="alert" className="px-4 py-2 bg-red-50 border-b border-red-100 text-[11px] text-red-700 flex items-center justify-between gap-2">
@@ -1749,10 +1781,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                           placeholder={
                             composerMode === 'note'
                               ? 'Add an internal note — only your team sees this…'
-                              : selectedFile
-                                ? 'Add a caption (optional)…'
-                                : `Reply to ${activeConv.customer.name} on ${CHANNEL_LABELS[activeChannelType] || activeChannelType}…`
+                              : isChannelDisconnected
+                                ? 'Messaging is paused because this number is disconnected. Reconnect in Settings to send messages.'
+                                : selectedFile
+                                  ? 'Add a caption (optional)…'
+                                  : `Reply to ${activeConv.customer.name} on ${CHANNEL_LABELS[activeChannelType] || activeChannelType}…`
                           }
+                          disabled={isChannelDisconnected && composerMode === 'reply'}
                           className="flex-1 resize-none bg-transparent text-[13px] leading-5 text-slate-800 placeholder-slate-400 focus:outline-none py-0.5"
                         />
                         {composerMode === 'reply' && !inputMessage && suggestions[0] && (

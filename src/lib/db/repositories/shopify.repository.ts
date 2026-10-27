@@ -1,10 +1,12 @@
 import { db } from "..";
-import { and, asc, eq, ne } from "drizzle-orm";
+import { and, asc, eq, isNotNull, ne } from "drizzle-orm";
 import {
   shopifyStores,
   shopifyCustomerLinks,
   users,
   ShopifyStoreStatus,
+  ShopifyLinkSource,
+  type ShopifyLinkSourceValue,
   type ShopifyStore,
   type NewShopifyStore,
   type ShopifyCustomerLink,
@@ -125,46 +127,63 @@ export class ShopifyRepository {
     return link || null;
   }
 
-  /** Links the contact, replacing any earlier link of the same contact in this store */
+  /**
+   * Links the contact profile (its primary contact id). A manual link replaces any earlier link or "unlinked"
+   * marker of the profile in this store; an automatic one is only added when the profile has no row yet.
+   */
   async upsertLink(data: {
     organizationId: number;
     storeId: number;
     customerId: number;
     shopifyCustomerId: string;
-    linkedById: number;
-  }): Promise<ShopifyCustomerLink> {
+    linkedById: number | null;
+    source: ShopifyLinkSourceValue;
+  }): Promise<ShopifyCustomerLink | null> {
     const now = new Date();
-    const [link] = await db
-      .insert(shopifyCustomerLinks)
-      .values({
-        organizationId: data.organizationId,
-        shopifyStoreId: data.storeId,
-        customerId: data.customerId,
-        shopifyCustomerId: data.shopifyCustomerId,
-        linkedById: data.linkedById,
-      })
-      .onConflictDoUpdate({
-        target: [shopifyCustomerLinks.shopifyStoreId, shopifyCustomerLinks.customerId],
-        set: { shopifyCustomerId: data.shopifyCustomerId, linkedById: data.linkedById, createdAt: now, updatedAt: now },
-      })
-      .returning();
+    const insert = db.insert(shopifyCustomerLinks).values({
+      organizationId: data.organizationId,
+      shopifyStoreId: data.storeId,
+      customerId: data.customerId,
+      shopifyCustomerId: data.shopifyCustomerId,
+      linkedById: data.linkedById,
+      source: data.source,
+    });
 
-    return link;
+    const [link] =
+      data.source === ShopifyLinkSource.AUTO
+        ? await insert.onConflictDoNothing({ target: [shopifyCustomerLinks.shopifyStoreId, shopifyCustomerLinks.customerId] }).returning()
+        : await insert
+            .onConflictDoUpdate({
+              target: [shopifyCustomerLinks.shopifyStoreId, shopifyCustomerLinks.customerId],
+              set: {
+                shopifyCustomerId: data.shopifyCustomerId,
+                linkedById: data.linkedById,
+                source: data.source,
+                createdAt: now,
+                updatedAt: now,
+              },
+            })
+            .returning();
+
+    return link ?? null;
   }
 
-  async deleteLink(organizationId: number, storeId: number, customerId: number): Promise<boolean> {
-    const deleted = await db
-      .delete(shopifyCustomerLinks)
+  /** Clears the profile's link but keeps the row, so automatic matching doesn't link it again */
+  async markUnlinked(organizationId: number, storeId: number, customerId: number, unlinkedById: number): Promise<boolean> {
+    const updated = await db
+      .update(shopifyCustomerLinks)
+      .set({ shopifyCustomerId: null, source: ShopifyLinkSource.MANUAL, linkedById: unlinkedById, updatedAt: new Date() })
       .where(
         and(
           eq(shopifyCustomerLinks.organizationId, organizationId),
           eq(shopifyCustomerLinks.shopifyStoreId, storeId),
-          eq(shopifyCustomerLinks.customerId, customerId)
+          eq(shopifyCustomerLinks.customerId, customerId),
+          isNotNull(shopifyCustomerLinks.shopifyCustomerId)
         )
       )
       .returning({ id: shopifyCustomerLinks.id });
 
-    return deleted.length > 0;
+    return updated.length > 0;
   }
 }
 

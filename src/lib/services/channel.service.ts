@@ -12,8 +12,8 @@ export class ChannelService {
    * Common: List channels by organization and optional channel type
    * e.g. channels.list(orgId, 'whatsapp') or channels.list(orgId)
    */
-  async list(organizationId: number, type?: string): Promise<Channel[]> {
-    return await channelRepository.listByOrgAndType(organizationId, type);
+  async list(organizationId: number, type?: string, options?: { includeDisconnected?: boolean }): Promise<Channel[]> {
+    return await channelRepository.listByOrgAndType(organizationId, type, options);
   }
 
   /**

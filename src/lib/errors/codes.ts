@@ -84,6 +84,7 @@ export const ERROR_DEFINITIONS = {
   SHOPIFY_NOT_CONFIGURED: { status: 500, source: "shopify", message: "The Shopify integration is not configured on the server." },
   SHOPIFY_OAUTH_FAILED: { status: 400, source: "shopify", message: "The Shopify authorization could not be verified. Please try connecting again." },
   SHOPIFY_CUSTOMER_ALREADY_LINKED: { status: 409, source: "shopify", message: "This Shopify customer is already linked to another contact." },
+  CONTACT_IDENTITY_CONFLICT: { status: 409, source: "shopify", message: "These contacts are linked to different Shopify customers. Unlink one of them before linking the channels." },
 
   // Database
   DB_UNAVAILABLE: { status: 503, source: "database", message: "The database is temporarily unavailable. Please try again shortly.", retryable: true },

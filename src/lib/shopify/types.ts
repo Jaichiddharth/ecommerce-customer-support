@@ -128,9 +128,20 @@ export interface ShopifyPage<T> {
 export interface ShopifyCustomerLinkInfo {
   id: number;
   shopifyCustomerId: string;
+  /** "auto": matched by the contact's phone number or email; "manual": chosen by an agent */
+  source: "auto" | "manual" | string;
   linkedAt: string;
   linkedByName: string | null;
 }
+
+/**
+ * Why a contact has no linked Shopify customer:
+ * - none: no Shopify customer has the phone numbers or emails of the contact's channels
+ * - review: several customers match (or the only match is linked to another contact), so an agent has to choose
+ * - dismissed: an agent unlinked the contact, so it isn't matched automatically again
+ * - no_details: the contact has no phone number or email to match on
+ */
+export type ShopifyAutoMatchStatus = "none" | "review" | "dismissed" | "no_details";
 
 /** GET /api/integrations/shopify/contacts/:customerId/orders */
 export interface ShopifyContactOrdersResponse {
@@ -140,4 +151,13 @@ export interface ShopifyContactOrdersResponse {
   /** Null when the linked customer no longer exists in Shopify */
   shopifyCustomer: ShopifyCustomerSummary | null;
   orders: ShopifyPage<ShopifyOrder>;
+  /** Set when there's no link: the result of matching the contact's phone numbers and emails */
+  autoMatch: { status: ShopifyAutoMatchStatus; candidates: ShopifyCustomerSummary[] } | null;
+}
+
+/** GET /api/integrations/shopify/orders?q= */
+export interface ShopifyOrderSearchResult {
+  order: ShopifyOrder;
+  /** Null for guest checkouts and deleted customers: such an order can't be linked to a contact */
+  customer: ShopifyCustomerSummary | null;
 }

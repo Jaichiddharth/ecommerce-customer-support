@@ -50,7 +50,18 @@ export const shopifyStores = pgTable(
   ]
 );
 
-/** Explicit, agent-confirmed link between a platform contact and a customer in a connected Shopify store */
+export const ShopifyLinkSource = {
+  MANUAL: "manual", // Picked by an agent
+  AUTO: "auto", // The only Shopify customer with the contact's phone number or email
+} as const;
+
+export type ShopifyLinkSourceValue = (typeof ShopifyLinkSource)[keyof typeof ShopifyLinkSource];
+
+/**
+ * Link between a contact profile (its primary contact, see customers.primaryCustomerId) and a customer in a
+ * connected Shopify store. A row without shopifyCustomerId records that an agent unlinked the contact, so
+ * automatic matching doesn't link it again.
+ */
 export const shopifyCustomerLinks = pgTable(
   "shopify_customer_links",
   {
@@ -64,7 +75,8 @@ export const shopifyCustomerLinks = pgTable(
     customerId: integer("customer_id")
       .notNull()
       .references(() => customers.id, { onDelete: "cascade" }),
-    shopifyCustomerId: varchar("shopify_customer_id", { length: 100 }).notNull(), // gid://shopify/Customer/…
+    shopifyCustomerId: varchar("shopify_customer_id", { length: 100 }), // gid://shopify/Customer/…; null = unlinked by an agent
+    source: varchar("source", { length: 20 }).default(ShopifyLinkSource.MANUAL).notNull(),
     linkedById: integer("linked_by_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),

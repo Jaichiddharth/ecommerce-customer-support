@@ -1,7 +1,8 @@
 import { db } from "..";
-import { eq, and, or, sql, desc, ne } from "drizzle-orm";
-import { customers, messages, channels, ChannelStatus, type Customer, type NewCustomer } from "../schema";
+import { eq, and, or, sql, desc, ne, asc, ilike, inArray } from "drizzle-orm";
+import { customers, messages, channels, shopifyCustomerLinks, ChannelStatus, type Customer, type NewCustomer } from "../schema";
 import { createLogger } from "../../logger";
+import { AppError } from "../../errors";
 
 const log = createLogger("CustomerRepository");
 
@@ -18,19 +19,29 @@ export function normalizePhone(phone: string | null | undefined): string | null 
  */
 const onLiveChannel = and(eq(customers.channelId, channels.id), ne(channels.status, ChannelStatus.DISCONNECTED));
 
+export type CustomerWithChannel = Customer & { channel: { id: number; type: string; name: string } | null };
+
+const withChannelColumns = {
+    customer: customers,
+    channelId: channels.id,
+    channelType: channels.type,
+    channelName: channels.name,
+};
+
+const toCustomerWithChannel = (row: { customer: Customer; channelId: number; channelType: string; channelName: string }): CustomerWithChannel => ({
+    ...row.customer,
+    channel: { id: row.channelId, type: row.channelType, name: row.channelName },
+});
+
+/** Escapes LIKE wildcards so a search term matches literally */
+const likePattern = (term: string) => `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
 export class CustomerRepository {
     /**
-     * Find a customer whose channel is still connected. Use this for anything a user can see or act on.
+     * Find a customer within an organization
      */
     async findVisibleById(id: number, organizationId: number): Promise<Customer | null> {
-        const [row] = await db
-            .select({ customer: customers })
-            .from(customers)
-            .innerJoin(channels, onLiveChannel)
-            .where(and(eq(customers.id, id), eq(customers.organizationId, organizationId)))
-            .limit(1);
-
-        return row?.customer ?? null;
+        return await this.findById(id, organizationId);
     }
 
     async createCustomer(
@@ -205,18 +216,18 @@ export class CustomerRepository {
      * List all customers for an organization, optionally filtered by channel
      */
     async listByOrg(organizationId: number, channelId?: number): Promise<Customer[]> {
-        const rows = await db
-            .select({ customer: customers })
-            .from(customers)
-            .innerJoin(channels, onLiveChannel)
-            .where(
-                and(
-                    eq(customers.organizationId, organizationId),
-                    channelId !== undefined ? eq(customers.channelId, channelId) : undefined
-                )
-            );
+        const conditions = [eq(customers.organizationId, organizationId)];
+        if (channelId !== undefined) {
+            conditions.push(eq(customers.channelId, channelId));
+        }
 
-        return rows.map((r) => r.customer);
+        const rows = await db
+            .select()
+            .from(customers)
+            .where(and(...conditions))
+            .orderBy(desc(customers.createdAt));
+
+        return rows;
     }
 
     /**
@@ -224,6 +235,133 @@ export class CustomerRepository {
      */
     async listByChannel(organizationId: number, channelId: number): Promise<Customer[]> {
         return await this.listByOrg(organizationId, channelId);
+    }
+
+    /** Visible contacts of a profile: the primary contact and its channel identities, primary first */
+    async listProfileMembers(organizationId: number, profileId: number): Promise<CustomerWithChannel[]> {
+        const rows = await db
+            .select(withChannelColumns)
+            .from(customers)
+            .innerJoin(channels, onLiveChannel)
+            .where(
+                and(
+                    eq(customers.organizationId, organizationId),
+                    or(eq(customers.id, profileId), eq(customers.primaryCustomerId, profileId))
+                )
+            )
+            .orderBy(sql`${customers.primaryCustomerId} IS NOT NULL`, asc(customers.createdAt), asc(customers.id));
+
+        return rows.map(toCustomerWithChannel);
+    }
+
+    /** Visible contacts whose name, phone, email or handle contains the term */
+    async searchVisible(organizationId: number, term: string, limit = 20): Promise<CustomerWithChannel[]> {
+        const pattern = likePattern(term);
+        const digits = term.replace(/\D/g, "");
+        const rows = await db
+            .select(withChannelColumns)
+            .from(customers)
+            .innerJoin(channels, onLiveChannel)
+            .where(
+                and(
+                    eq(customers.organizationId, organizationId),
+                    or(
+                        ilike(customers.name, pattern),
+                        ilike(customers.email, pattern),
+                        ilike(customers.handle, pattern),
+                        digits.length >= 3 ? ilike(customers.phone, `%${digits}%`) : undefined
+                    )
+                )
+            )
+            .orderBy(desc(customers.updatedAt))
+            .limit(limit);
+
+        return rows.map(toCustomerWithChannel);
+    }
+
+    /**
+     * Moves every contact of the source profile into the target profile, together with the source's
+     * Shopify customer links. Fails with CONTACT_IDENTITY_CONFLICT when both profiles are linked to
+     * different customers of the same store.
+     */
+    async mergeProfiles(organizationId: number, targetProfileId: number, sourceProfileId: number): Promise<void> {
+        await db.transaction(async (tx) => {
+            const links = await tx
+                .select()
+                .from(shopifyCustomerLinks)
+                .where(
+                    and(
+                        eq(shopifyCustomerLinks.organizationId, organizationId),
+                        inArray(shopifyCustomerLinks.customerId, [targetProfileId, sourceProfileId])
+                    )
+                );
+
+            for (const sourceLink of links.filter((l) => l.customerId === sourceProfileId)) {
+                const targetLink = links.find((l) => l.customerId === targetProfileId && l.shopifyStoreId === sourceLink.shopifyStoreId);
+                if (targetLink?.shopifyCustomerId && sourceLink.shopifyCustomerId) {
+                    throw new AppError("CONTACT_IDENTITY_CONFLICT", { details: { storeId: sourceLink.shopifyStoreId }, expected: true });
+                }
+                if (targetLink) {
+                    // Keep whichever side has a Shopify customer; with neither, keep the target's "unlinked" marker
+                    const drop = sourceLink.shopifyCustomerId ? targetLink : sourceLink;
+                    await tx.delete(shopifyCustomerLinks).where(eq(shopifyCustomerLinks.id, drop.id));
+                    if (drop === sourceLink) continue;
+                }
+                await tx
+                    .update(shopifyCustomerLinks)
+                    .set({ customerId: targetProfileId, updatedAt: new Date() })
+                    .where(eq(shopifyCustomerLinks.id, sourceLink.id));
+            }
+
+            await tx
+                .update(customers)
+                .set({ primaryCustomerId: targetProfileId, updatedAt: new Date() })
+                .where(
+                    and(
+                        eq(customers.organizationId, organizationId),
+                        or(eq(customers.id, sourceProfileId), eq(customers.primaryCustomerId, sourceProfileId))
+                    )
+                );
+        });
+    }
+
+    /**
+     * Takes a contact out of its profile. When it's the primary contact, its oldest identity becomes
+     * the new primary and keeps the profile's Shopify customer links.
+     */
+    async detachFromProfile(organizationId: number, contact: Customer): Promise<void> {
+        const now = new Date();
+        if (contact.primaryCustomerId) {
+            await db
+                .update(customers)
+                .set({ primaryCustomerId: null, updatedAt: now })
+                .where(and(eq(customers.id, contact.id), eq(customers.organizationId, organizationId)));
+            return;
+        }
+
+        await db.transaction(async (tx) => {
+            const identities = await tx
+                .select({ id: customers.id })
+                .from(customers)
+                .where(and(eq(customers.organizationId, organizationId), eq(customers.primaryCustomerId, contact.id)))
+                .orderBy(asc(customers.createdAt), asc(customers.id));
+            if (identities.length === 0) return;
+
+            const [newPrimary, ...others] = identities;
+            await tx.update(customers).set({ primaryCustomerId: null, updatedAt: now }).where(eq(customers.id, newPrimary.id));
+            if (others.length > 0) {
+                await tx
+                    .update(customers)
+                    .set({ primaryCustomerId: newPrimary.id, updatedAt: now })
+                    .where(inArray(customers.id, others.map((o) => o.id)));
+            }
+            // Identities never hold links of their own; drop any stale ones so the move can't collide
+            await tx.delete(shopifyCustomerLinks).where(eq(shopifyCustomerLinks.customerId, newPrimary.id));
+            await tx
+                .update(shopifyCustomerLinks)
+                .set({ customerId: newPrimary.id, updatedAt: now })
+                .where(and(eq(shopifyCustomerLinks.organizationId, organizationId), eq(shopifyCustomerLinks.customerId, contact.id)));
+        });
     }
 
     /**
@@ -267,6 +405,12 @@ export class CustomerRepository {
                     const duplicates = group.slice(1);
 
                     for (const dup of duplicates) {
+                        // Keep the duplicate's channel identities in the profile
+                        await db
+                            .update(customers)
+                            .set({ primaryCustomerId: sql`CASE WHEN ${customers.id} = ${primary.id} THEN NULL ELSE ${primary.id}::int END` })
+                            .where(eq(customers.primaryCustomerId, dup.id));
+
                         // Reassign messages
                         await db
                             .update(messages)

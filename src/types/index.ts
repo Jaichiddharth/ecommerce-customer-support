@@ -211,3 +211,16 @@ export interface WhatsAppTemplate {
   }>;
   lastUpdated: string;
 }
+
+/** One channel identity of a contact profile, from /api/customer/:id/identities */
+export interface ContactIdentity {
+  id: number;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  handle: string | null;
+  /** The profile's primary contact holds the shared data, such as the Shopify customer link */
+  isPrimary: boolean;
+  channel: { id: number; type: string; name: string } | null;
+  createdAt: string;
+}

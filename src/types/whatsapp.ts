@@ -60,6 +60,41 @@ export interface WhatsAppConnectionRecord {
   code_verification_status?: string;
 }
 
+/** Business categories Meta accepts for `whatsapp_business_profile.vertical` */
+export const WHATSAPP_BUSINESS_VERTICALS: { value: string; label: string }[] = [
+  { value: 'APPAREL', label: 'Clothing and apparel' },
+  { value: 'AUTO', label: 'Automotive' },
+  { value: 'BEAUTY', label: 'Beauty, spa and salon' },
+  { value: 'EDU', label: 'Education' },
+  { value: 'ENTERTAIN', label: 'Entertainment' },
+  { value: 'EVENT_PLAN', label: 'Event planning and service' },
+  { value: 'FINANCE', label: 'Finance and banking' },
+  { value: 'GROCERY', label: 'Food and grocery' },
+  { value: 'GOVT', label: 'Public service' },
+  { value: 'HOTEL', label: 'Hotel and lodging' },
+  { value: 'HEALTH', label: 'Medical and health' },
+  { value: 'NONPROFIT', label: 'Non-profit' },
+  { value: 'PROF_SERVICES', label: 'Professional services' },
+  { value: 'RETAIL', label: 'Shopping and retail' },
+  { value: 'TRAVEL', label: 'Travel and transportation' },
+  { value: 'RESTAURANT', label: 'Restaurant' },
+  { value: 'OTHER', label: 'Other' },
+];
+
+/** Editable WhatsApp Business Profile fields, as Meta stores them */
+export interface WhatsAppBusinessProfile {
+  about?: string;
+  address?: string;
+  description?: string;
+  email?: string;
+  profile_picture_url?: string;
+  websites?: string[];
+  vertical?: string;
+}
+
+/** Meta's limits for the editable profile fields */
+export const WHATSAPP_PROFILE_LIMITS = { about: 139, address: 256, description: 512, email: 128, website: 256 } as const;
+
 /**
  * Augment the global Window interface to include Facebook SDK types
  */

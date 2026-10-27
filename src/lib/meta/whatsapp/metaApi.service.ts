@@ -1,6 +1,7 @@
 import { AppError } from '../../errors';
 import { createLogger } from '../../logger';
 import { graphHttp, graphUpload, graphDownload } from '../graph-client';
+import type { WhatsAppBusinessProfile } from '@/types/whatsapp';
 
 const log = createLogger('MetaApi');
 
@@ -45,6 +46,8 @@ export interface MetaPhoneData {
   code_verification_status?: string;
   name_status?: string;
   platform_type?: string;
+  messaging_limit_tier?: string;
+  is_on_biz_app?: boolean;
   throughput?: {
     level: string;
   };
@@ -440,6 +443,64 @@ const getWabaPhoneNumbers = async (wabaId: string, accessToken: string) => {
 };
 
 /* ----------------------------------------------------
+   9b. Phone Number Health (quality, messaging limit, throughput, coexistence)
+-----------------------------------------------------*/
+const PHONE_STATUS_FIELDS = [
+  'id',
+  'display_phone_number',
+  'verified_name',
+  'name_status',
+  'quality_rating',
+  'messaging_limit_tier',
+  'throughput',
+  'platform_type',
+  'code_verification_status',
+  'is_on_biz_app',
+].join(',');
+
+const getPhoneNumberStatus = async (phoneNumberId: string, accessToken: string): Promise<MetaPhoneData> => {
+  try {
+    const response = await graphHttp.get<MetaPhoneData>(`/${phoneNumberId}`, {
+      params: { fields: PHONE_STATUS_FIELDS },
+      headers: bearer(accessToken),
+      operation: 'phone.status',
+    });
+    return response.data;
+  } catch (err) {
+    // Older Graph versions reject fields they don't know; the default field set still has the essentials
+    if ((err as AppError).code !== 'META_INVALID_REQUEST') throw err;
+    log.warn('Phone status fields rejected — falling back to default phone fields', { phoneNumberId });
+    return getPhoneNumberFromCode(phoneNumberId, accessToken);
+  }
+};
+
+/* ----------------------------------------------------
+   9c. WhatsApp Business Profile (what customers see in the chat)
+-----------------------------------------------------*/
+const BUSINESS_PROFILE_FIELDS = 'about,address,description,email,profile_picture_url,websites,vertical';
+
+const getBusinessProfile = async (phoneNumberId: string, accessToken: string): Promise<WhatsAppBusinessProfile> => {
+  const response = await graphHttp.get<{ data?: WhatsAppBusinessProfile[] }>(`/${phoneNumberId}/whatsapp_business_profile`, {
+    params: { fields: BUSINESS_PROFILE_FIELDS },
+    headers: bearer(accessToken),
+    operation: 'phone.business_profile',
+  });
+  return response.data?.data?.[0] ?? {};
+};
+
+const updateBusinessProfile = async (
+  phoneNumberId: string,
+  accessToken: string,
+  profile: Omit<WhatsAppBusinessProfile, 'profile_picture_url'>
+): Promise<void> => {
+  await graphHttp.post(
+    `/${phoneNumberId}/whatsapp_business_profile`,
+    { messaging_product: 'whatsapp', ...profile },
+    { headers: bearer(accessToken), operation: 'phone.update_business_profile' }
+  );
+};
+
+/* ----------------------------------------------------
    10. Direct WhatsApp Media Upload (Meta Cloud API)
 -----------------------------------------------------*/
 const uploadWhatsAppMedia = async (
@@ -563,6 +624,9 @@ export const metaApi = {
   getWabaTemplates,
   getWabaAccountDetails,
   getWabaPhoneNumbers,
+  getPhoneNumberStatus,
+  getBusinessProfile,
+  updateBusinessProfile,
 };
 
 export default metaApi;

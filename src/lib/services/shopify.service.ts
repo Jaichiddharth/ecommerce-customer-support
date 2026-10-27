@@ -1,5 +1,6 @@
 import { shopifyRepository, pickPrimaryStore, type ShopifyStoreWithUser } from "../db/repositories/shopify.repository";
-import { ShopifyStoreStatus, type ShopifyStore, type SharedShopifyProduct } from "../db/schema";
+import { customerRepository } from "../db/repositories/customer.repository";
+import { ShopifyLinkSource, ShopifyStoreStatus, type ShopifyStore, type SharedShopifyProduct } from "../db/schema";
 import { AppError, toAppError } from "../errors";
 import { createLogger } from "../logger";
 import { encryptToken, decryptToken } from "../security/crypto";
@@ -9,7 +10,9 @@ import { getShopifyConfig, isValidShopDomain, shopifyLegacyId, toShopifyGid, SHO
 import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken, verifyCallbackHmac, verifyState } from "../shopify/oauth";
 import { buildProductMessageText } from "../shopify/product-message";
 import type {
+  ShopifyAutoMatchStatus,
   ShopifyCustomerSummary,
+  ShopifyOrderSearchResult,
   ShopifyMoney,
   ShopifyOrder,
   ShopifyPage,
@@ -106,21 +109,31 @@ const CUSTOMER_QUERY = /* GraphQL */ `
   }
 `;
 
+const ORDER_FIELDS = /* GraphQL */ `
+  id name createdAt cancelledAt closed displayFinancialStatus displayFulfillmentStatus
+  totalPriceSet { shopMoney { amount currencyCode } }
+  lineItems(first: 20) {
+    nodes { id title variantTitle quantity sku image { url(transform: { maxWidth: 120 }) } }
+    pageInfo { hasNextPage }
+  }
+`;
+
 const CUSTOMER_ORDERS_QUERY = /* GraphQL */ `
   query CustomerOrders($id: ID!, $first: Int!, $after: String) {
     customer(id: $id) {
       ${CUSTOMER_FIELDS}
       orders(first: $first, after: $after, sortKey: CREATED_AT, reverse: true) {
-        nodes {
-          id name createdAt cancelledAt closed displayFinancialStatus displayFulfillmentStatus
-          totalPriceSet { shopMoney { amount currencyCode } }
-          lineItems(first: 20) {
-            nodes { id title variantTitle quantity sku image { url(transform: { maxWidth: 120 }) } }
-            pageInfo { hasNextPage }
-          }
-        }
+        nodes { ${ORDER_FIELDS} }
         pageInfo { hasNextPage endCursor }
       }
+    }
+  }
+`;
+
+const SEARCH_ORDERS_QUERY = /* GraphQL */ `
+  query SearchOrders($query: String!) {
+    orders(first: 10, query: $query, sortKey: CREATED_AT, reverse: true) {
+      nodes { ${ORDER_FIELDS} customer { ${CUSTOMER_FIELDS} } }
     }
   }
 `;
@@ -212,15 +225,43 @@ function mapOrder(o: Node, shopDomain: string): ShopifyOrder {
 const quoteSearchValue = (value: string) => `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
 function buildProductSearchQuery(term: string): string {
-  const words = term
+  const words = prefixWords(term);
+  const quoted = quoteSearchValue(term);
+  const titleClause = words ? `(${words.replace(/(^| AND )/g, "$1title:")}) OR ` : "";
+  // Drafts and archived products can't be bought, so they're never offered for sharing
+  return `status:active AND (${titleClause}sku:${quoted} OR barcode:${quoted})`;
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_MATCH_IDENTIFIERS = 5;
+
+/** Letters, digits and a few separators of each word, as prefix terms: "jee kum" → "jee* AND kum*" */
+function prefixWords(term: string): string {
+  return term
     .split(/\s+/)
     .map((w) => w.replace(/[^\p{L}\p{N}_.-]/gu, ""))
     .filter(Boolean)
-    .slice(0, 6);
-  const quoted = quoteSearchValue(term);
-  const titleClause = words.length > 0 ? `(${words.map((w) => `title:${w}*`).join(" AND ")}) OR ` : "";
-  // Drafts and archived products can't be bought, so they're never offered for sharing
-  return `status:active AND (${titleClause}sku:${quoted} OR barcode:${quoted})`;
+    .slice(0, 6)
+    .map((w) => `${w}*`)
+    .join(" AND ");
+}
+
+/** Free-text customer search: an email, a phone number, or words of the name */
+function buildCustomerSearchQuery(term: string): string {
+  if (EMAIL_PATTERN.test(term)) return `email:${quoteSearchValue(term.toLowerCase())}`;
+  const digits = term.replace(/\D/g, "");
+  if (digits.length >= 6 && /^[\d\s()+.-]+$/.test(term)) return `phone:${quoteSearchValue(`+${digits}`)}`;
+  return prefixWords(term);
+}
+
+/** Order search: an order number ("#1001", "1001", "SO-1001"), an email, or any other text */
+function buildOrderSearchQuery(term: string): string {
+  if (EMAIL_PATTERN.test(term)) return `email:${quoteSearchValue(term.toLowerCase())}`;
+  if (/^#?[\p{L}\p{N}_-]*\d[\p{L}\p{N}_-]*$/u.test(term)) {
+    const bare = term.replace(/^#/, "");
+    return `name:${quoteSearchValue(`#${bare}`)} OR name:${quoteSearchValue(bare)}`;
+  }
+  return quoteSearchValue(term);
 }
 
 function hasScope(granted: string[], required: string): boolean {
@@ -522,20 +563,30 @@ export class ShopifyService {
 
   /* ---------------- Customers & links ---------------- */
 
-  async searchCustomers(organizationId: number, params: { email?: string; phone?: string }): Promise<ShopifyCustomerSummary[]> {
+  /** Customer search for linking: `q` is a name, email or phone number; `email` / `phone` match exactly */
+  async searchCustomers(
+    organizationId: number,
+    params: { q?: string; email?: string; phone?: string }
+  ): Promise<ShopifyCustomerSummary[]> {
+    const q = params.q?.trim().slice(0, 100);
     const email = params.email?.trim().toLowerCase();
     const phoneDigits = params.phone?.replace(/\D/g, "");
 
     const clauses: string[] = [];
+    if (q) {
+      const clause = buildCustomerSearchQuery(q);
+      if (!clause) throw AppError.validation("Enter a name, email address or phone number to search.", "q");
+      clauses.push(`(${clause})`);
+    }
     if (email) {
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw AppError.validation("Enter a valid email address.", "email");
+      if (!EMAIL_PATTERN.test(email)) throw AppError.validation("Enter a valid email address.", "email");
       clauses.push(`email:${quoteSearchValue(email)}`);
     }
     if (phoneDigits) {
       if (phoneDigits.length < 6) throw AppError.validation("Enter a phone number with its country code.", "phone");
       clauses.push(`phone:${quoteSearchValue(`+${phoneDigits}`)}`);
     }
-    if (clauses.length === 0) throw AppError.validation("Enter an email address or phone number to search.", "email");
+    if (clauses.length === 0) throw AppError.validation("Enter a name, email address or phone number to search.", "q");
 
     const store = await this.requireStore(organizationId);
     const data = await this.query<{ customers: { nodes: Node[] } }>(store, "search_customers", SEARCH_CUSTOMERS_QUERY, {
@@ -544,15 +595,32 @@ export class ShopifyService {
     return data.customers.nodes.map(mapCustomer);
   }
 
-  private async requireContact(organizationId: number, customerId: number) {
-    return await customerService.requireVisible(customerId, organizationId);
+  /** Orders by number, email or other text, each with its customer so the agent can link them */
+  async searchOrders(organizationId: number, term: string): Promise<ShopifyOrderSearchResult[]> {
+    const q = term.trim().slice(0, 100);
+    if (!q) throw AppError.validation("Enter an order number or email address to search.", "q");
+
+    const store = await this.requireStore(organizationId);
+    const data = await this.query<{ orders: { nodes: Node[] } }>(store, "search_orders", SEARCH_ORDERS_QUERY, {
+      query: buildOrderSearchQuery(q),
+    });
+    return data.orders.nodes.map((o) => ({
+      order: mapOrder(o, store.shopDomain),
+      customer: o.customer ? mapCustomer(o.customer) : null,
+    }));
+  }
+
+  /** The contact's profile id: Shopify links are shared by every channel identity of a person */
+  private async requireProfile(organizationId: number, customerId: number) {
+    const contact = await customerService.requireVisible(customerId, organizationId);
+    return { contact, profileId: customerService.profileIdOf(contact) };
   }
 
   async linkCustomer(user: AuthUser, customerId: number, shopifyCustomerId: string) {
     const gid = toShopifyGid("Customer", shopifyCustomerId);
     if (!gid) throw AppError.validation("Invalid Shopify customer id.", "shopifyCustomerId");
 
-    await this.requireContact(user.organizationId, customerId);
+    const { profileId } = await this.requireProfile(user.organizationId, customerId);
     const store = await this.requireStore(user.organizationId);
 
     // Never trust the id from the browser: it has to be a real customer of this store
@@ -560,7 +628,7 @@ export class ShopifyService {
     if (!customer) throw AppError.notFound("This customer was not found in your Shopify store.");
 
     const other = await shopifyRepository.findLinkByShopifyCustomer(user.organizationId, store.id, gid);
-    if (other && other.customerId !== customerId) {
+    if (other && other.customerId !== profileId) {
       throw new AppError("SHOPIFY_CUSTOMER_ALREADY_LINKED", { details: { linkedContactId: other.customerId }, expected: true });
     }
 
@@ -568,9 +636,10 @@ export class ShopifyService {
       await shopifyRepository.upsertLink({
         organizationId: user.organizationId,
         storeId: store.id,
-        customerId,
+        customerId: profileId,
         shopifyCustomerId: gid,
         linkedById: user.id,
+        source: ShopifyLinkSource.MANUAL,
       });
     } catch (err) {
       const appError = toAppError(err);
@@ -580,39 +649,103 @@ export class ShopifyService {
       throw appError;
     }
 
-    log.info("Contact linked to Shopify customer", { customerId, storeId: store.id, shopifyCustomerId: gid });
+    log.info("Contact linked to Shopify customer", { customerId, profileId, storeId: store.id, shopifyCustomerId: gid });
     return mapCustomer(customer);
   }
 
-  async unlinkCustomer(organizationId: number, customerId: number): Promise<void> {
-    await this.requireContact(organizationId, customerId);
-    const store = await shopifyRepository.findActiveStore(organizationId);
+  async unlinkCustomer(user: AuthUser, customerId: number): Promise<void> {
+    const { profileId } = await this.requireProfile(user.organizationId, customerId);
+    const store = await shopifyRepository.findActiveStore(user.organizationId);
     if (!store) throw new AppError("SHOPIFY_NOT_CONNECTED", { expected: true });
 
-    const removed = await shopifyRepository.deleteLink(organizationId, store.id, customerId);
+    const removed = await shopifyRepository.markUnlinked(user.organizationId, store.id, profileId, user.id);
     if (!removed) throw AppError.notFound("This contact isn't linked to a Shopify customer.");
-    log.info("Contact unlinked from Shopify customer", { customerId, storeId: store.id });
+    log.info("Contact unlinked from Shopify customer", { customerId, profileId, storeId: store.id });
   }
 
-  /** Link + Shopify customer + one page of their orders, for the contact panel */
+  /**
+   * Finds the profile's Shopify customer by the phone numbers and emails of all its channel identities.
+   * Exactly one unclaimed match is linked automatically; anything else is left for an agent to choose.
+   */
+  private async autoMatch(
+    store: ShopifyStoreWithUser,
+    organizationId: number,
+    profileId: number
+  ): Promise<{ status: ShopifyAutoMatchStatus; candidates: ShopifyCustomerSummary[] }> {
+    const members = await customerRepository.listProfileMembers(organizationId, profileId);
+    const phones = [...new Set(members.map((m) => m.phone?.replace(/\D/g, "")).filter((p): p is string => !!p && p.length >= 6))];
+    const emails = [...new Set(members.map((m) => m.email?.trim().toLowerCase()).filter((e): e is string => !!e && EMAIL_PATTERN.test(e)))];
+    if (phones.length === 0 && emails.length === 0) return { status: "no_details", candidates: [] };
+
+    const clauses = [
+      ...phones.slice(0, MAX_MATCH_IDENTIFIERS).map((p) => `phone:${quoteSearchValue(`+${p}`)}`),
+      ...emails.slice(0, MAX_MATCH_IDENTIFIERS).map((e) => `email:${quoteSearchValue(e)}`),
+    ];
+    const data = await this.query<{ customers: { nodes: Node[] } }>(store, "match_customers", SEARCH_CUSTOMERS_QUERY, {
+      query: clauses.join(" OR "),
+    });
+
+    // Shopify search is fuzzy; only exact phone or email matches count
+    const candidates = data.customers.nodes
+      .map(mapCustomer)
+      .filter((c) => (c.phone && phones.includes(c.phone.replace(/\D/g, ""))) || (c.email && emails.includes(c.email.toLowerCase())));
+    if (candidates.length === 0) return { status: "none", candidates };
+    if (candidates.length > 1) return { status: "review", candidates };
+
+    const [match] = candidates;
+    const claimed = await shopifyRepository.findLinkByShopifyCustomer(organizationId, store.id, match.id);
+    if (claimed && claimed.customerId !== profileId) return { status: "review", candidates };
+
+    try {
+      await shopifyRepository.upsertLink({
+        organizationId,
+        storeId: store.id,
+        customerId: profileId,
+        shopifyCustomerId: match.id,
+        linkedById: null,
+        source: ShopifyLinkSource.AUTO,
+      });
+    } catch (err) {
+      // Another contact claimed this customer at the same moment
+      if (toAppError(err).code === "DB_CONSTRAINT_VIOLATION") return { status: "review", candidates };
+      throw err;
+    }
+    log.info("Contact linked to Shopify customer automatically", { profileId, storeId: store.id, shopifyCustomerId: match.id });
+    return { status: "none", candidates: [] };
+  }
+
+  /** Link + Shopify customer + one page of their orders, for the contact panel. Matches unlinked contacts first. */
   async getContactOrders(
     organizationId: number,
     customerId: number,
     after?: string | null
   ): Promise<Omit<ShopifyContactOrdersResponse, "success">> {
-    await this.requireContact(organizationId, customerId);
+    const { profileId } = await this.requireProfile(organizationId, customerId);
     const emptyOrders: ShopifyPage<ShopifyOrder> = { items: [], hasNextPage: false, endCursor: null };
+    const unlinked = (autoMatch: ShopifyContactOrdersResponse["autoMatch"]) => ({
+      connected: true,
+      link: null,
+      shopifyCustomer: null,
+      orders: emptyOrders,
+      autoMatch,
+    });
 
     const store = await shopifyRepository.findActiveStore(organizationId);
-    if (!store) return { connected: false, link: null, shopifyCustomer: null, orders: emptyOrders };
+    if (!store) return { connected: false, link: null, shopifyCustomer: null, orders: emptyOrders, autoMatch: null };
     if (store.status === ShopifyStoreStatus.REAUTH_REQUIRED) throw new AppError("SHOPIFY_AUTH_FAILED", { expected: true });
 
-    const link = await shopifyRepository.findLink(organizationId, store.id, customerId);
-    if (!link) return { connected: true, link: null, shopifyCustomer: null, orders: emptyOrders };
+    let link = await shopifyRepository.findLink(organizationId, store.id, profileId);
+    if (link && !link.shopifyCustomerId) return unlinked({ status: "dismissed", candidates: [] });
+    if (!link) {
+      const match = await this.autoMatch(store, organizationId, profileId);
+      link = await shopifyRepository.findLink(organizationId, store.id, profileId);
+      if (!link?.shopifyCustomerId) return unlinked(link ? { status: "dismissed", candidates: [] } : match);
+    }
 
     const linkInfo = {
       id: link.id,
-      shopifyCustomerId: link.shopifyCustomerId,
+      shopifyCustomerId: link.shopifyCustomerId!,
+      source: link.source,
       linkedAt: link.createdAt.toISOString(),
       linkedByName: link.linkedByName,
     };
@@ -623,7 +756,7 @@ export class ShopifyService {
       after: after || null,
     });
     // Deleted or merged in Shopify: keep the link so the agent sees it and can re-link
-    if (!customer) return { connected: true, link: linkInfo, shopifyCustomer: null, orders: emptyOrders };
+    if (!customer) return { connected: true, link: linkInfo, shopifyCustomer: null, orders: emptyOrders, autoMatch: null };
 
     return {
       connected: true,
@@ -634,6 +767,7 @@ export class ShopifyService {
         hasNextPage: Boolean(customer.orders?.pageInfo?.hasNextPage),
         endCursor: customer.orders?.pageInfo?.endCursor ?? null,
       },
+      autoMatch: null,
     };
   }
 }
