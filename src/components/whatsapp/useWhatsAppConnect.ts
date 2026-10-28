@@ -22,10 +22,10 @@ export const getFacebookSdk = (): Promise<any> => {
 
     (window as any).fbAsyncInit = function () {
       (window as any).FB?.init({
-        appId: process.env.NEXT_PUBLIC_META_APP_ID || '1388239869739882',
+        appId: process.env.NEXT_PUBLIC_META_APP_ID,
         cookie: true,
         xfbml: true,
-        version: process.env.NEXT_PUBLIC_META_GRAPH_VERSION || 'v25.0',
+        version: process.env.NEXT_PUBLIC_META_GRAPH_VERSION,
       });
       resolve((window as any).FB);
     };
