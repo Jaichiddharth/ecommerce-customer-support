@@ -513,6 +513,51 @@ export class WhatsAppService {
       throw AppError.validation("The recipient phone number is invalid.", "to");
     }
 
+    // 24-Hour Customer Care Window enforcement (WhatsApp Business Platform Policy):
+    // Free-form text and media messages can only be sent within 24 hours of the customer's last incoming message.
+    // Outside this window (or if no message was ever received), ONLY pre-approved templates can be sent.
+    const isTemplate = params.type === "template" || Boolean(params.templateName);
+    if (!isTemplate) {
+      let targetCustomerForWindow = contact;
+      if (!targetCustomerForWindow) {
+        targetCustomerForWindow = await customerRepository.findByPhone(orgId, cleanTo, targetChannel.id);
+      }
+
+      let lastInbound: Message | null = null;
+      if (targetCustomerForWindow) {
+        lastInbound = await messageRepository.findLastReceivedFromCustomer(targetCustomerForWindow.id, orgId);
+      }
+
+      const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
+      if (!lastInbound) {
+        throw new AppError("MESSAGE_WINDOW_EXPIRED", {
+          message: "More than 24 hours have passed since the customer last messaged (or no message received yet). Send an approved template message to start the conversation.",
+          expected: true,
+          details: {
+            customerId: targetCustomerForWindow?.id,
+            to: cleanTo,
+            lastReceivedAt: null,
+            reason: "no_incoming_message",
+          },
+        });
+      }
+
+      const elapsedMs = Date.now() - new Date(lastInbound.createdAt).getTime();
+      if (elapsedMs > WINDOW_24H_MS) {
+        const hoursAgo = Math.floor(elapsedMs / (1000 * 60 * 60));
+        throw new AppError("MESSAGE_WINDOW_EXPIRED", {
+          message: `The 24-hour messaging window has expired (last customer message was ${hoursAgo}h ago). You can only send pre-approved template messages.`,
+          expected: true,
+          details: {
+            customerId: targetCustomerForWindow?.id,
+            to: cleanTo,
+            lastReceivedAt: lastInbound.createdAt,
+            hoursSinceLastReceived: hoursAgo,
+          },
+        });
+      }
+    }
+
     // Resolve media type from mimeType or explicit type
     const getMediaTypeFromMime = (mime?: string): 'image' | 'video' | 'audio' | 'document' => {
       if (!mime) return 'document';
