@@ -38,10 +38,12 @@ export function classifyMetaError(
 ): MetaErrorClassification {
   const entry = getMetaErrorInfo(metaCode);
   if (entry) {
+    // A bare "invalid parameter" says nothing; Meta's own user text names the actual problem
+    const preferMetaText = entry.code === "META_INVALID_REQUEST" && Boolean(metaUserText?.message);
     return {
       code: entry.code,
-      title: entry.title,
-      message: entry.userMessage,
+      title: preferMetaText ? metaUserText?.title || entry.title : entry.title,
+      message: preferMetaText ? metaUserText!.message! : entry.userMessage,
       description: entry.description,
       solution: entry.solution,
       retryable: Boolean(entry.retryable),

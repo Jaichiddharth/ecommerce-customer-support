@@ -53,6 +53,13 @@ import { VirtualMessageList } from './inbox/VirtualMessageList';
 import { InboxTopBar } from './inbox/InboxTopBar';
 import { ProductBrowser, type ShareProductArgs } from './shopify/ProductBrowser';
 import { useShopifyStore } from './shopify/useShopifyStore';
+import { TemplateComposer, forgetCachedTemplates, type TemplateDraft } from './inbox/TemplateComposer';
+import {
+  buildTemplateSendComponents,
+  getTemplateSendFields,
+  getTemplateValueErrors,
+  renderTemplateMessage,
+} from '@/lib/whatsapp-templates';
 import {
   CHANNEL_LABELS,
   CHANNEL_THREAD_LABELS,
@@ -197,7 +204,8 @@ const mapApiMessage = (m: any, channel: string): Message => {
     status: m.status !== undefined ? normalizeMessageStatus(m.status) : MessageStatus.DELIVERED,
     errorCode: m.errorCode || undefined,
     type: m.mediaType || (m.mediaUrl ? 'image' : 'text'),
-    mediaType: m.mediaType || undefined,
+    // A template's header file is stored as its media; show it as the header's kind (image/video/document)
+    mediaType: m.metadata?.template?.headerFormat || m.mediaType || undefined,
     mediaUrl: m.mediaUrl || undefined,
     metaMessageId: m.metaMessageId || undefined,
     isInternalNote: Boolean(m.isInternalNote),
@@ -233,13 +241,6 @@ interface ThreadPaging {
 }
 
 type ComposerMode = 'reply' | 'note' | 'template';
-
-const SAVED_REPLIES = [
-  { title: 'Welcome greeting', text: 'Hi! Thank you for reaching out to us. How can I help you today?' },
-  { title: 'Order status check', text: 'We have checked your order details and it is currently in transit. Expected delivery is tomorrow.' },
-  { title: 'Refund / return policy', text: 'We offer a hassle-free 7-day return and exchange policy. Would you like me to generate a return label?' },
-  { title: 'Closing conversation', text: 'Thank you for contacting us! Please let us know if you need anything else. Have a wonderful day!' },
-];
 
 export interface InboxCounts {
   unread: number;
@@ -301,6 +302,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [templateDraft, setTemplateDraft] = useState<TemplateDraft | null>(null);
+  const [templateRevision, setTemplateRevision] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -443,6 +446,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       prev.map((c) => (c.customer.id === selectedCustomerId && c.unreadCount > 0 ? { ...c, unreadCount: 0 } : c))
     );
     setComposerMode('reply');
+    setTemplateDraft(null);
     setShowModeMenu(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCustomerId, fetchMessagesForCustomer]);
@@ -648,6 +652,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     onChannelUpdated: () => {
       fetchChannels();
       refreshConversationsSoon();
+    },
+    // A newly approved (or paused) template must show up in, or drop out of, the Template tab
+    onTemplateStatus: () => {
+      forgetCachedTemplates();
+      setTemplateRevision((r) => r + 1);
     },
   });
 
@@ -1104,8 +1113,119 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
+  // -------------------------------------------------------------
+  // WHATSAPP TEMPLATES
+  // -------------------------------------------------------------
+  const templateDisabledReason = !activeConv
+    ? null
+    : activeChannelType !== 'whatsapp'
+      ? 'Message templates can only be sent on WhatsApp.'
+      : isChannelDisconnected
+        ? 'This WhatsApp number is disconnected. Reconnect it in Settings to send templates.'
+        : !activeConv.customer.phone
+          ? `${activeConv.customer.name} has no phone number.`
+          : !conversationSendChannel
+            ? 'No connected WhatsApp channel found.'
+            : null;
+
+  const templateReady = Boolean(
+    templateDraft && Object.keys(getTemplateValueErrors(templateDraft.template, templateDraft.values)).length === 0
+  );
+
+  /** Sends the chosen approved template; works outside the 24-hour window, unlike a normal reply */
+  const handleSendTemplate = async () => {
+    if (!activeConv || !templateDraft) return;
+    if (templateDisabledReason) {
+      gooeyToast.error(templateDisabledReason);
+      return;
+    }
+    if (!templateReady) {
+      gooeyToast.error('Fill in every template variable before sending.');
+      return;
+    }
+
+    const { template, values } = templateDraft;
+    const targetChannel = conversationSendChannel!;
+    const convId = convKeyFor(activeConv.customer.id);
+    const tempId = `msg-${Date.now()}`;
+    const text = renderTemplateMessage(template, values);
+
+    clientLogger.debug('InboxView.handleSendTemplate', 'Sending WhatsApp template', {
+      channelId: targetChannel.id,
+      customerId: activeConv.customer.id,
+      template: template.name,
+      language: template.language,
+    });
+
+    // Until the stored message arrives, show the header from the approved sample
+    const mediaField = getTemplateSendFields(template).find((f) => f.kind === 'header_media');
+    const headerPreview = mediaField?.example;
+
+    upsertMessage(convId, {
+      id: tempId,
+      sender: 'agent',
+      senderId: dbUser?.id ?? null,
+      senderName: dbUser?.name ?? null,
+      channel: 'whatsapp',
+      text,
+      timestamp: formatTime(),
+      createdAt: new Date().toISOString(),
+      status: MessageStatus.SENT,
+      type: 'template',
+      mediaType: mediaField?.mediaFormat?.toLowerCase() ?? 'template',
+      mediaUrl: headerPreview,
+    });
+    setIsSending(true);
+
+    try {
+      let sendValues = values;
+      if (mediaField && !values.header_media) {
+        // Meta's sample link can't be sent as-is; the server re-uploads it and returns a media id
+        const media = await apiClient.post('/api/channels/whatsapp/templates/header-media', {
+          channelId: targetChannel.id,
+          templateId: template.id,
+        });
+        sendValues = { ...values, header_media: media.data.data.mediaId };
+        // Keep the id so a retry doesn't upload the sample again
+        setTemplateDraft((d) => (d && d.template === template ? { ...d, values: sendValues } : d));
+      }
+
+      const res = await apiClient.post('/api/channels/whatsapp/send', {
+        to: activeConv.customer.phone,
+        channelId: targetChannel.id,
+        customerId: activeConv.customer.id,
+        type: 'template',
+        templateName: template.name,
+        languageCode: template.language,
+        components: buildTemplateSendComponents(template, sendValues),
+        // Stored as the message text so the thread shows what the customer received
+        text,
+      });
+      if (res.data?.persisted === false) {
+        notifyWarning('Template delivered, but not saved', res.data?.warning);
+      }
+      setTemplateDraft(null);
+      setComposerMode('reply');
+      fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
+      refreshConversationsSoon();
+    } catch (err) {
+      // The draft stays filled so the agent can fix it and resend
+      const apiError = notifyError(err, { where: 'InboxView.handleSendTemplate', title: 'Template not sent' });
+      const metaCode = typeof apiError.details?.metaCode === 'number' ? apiError.details.metaCode : null;
+      setMessagesMap((prev) => ({
+        ...prev,
+        [convId]: (prev[convId] || []).map((m) =>
+          m.id === tempId ? { ...m, status: MessageStatus.FAILED, errorCode: metaCode, errorMessage: apiError.message } : m
+        ),
+      }));
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   const handleSubmitComposer = () => {
     if (composerMode === 'note') handleAddNote();
+    else if (composerMode === 'template') handleSendTemplate();
     else handleSend();
   };
 
@@ -1337,7 +1457,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         ? `INTERNAL NOTE · ${agentName.toUpperCase()}`
         : isAi
           ? `AI AGENT${msg.aiAction ? ` · ${msg.aiAction.toUpperCase()}` : ''}`
-          : agentName.toUpperCase();
+          : `${agentName.toUpperCase()}${msg.type === 'template' ? ' · TEMPLATE' : ''}`;
 
     const bubbleClass = isCustomer
       ? 'bg-white border border-slate-200 text-slate-800'
@@ -1706,18 +1826,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                   </div>
 
                   {composerMode === 'template' ? (
-                    <div className="mt-1 border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-48 overflow-y-auto">
-                      {SAVED_REPLIES.map((tpl) => (
-                        <button
-                          key={tpl.title}
-                          onClick={() => applySuggestion(tpl.text)}
-                          className="w-full text-left px-3 py-2 hover:bg-slate-50 cursor-pointer"
-                        >
-                          <span className="block text-[13px] font-medium text-slate-900">{tpl.title}</span>
-                          <span className="block text-xs text-slate-500 truncate">{tpl.text}</span>
-                        </button>
-                      ))}
-                    </div>
+                    <TemplateComposer
+                      phoneNumberId={conversationSendChannel?.metaPhoneNumberId}
+                      draft={templateDraft}
+                      onDraftChange={setTemplateDraft}
+                      disabledReason={templateDisabledReason}
+                      revision={templateRevision}
+                    />
                   ) : (
                     <>
                       {selectedFile && composerMode === 'reply' && (
@@ -1811,8 +1926,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                         <button
                           type="button"
                           onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                          disabled={composerMode === 'template'}
                           title="Insert emoji"
-                          className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 cursor-pointer"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <Smile className="w-[18px] h-[18px]" />
                         </button>
@@ -1861,14 +1977,18 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       type="button"
                       onClick={handleSubmitComposer}
                       disabled={
-                        composerMode === 'template' ||
                         isSending ||
-                        (composerMode === 'note' ? !inputMessage.trim() : (!inputMessage.trim() && !selectedFile) || !canSendOnChannel)
+                        (composerMode === 'template'
+                          ? !templateReady || Boolean(templateDisabledReason)
+                          : composerMode === 'note'
+                            ? !inputMessage.trim()
+                            : (!inputMessage.trim() && !selectedFile) || !canSendOnChannel)
                       }
+                      title={composerMode === 'template' && templateDraft && !templateReady ? 'Fill in every template variable first' : undefined}
                       className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-[#3440a8] hover:bg-[#2b3590] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold cursor-pointer shrink-0"
                     >
                       {isSending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      {composerMode === 'note' ? 'Add note' : 'Send'}
+                      {composerMode === 'note' ? 'Add note' : composerMode === 'template' ? 'Send template' : 'Send'}
                     </button>
                   </div>
                 </div>

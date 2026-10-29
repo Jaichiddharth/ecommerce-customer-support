@@ -29,6 +29,8 @@ export interface SharedShopifyProduct {
 export interface MessageMetadata {
   aiAction?: string; // e.g. 'catalog lookup'
   shopifyProduct?: SharedShopifyProduct; // Set when an agent shares a Shopify product
+  /** Set on template messages; `headerFormat` tells the UI how to show the header media in `mediaUrl` */
+  template?: { name: string; language: string; headerFormat?: "image" | "video" | "document" };
   [key: string]: unknown;
 }
 

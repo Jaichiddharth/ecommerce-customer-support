@@ -304,6 +304,35 @@ export class MessageRepository {
       isRead ? MessageStatus.READ : MessageStatus.DELIVERED
     );
   }
+
+  /**
+   * How often each template was sent from a channel and how many of those were read.
+   * Failed sends are not counted. Only messages that recorded `metadata.template` are included.
+   */
+  async templateStatsByChannel(
+    organizationId: number,
+    channelId: number
+  ): Promise<Array<{ name: string; language: string; sent: number; read: number }>> {
+    const name = sql<string>`${messages.metadata}->'template'->>'name'`;
+    const language = sql<string>`${messages.metadata}->'template'->>'language'`;
+
+    return await db
+      .select({
+        name,
+        language,
+        sent: sql<number>`count(*) filter (where ${messages.status} <> ${MessageStatus.FAILED})::int`,
+        read: sql<number>`count(*) filter (where ${messages.status} = ${MessageStatus.READ})::int`,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.organizationId, organizationId),
+          eq(messages.channelId, channelId),
+          sql`${messages.metadata}->'template'->>'name' is not null`
+        )
+      )
+      .groupBy(name, language);
+  }
 }
 
 export const messageRepository = new MessageRepository();
