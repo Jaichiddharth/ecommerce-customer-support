@@ -22,6 +22,7 @@ export interface InboxConversation {
   createdAt: string;
   resolvedAt: string | null;
   unreadCount: number;
+  lastReceivedMessageAt?: string | null;
   lastMessage: {
     senderType: string;
     mediaType: string | null;

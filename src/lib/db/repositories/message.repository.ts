@@ -304,6 +304,29 @@ export class MessageRepository {
       isRead ? MessageStatus.READ : MessageStatus.DELIVERED
     );
   }
+
+  /**
+   * Find the most recent inbound message received from a customer (senderType = 'customer')
+   */
+  async findLastReceivedFromCustomer(
+    customerId: number,
+    organizationId: number
+  ): Promise<Message | null> {
+    const [message] = await db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.organizationId, organizationId),
+          eq(messages.customerId, customerId),
+          eq(messages.senderType, "customer")
+        )
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+
+    return message || null;
+  }
 }
 
 export const messageRepository = new MessageRepository();
