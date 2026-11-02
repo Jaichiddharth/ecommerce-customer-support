@@ -24,6 +24,9 @@ import {
 
 const log = createLogger("WhatsAppService");
 
+/** WhatsApp's customer service window: free-form messages are allowed for 24h after the customer's last message */
+const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 // Channel id → WABA id confirmed to contain the channel's number (checked once per server process)
 const verifiedWabaIds = new Map<number, string>();
 
@@ -641,6 +644,32 @@ export class WhatsAppService {
   }
 
   /**
+   * WhatsApp's 24-hour customer service window: anything other than an approved template (text, media,
+   * reactions) can only be sent within 24 hours of the customer's last message. Throws MESSAGE_WINDOW_EXPIRED
+   * when the window is closed or the customer has never written.
+   */
+  private async assertServiceWindowOpen(customerId: number | null, orgId: number, to?: string) {
+    const lastInbound = customerId ? await messageRepository.findLastReceivedFromCustomer(customerId, orgId) : null;
+    if (!lastInbound) {
+      throw new AppError("MESSAGE_WINDOW_EXPIRED", {
+        message: "This customer hasn't messaged you yet. Send an approved template message to start the conversation.",
+        expected: true,
+        details: { customerId, to, lastReceivedAt: null, reason: "no_incoming_message" },
+      });
+    }
+
+    const elapsedMs = Date.now() - new Date(lastInbound.createdAt).getTime();
+    if (elapsedMs > SERVICE_WINDOW_MS) {
+      const hoursAgo = Math.floor(elapsedMs / (60 * 60 * 1000));
+      throw new AppError("MESSAGE_WINDOW_EXPIRED", {
+        message: `The 24-hour messaging window has expired (last customer message was ${hoursAgo}h ago). You can only send pre-approved template messages.`,
+        expected: true,
+        details: { customerId, to, lastReceivedAt: lastInbound.createdAt, hoursSinceLastReceived: hoursAgo },
+      });
+    }
+  }
+
+  /**
    * Send WhatsApp message (Text, Template, or Media with Caption) to a recipient using Meta Cloud API
    */
   async sendMessage(params: {
@@ -728,49 +757,15 @@ export class WhatsAppService {
       throw AppError.validation("The recipient phone number is invalid.", "to");
     }
 
-    // 24-Hour Customer Care Window enforcement (WhatsApp Business Platform Policy):
-    // Free-form text and media messages can only be sent within 24 hours of the customer's last incoming message.
-    // Outside this window (or if no message was ever received), ONLY pre-approved templates can be sent.
-    const isTemplate = params.type === "template" || Boolean(params.templateName);
+    // Only a template can be sent outside the 24-hour window. Both fields are required, because the template
+    // branch below needs both: anything else falls through to the text/media branches and must be checked.
+    const isTemplate = params.type === "template" && Boolean(params.templateName);
+    if (params.type === "template" && !params.templateName) {
+      throw AppError.validation("Choose a template to send.", "templateName");
+    }
     if (!isTemplate) {
-      let targetCustomerForWindow = contact;
-      if (!targetCustomerForWindow) {
-        targetCustomerForWindow = await customerRepository.findByPhone(orgId, cleanTo, targetChannel.id);
-      }
-
-      let lastInbound: Message | null = null;
-      if (targetCustomerForWindow) {
-        lastInbound = await messageRepository.findLastReceivedFromCustomer(targetCustomerForWindow.id, orgId);
-      }
-
-      const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
-      if (!lastInbound) {
-        throw new AppError("MESSAGE_WINDOW_EXPIRED", {
-          message: "More than 24 hours have passed since the customer last messaged (or no message received yet). Send an approved template message to start the conversation.",
-          expected: true,
-          details: {
-            customerId: targetCustomerForWindow?.id,
-            to: cleanTo,
-            lastReceivedAt: null,
-            reason: "no_incoming_message",
-          },
-        });
-      }
-
-      const elapsedMs = Date.now() - new Date(lastInbound.createdAt).getTime();
-      if (elapsedMs > WINDOW_24H_MS) {
-        const hoursAgo = Math.floor(elapsedMs / (1000 * 60 * 60));
-        throw new AppError("MESSAGE_WINDOW_EXPIRED", {
-          message: `The 24-hour messaging window has expired (last customer message was ${hoursAgo}h ago). You can only send pre-approved template messages.`,
-          expected: true,
-          details: {
-            customerId: targetCustomerForWindow?.id,
-            to: cleanTo,
-            lastReceivedAt: lastInbound.createdAt,
-            hoursSinceLastReceived: hoursAgo,
-          },
-        });
-      }
+      const windowCustomer = contact ?? (await customerRepository.findByPhone(orgId, cleanTo, targetChannel.id));
+      await this.assertServiceWindowOpen(windowCustomer?.id ?? null, orgId, cleanTo);
     }
 
     // Resolve media type from mimeType or explicit type
@@ -1056,6 +1051,12 @@ export class WhatsAppService {
     const connections = await this.getConnections(orgId);
     const targetMetaId = params.targetMetaMessageId || targetMessage.metaMessageId;
     const resolvedCustomerId = targetMessage.customerId;
+
+    // A reaction is a free-form message, so WhatsApp only delivers it (or its removal) inside the 24-hour window.
+    // Checked before saving, so we never keep a reaction the customer can't see.
+    if (targetMetaId && connections.length > 0) {
+      await this.assertServiceWindowOpen(resolvedCustomerId, orgId);
+    }
 
     // 2. Upsert or delete reaction in DB
     const reactionRecord = await messageReactionRepository.upsertReaction({

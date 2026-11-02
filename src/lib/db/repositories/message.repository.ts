@@ -8,6 +8,7 @@ import {
   type MessageMetadata,
   MessageStatus,
   normalizeMessageStatus,
+  opensServiceWindow,
 } from "../schema";
 import { eq, and, asc, desc, ne, sql, getTableColumns } from "drizzle-orm";
 import { messageReactionRepository } from "./message-reaction.repository";
@@ -335,9 +336,7 @@ export class MessageRepository {
   }
 
 
-  /* Find the most recent inbound message received from a customer (senderType = 'customer')
-     */
-
+  /** The customer's most recent message that opens WhatsApp's 24-hour window (see `opensServiceWindow`) */
   async findLastReceivedFromCustomer(
     customerId: number,
     organizationId: number
@@ -349,7 +348,7 @@ export class MessageRepository {
         and(
           eq(messages.organizationId, organizationId),
           eq(messages.customerId, customerId),
-          eq(messages.senderType, "customer")
+          opensServiceWindow
         )
       )
       .orderBy(desc(messages.createdAt))

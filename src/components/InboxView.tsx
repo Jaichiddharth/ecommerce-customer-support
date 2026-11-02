@@ -4,7 +4,6 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import apiClient from '@/lib/api/client';
 
 import {
-  Send,
   Paperclip,
   Smile,
   Plus,
@@ -28,8 +27,6 @@ import {
   ShoppingBag,
   Clock,
   AlertTriangle,
-  Search,
-  RefreshCw,
 } from 'lucide-react';
 import { Message, MessageStatus, normalizeMessageStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -170,7 +167,7 @@ const renderMessageWithLinks = (text: string) => {
 const isPlaceholderText = (text?: string) =>
   !text ||
   !text.trim() ||
-  /^\[(Image|Video|Audio|Document|Voice)\](\s*(No caption|attachment)?)?$/i.test(text) ||
+  /^\[(Image|Video|Audio|Document|Voice|Sticker)\](\s*(No caption|attachment)?)?$/i.test(text) ||
   text === '[Image] No caption' ||
   text === '[Video] No caption';
 
@@ -245,32 +242,6 @@ interface ThreadPaging {
 }
 
 type ComposerMode = 'reply' | 'note' | 'template';
-
-export interface MetaTemplateComponent {
-  type: string;
-  format?: string;
-  text?: string;
-  example?: {
-    body_text?: string[][];
-    header_text?: string[];
-    header_handle?: string[];
-  };
-  buttons?: Array<{
-    type: string;
-    text: string;
-    url?: string;
-    phone_number?: string;
-  }>;
-}
-
-export interface MetaTemplate {
-  id: string;
-  name: string;
-  status: string;
-  category: string;
-  language: string;
-  components?: MetaTemplateComponent[];
-}
 
 export interface InboxCounts {
   unread: number;
@@ -802,7 +773,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     for (let i = activeMessages.length - 1; i >= 0; i--) {
       const msg = activeMessages[i];
       const raw = msg.createdAt;
-      if (msg.sender === 'customer' && raw) {
+      // `system` notices (e.g. "customer changed number") come from WhatsApp, not the customer, so they don't open the window
+      if (msg.sender === 'customer' && msg.mediaType !== 'system' && raw) {
         const time = new Date(raw).getTime();
         if (!isNaN(time)) return time;
       }
@@ -813,6 +785,14 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     }
     return null;
   }, [activeMessages, activeConv?.lastReceivedMessageAt]);
+
+  // Ticks every minute so an open chat notices the window closing (and the hours left stay current)
+  const [windowClock, setWindowClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (activeChannelType !== 'whatsapp') return;
+    const timer = setInterval(() => setWindowClock(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [activeChannelType]);
 
   const window24hStatus = useMemo(() => {
     if (activeChannelType !== 'whatsapp') {
@@ -834,7 +814,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       };
     }
     const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
-    const elapsed = Date.now() - lastCustomerMessageTime;
+    // The clock can lag a message that just arrived by up to a minute; never let that read as negative time
+    const elapsed = Math.max(0, windowClock - lastCustomerMessageTime);
     if (elapsed > WINDOW_24H_MS) {
       const hoursAgo = Math.floor(elapsed / (1000 * 60 * 60));
       return {
@@ -854,179 +835,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       hoursSinceLast: null,
       hasReceivedMessage: true,
     };
-  }, [activeChannelType, lastCustomerMessageTime]);
+  }, [activeChannelType, lastCustomerMessageTime, windowClock]);
 
   const isWindowExpired = window24hStatus.isExpired;
-
-  // -------------------------------------------------------------
-  // WHATSAPP META TEMPLATES
-  // -------------------------------------------------------------
-  const [metaTemplates, setMetaTemplates] = useState<MetaTemplate[]>([]);
-  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState<MetaTemplate | null>(null);
-  const [templateSearch, setTemplateSearch] = useState('');
-  const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({});
-  const [isSendingTemplate, setIsSendingTemplate] = useState(false);
-
-  const fetchMetaTemplates = useCallback(async (phoneId?: string | null) => {
-    try {
-      setIsLoadingTemplates(true);
-      const url = phoneId
-        ? `/api/channels/whatsapp/meta-details?phoneNumberId=${encodeURIComponent(phoneId)}`
-        : '/api/channels/whatsapp/meta-details';
-      const res = await apiClient.get(url);
-      if (res.data?.success && Array.isArray(res.data.templates)) {
-        const approved = res.data.templates.filter(
-          (t: MetaTemplate) => !t.status || t.status.toUpperCase() === 'APPROVED'
-        );
-        setMetaTemplates(approved);
-      }
-    } catch (err) {
-      clientLogger.warn('InboxView.fetchMetaTemplates', 'Could not load WhatsApp templates', err);
-    } finally {
-      setIsLoadingTemplates(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (activeChannelType === 'whatsapp' && (composerMode === 'template' || isWindowExpired)) {
-      if (metaTemplates.length === 0 && !isLoadingTemplates) {
-        fetchMetaTemplates(conversationSendChannel?.metaPhoneNumberId);
-      }
-    }
-  }, [
-    activeChannelType,
-    composerMode,
-    isWindowExpired,
-    metaTemplates.length,
-    isLoadingTemplates,
-    fetchMetaTemplates,
-    conversationSendChannel?.metaPhoneNumberId,
-  ]);
-
-  useEffect(() => {
-    setSelectedTemplate(null);
-    setTemplateVariables({});
-    setTemplateSearch('');
-  }, [activeConv?.id]);
-
-  const handleSelectTemplate = (tpl: MetaTemplate) => {
-    setSelectedTemplate(tpl);
-    const bodyComp = tpl.components?.find((c) => c.type.toUpperCase() === 'BODY');
-    const matches = Array.from(new Set(bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || []));
-    const initVars: Record<string, string> = {};
-    for (const m of matches) {
-      const num = m.replace(/[{}]/g, '');
-      if (num === '1' && activeConv?.customer.name) {
-        initVars[num] = activeConv.customer.name;
-      } else {
-        initVars[num] = '';
-      }
-    }
-    setTemplateVariables(initVars);
-  };
-
-  const handleSendTemplate = async () => {
-    if (!selectedTemplate || !activeConv) return;
-    const customerPhone = activeConv.customer.phone;
-    if (!customerPhone) {
-      gooeyToast.error(`Customer "${activeConv.customer.name}" does not have a phone number.`);
-      return;
-    }
-    const targetChannel = conversationSendChannel;
-    if (!targetChannel) {
-      gooeyToast.error('No connected WhatsApp channel found. Please connect your WhatsApp account first.');
-      return;
-    }
-
-    const bodyComp = selectedTemplate.components?.find((c) => c.type.toUpperCase() === 'BODY');
-    const varMatches = Array.from(new Set(bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || []));
-
-    for (const match of varMatches) {
-      const num = match.replace(/[{}]/g, '');
-      if (!templateVariables[num]?.trim()) {
-        gooeyToast.error(`Please provide a value for variable {{${num}}}`);
-        return;
-      }
-    }
-
-    const components: Array<Record<string, unknown>> = [];
-    if (varMatches.length > 0) {
-      const sorted = [...varMatches].sort((a, b) => {
-        const numA = parseInt(a.replace(/\D/g, ''), 10);
-        const numB = parseInt(b.replace(/\D/g, ''), 10);
-        return numA - numB;
-      });
-      components.push({
-        type: 'body',
-        parameters: sorted.map((m) => {
-          const num = m.replace(/[{}]/g, '');
-          return { type: 'text', text: templateVariables[num].trim() };
-        }),
-      });
-    }
-
-    let renderedText = bodyComp?.text || `[Template: ${selectedTemplate.name}]`;
-    for (const [k, v] of Object.entries(templateVariables)) {
-      renderedText = renderedText.replaceAll(`{{${k}}}`, v.trim());
-    }
-
-    setIsSendingTemplate(true);
-    const convId = convKeyFor(activeConv.customer.id);
-    const tempId = `msg-${Date.now()}`;
-
-    const optimisticMsg: Message = {
-      id: tempId,
-      sender: 'agent',
-      senderId: dbUser?.id ?? null,
-      senderName: dbUser?.name ?? null,
-      channel: 'whatsapp',
-      text: renderedText,
-      timestamp: formatTime(),
-      createdAt: new Date().toISOString(),
-      status: MessageStatus.SENT,
-      type: 'template',
-      mediaType: 'template',
-    };
-
-    setMessagesMap((prev) => ({ ...prev, [convId]: [...(prev[convId] || []), optimisticMsg] }));
-
-    try {
-      const res = await apiClient.post('/api/channels/whatsapp/send', {
-        to: customerPhone,
-        channelId: targetChannel.id,
-        customerId: activeConv.customer.id,
-        type: 'template',
-        templateName: selectedTemplate.name,
-        languageCode: selectedTemplate.language || 'en_US',
-        components: components.length > 0 ? components : undefined,
-        text: renderedText,
-      });
-
-      if (res.data?.success) {
-        if (res.data?.persisted === false) {
-          notifyWarning('Template delivered, but not saved', res.data?.warning);
-        } else {
-          gooeyToast.success(`Template "${selectedTemplate.name}" sent successfully!`);
-        }
-        setSelectedTemplate(null);
-        setTemplateVariables({});
-        setComposerMode('reply');
-        fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
-        refreshConversationsSoon();
-      }
-    } catch (err) {
-      const apiError = notifyError(err, { where: 'InboxView.handleSendTemplate', title: 'Template not sent' });
-      setMessagesMap((prev) => ({
-        ...prev,
-        [convId]: (prev[convId] || []).map((m) =>
-          m.id === tempId ? { ...m, status: MessageStatus.FAILED, errorMessage: apiError.message } : m
-        ),
-      }));
-    } finally {
-      setIsSendingTemplate(false);
-    }
-  };
 
   const lastAiAction = useMemo(() => {
     for (let i = activeMessages.length - 1; i >= 0; i--) {
@@ -1091,6 +902,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // -------------------------------------------------------------
   const handleToggleReaction = async (msgId: string, emojiToSet: string) => {
     if (!activeConv) return;
+    if (activeChannelType === 'whatsapp' && isWindowExpired) {
+      gooeyToast.error('Reactions can only be sent within 24 hours of the customer’s last message.');
+      return;
+    }
     const numMsgId = Number(msgId);
     if (isNaN(numMsgId)) return;
 
@@ -1287,6 +1102,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       }
     } catch (err) {
       const apiError = notifyError(err, { where: 'InboxView.handleSend', title: 'Message not sent' });
+      // The server's clock is the authority; if it says the window closed, take the agent to templates
+      if (apiError.code === 'MESSAGE_WINDOW_EXPIRED') setComposerMode('template');
       const metaCode = typeof apiError.details?.metaCode === 'number' ? apiError.details.metaCode : null;
       // Keep the bubble and mark it failed with the reason, so the agent sees what happened
       setMessagesMap((prev) => ({
@@ -1409,7 +1226,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   );
 
   /** Sends the chosen approved template; works outside the 24-hour window, unlike a normal reply */
-  const handleSendTemplate24Hours = async () => {
+  const handleSendTemplate = async () => {
     if (!activeConv || !templateDraft) return;
     if (templateDisabledReason) {
       gooeyToast.error(templateDisabledReason);
@@ -1620,7 +1437,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       if (rx.userId === dbUser?.id || (rx.userId && !rx.customerId)) cur.hasMyReaction = true;
       rxMap.set(rx.emoji, cur);
     }
-    const canReact = !msg.isInternalNote && !isNaN(Number(msg.id)) && canSendOnChannel;
+    // WhatsApp only delivers reactions inside the 24-hour window
+    const canReact =
+      !msg.isInternalNote && !isNaN(Number(msg.id)) && canSendOnChannel && !(activeChannelType === 'whatsapp' && isWindowExpired);
     if (rxMap.size === 0 && !canReact) return null;
 
     return (
@@ -1735,11 +1554,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           ? `AI AGENT${msg.aiAction ? ` · ${msg.aiAction.toUpperCase()}` : ''}`
           : `${agentName.toUpperCase()}${msg.type === 'template' ? ' · TEMPLATE' : ''}`;
 
-    const bubbleClass = isCustomer
-      ? 'bg-white border border-slate-200 text-slate-800'
-      : isNote
-        ? 'bg-amber-50 border border-amber-200 text-slate-800'
-        : 'bg-[#eef0fb] text-slate-800';
+    // Stickers float on the thread background like in WhatsApp, without a bubble around them
+    const isSticker = msg.mediaType === 'sticker' && Boolean(msg.mediaUrl);
+    const bubbleClass = isSticker
+      ? 'text-slate-800'
+      : isCustomer
+        ? 'rounded-xl px-3.5 py-2.5 bg-white border border-slate-200 text-slate-800'
+        : isNote
+          ? 'rounded-xl px-3.5 py-2.5 bg-amber-50 border border-amber-200 text-slate-800'
+          : 'rounded-xl px-3.5 py-2.5 bg-[#eef0fb] text-slate-800';
 
     return (
       <React.Fragment key={msg.id}>
@@ -1751,7 +1574,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           </div>
         )}
         <div className={`group flex flex-col ${isCustomer ? 'items-start' : 'items-end'}`}>
-          <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed ${bubbleClass}`}>
+          <div className={`max-w-[78%] text-[13px] leading-relaxed ${bubbleClass}`}>
             {label && (
               <p className={`text-[10px] font-semibold tracking-wider mb-1 ${isNote ? 'text-amber-700' : 'text-[#3440a8]'}`}>
                 {label}
@@ -1801,8 +1624,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     if (composerMode === 'note') return { text: 'Notes are only visible to your team', className: 'text-amber-700' };
     if (composerMode === 'template') {
       return {
-        text: selectedTemplate
-          ? `Template: ${selectedTemplate.name} (${selectedTemplate.language})`
+        text: templateDraft
+          ? `Template: ${templateDraft.template.name} (${templateDraft.template.language})`
           : 'Select an approved WhatsApp template to send',
         className: 'text-[#3440a8] font-medium',
       };
@@ -1886,29 +1709,30 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                   <div className="flex items-center gap-3 min-w-0">
                     <Avatar name={activeConv.customer.name} src={activeConv.customer.avatarUrl} size="lg" />
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h2 className="font-semibold text-[15px] text-slate-900 truncate">{activeConv.customer.name}</h2>
+                      {/* The name truncates first; badges never wrap, so the header keeps one line */}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <h2 className="min-w-0 font-semibold text-[15px] text-slate-900 truncate">{activeConv.customer.name}</h2>
                         {isChannelDisconnected && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                          <span className="shrink-0 whitespace-nowrap px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
                             Disconnected
                           </span>
                         )}
                         {activeChannelType === 'whatsapp' && (
                           window24hStatus.isWithin24Hours ? (
                             <span
-                              title={`24-hour customer window is active (~${window24hStatus.hoursRemaining}h remaining). Free-form text allowed.`}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              title={`24-hour customer window is open (~${window24hStatus.hoursRemaining}h left). Free-form messages allowed.`}
+                              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] leading-4 font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
                             >
                               <Clock className="w-3 h-3 text-emerald-600" />
-                              24h window active · {window24hStatus.hoursRemaining}h left
+                              {window24hStatus.hoursRemaining}h left
                             </span>
                           ) : (
                             <span
-                              title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.hoursSinceLast}h ago. Free-form text blocked.` : 'No incoming customer message. Free-form text blocked.'}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200"
+                              title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.hoursSinceLast}h ago. Only approved templates can be sent.` : 'This customer hasn’t messaged yet. Only approved templates can be sent.'}
+                              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] leading-4 font-medium bg-amber-50 text-amber-800 border border-amber-200"
                             >
                               <AlertTriangle className="w-3 h-3 text-amber-600" />
-                              24h window closed · Templates only
+                              Templates only
                             </span>
                           )
                         )}
@@ -2333,18 +2157,19 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       type="button"
                       onClick={handleSubmitComposer}
                       disabled={
-                        composerMode === 'template'
-                          ? activeChannelType === 'whatsapp'
-                            ? !selectedTemplate || isSendingTemplate
-                            : true
-                          : isSending ||
-                          (activeChannelType === 'whatsapp' && isWindowExpired && composerMode === 'reply') ||
-                          (composerMode === 'note' ? !inputMessage.trim() : (!inputMessage.trim() && !selectedFile) || !canSendOnChannel)
+                        isSending ||
+                        (composerMode === 'template'
+                          ? !templateReady || Boolean(templateDisabledReason)
+                          : composerMode === 'note'
+                            ? !inputMessage.trim()
+                            : (!inputMessage.trim() && !selectedFile) ||
+                            !canSendOnChannel ||
+                            (activeChannelType === 'whatsapp' && isWindowExpired))
                       }
                       title={composerMode === 'template' && templateDraft && !templateReady ? 'Fill in every template variable first' : undefined}
                       className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-[#3440a8] hover:bg-[#2b3590] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold cursor-pointer shrink-0"
                     >
-                      {(isSending || isSendingTemplate) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      {isSending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                       {composerMode === 'note'
                         ? 'Add note'
                         : composerMode === 'template'

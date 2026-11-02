@@ -91,7 +91,7 @@ export const WhatsAppMediaAttachment: React.FC<WhatsAppMediaAttachmentProps> = (
 
   const cleanCaption =
     msgText &&
-      !msgText.match(/^\[(Image|Video|Audio|Document|Voice)\](\s*(No caption|attachment)?)?$/i) &&
+      !msgText.match(/^\[(Image|Video|Audio|Document|Voice|Sticker)\](\s*(No caption|attachment)?)?$/i) &&
       msgText !== '[Image] No caption' &&
       msgText !== '[Video] No caption'
       ? msgText.trim()
@@ -135,9 +135,13 @@ export const WhatsAppMediaAttachment: React.FC<WhatsAppMediaAttachmentProps> = (
   }, [mediaUrl]);
 
   const mType = (mediaType || msgType || '').toLowerCase();
+  const isSticker = mType === 'sticker';
 
   // Loading Skeleton
   if (loading) {
+    if (isSticker) {
+      return <div className="mb-1 h-32 w-32 rounded-xl bg-slate-100 animate-pulse" />;
+    }
     return (
       <div className="mb-2 rounded-xl bg-slate-100 border border-slate-200/60 p-4 max-w-sm flex items-center justify-center gap-2 animate-pulse min-h-[120px]">
         <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
@@ -162,6 +166,18 @@ export const WhatsAppMediaAttachment: React.FC<WhatsAppMediaAttachmentProps> = (
           <RefreshCw className="w-3 h-3" /> Retry
         </button>
       </div>
+    );
+  }
+
+  // Sticker: WhatsApp size (transparent WebP, may be animated), no frame or caption
+  if (isSticker) {
+    return (
+      <img
+        src={blobUrl}
+        alt="Sticker"
+        className="mb-1 h-32 w-32 object-contain cursor-pointer"
+        onClick={() => onPreview({ url: blobUrl, type: 'image', senderName, timestamp: fullTimestamp })}
+      />
     );
   }
 
