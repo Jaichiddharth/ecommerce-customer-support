@@ -57,7 +57,7 @@ const WORKSPACE_ITEMS: NavItem[] = [
   { key: 'ai', label: 'AI agent', icon: Sparkles, badge: 'ai' },
   { key: 'flows', label: 'Flows', icon: Bot },
   { key: 'broadcasts', label: 'Broadcasts', icon: Megaphone },
-  { key: 'templates', label: 'Templates', icon: FileText },
+  { key: 'templates', label: 'Templates', icon: FileText, tab: 'templates' },
   { key: 'analytics', label: 'Analytics', icon: BarChart3 },
 ];
 

@@ -27,6 +27,15 @@ export type RealtimeEvent =
     }
     | { type: "conversation.updated"; conversationId: number; customerId: number }
     | { type: "channel.updated"; channelId: number } // connected, reconnected or disconnected
+    | {
+        type: "template.status"; // Meta reviewed, paused or disabled a message template
+        wabaId: string;
+        templateId: string;
+        name: string;
+        language: string;
+        status: string; // APPROVED, REJECTED, PENDING, PAUSED, DISABLED, …
+        reason?: string | null; // Meta's rejection reason, e.g. PROMOTIONAL
+    }
     | { type: "notification.count"; unread: number };
 
 // globalThis keeps ONE bus across Next.js hot reloads / route modules

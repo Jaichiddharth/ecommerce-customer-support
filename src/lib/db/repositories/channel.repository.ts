@@ -317,6 +317,18 @@ export class ChannelRepository {
       .returning();
     return updated || null;
   }
+
+  /**
+   * Store the WhatsApp Business Account that owns a channel's number
+   */
+  async updateWabaId(id: number, organizationId: number, wabaId: string): Promise<Channel | null> {
+    const [updated] = await db
+      .update(channels)
+      .set({ wabaId, updatedAt: new Date() })
+      .where(and(eq(channels.id, id), eq(channels.organizationId, organizationId)))
+      .returning();
+    return updated || null;
+  }
 }
 
 export const channelRepository = new ChannelRepository();

@@ -10,6 +10,7 @@ import {
   TicketStatus,
   MessageStatus,
   ChannelStatus,
+  opensServiceWindow,
   type Ticket,
   type Message,
 } from "../schema";
@@ -243,7 +244,7 @@ export class ConversationRepository {
         and(
           eq(messages.organizationId, organizationId),
           inArray(messages.customerId, customerIds),
-          eq(messages.senderType, "customer")
+          opensServiceWindow
         )
       )
       .orderBy(messages.customerId, desc(messages.createdAt));
