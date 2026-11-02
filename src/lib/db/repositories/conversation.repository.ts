@@ -10,6 +10,7 @@ import {
   TicketStatus,
   MessageStatus,
   ChannelStatus,
+  opensServiceWindow,
   type Ticket,
   type Message,
 } from "../schema";
@@ -36,6 +37,7 @@ export interface ConversationListItem {
   createdAt: Date;
   resolvedAt: Date | null;
   unreadCount: number;
+  lastReceivedMessageAt: Date | null;
   lastMessage: {
     senderType: string;
     mediaType: string | null;
@@ -232,6 +234,22 @@ export class ConversationRepository {
       .orderBy(messages.customerId, desc(messages.createdAt));
     const lastMap = new Map(lastRows.map((r) => [r.customerId, r]));
 
+    const lastReceivedRows = await db
+      .selectDistinctOn([messages.customerId], {
+        customerId: messages.customerId,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.organizationId, organizationId),
+          inArray(messages.customerId, customerIds),
+          opensServiceWindow
+        )
+      )
+      .orderBy(messages.customerId, desc(messages.createdAt));
+    const lastReceivedMap = new Map(lastReceivedRows.map((r) => [r.customerId, r.createdAt]));
+
     return rows.map(({ ticket, customer, channel, assigneeName }) => {
       const last = lastMap.get(customer.id);
       return {
@@ -255,6 +273,7 @@ export class ConversationRepository {
         createdAt: ticket.createdAt,
         resolvedAt: ticket.resolvedAt,
         unreadCount: unreadMap.get(customer.id) ?? 0,
+        lastReceivedMessageAt: lastReceivedMap.get(customer.id) ?? null,
         lastMessage: last
           ? { senderType: last.senderType, mediaType: last.mediaType, status: last.status, metadata: last.metadata }
           : null,

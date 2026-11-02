@@ -8,6 +8,7 @@ import {
   type MessageMetadata,
   MessageStatus,
   normalizeMessageStatus,
+  opensServiceWindow,
 } from "../schema";
 import { eq, and, asc, desc, ne, sql, getTableColumns } from "drizzle-orm";
 import { messageReactionRepository } from "./message-reaction.repository";
@@ -56,8 +57,8 @@ export class MessageRepository {
       data.status !== undefined
         ? normalizeMessageStatus(data.status)
         : data.isRead
-        ? MessageStatus.READ
-        : MessageStatus.SENT;
+          ? MessageStatus.READ
+          : MessageStatus.SENT;
 
     const [created] = await db
       .insert(messages)
@@ -303,6 +304,57 @@ export class MessageRepository {
       organizationId,
       isRead ? MessageStatus.READ : MessageStatus.DELIVERED
     );
+  }
+
+  /**
+   * How often each template was sent from a channel and how many of those were read.
+   * Failed sends are not counted. Only messages that recorded `metadata.template` are included.
+   */
+  async templateStatsByChannel(
+    organizationId: number,
+    channelId: number
+  ): Promise<Array<{ name: string; language: string; sent: number; read: number }>> {
+    const name = sql<string>`${messages.metadata}->'template'->>'name'`;
+    const language = sql<string>`${messages.metadata}->'template'->>'language'`;
+
+    return await db
+      .select({
+        name,
+        language,
+        sent: sql<number>`count(*) filter (where ${messages.status} <> ${MessageStatus.FAILED})::int`,
+        read: sql<number>`count(*) filter (where ${messages.status} = ${MessageStatus.READ})::int`,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.organizationId, organizationId),
+          eq(messages.channelId, channelId),
+          sql`${messages.metadata}->'template'->>'name' is not null`
+        )
+      )
+      .groupBy(name, language);
+  }
+
+
+  /** The customer's most recent message that opens WhatsApp's 24-hour window (see `opensServiceWindow`) */
+  async findLastReceivedFromCustomer(
+    customerId: number,
+    organizationId: number
+  ): Promise<Message | null> {
+    const [message] = await db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.organizationId, organizationId),
+          eq(messages.customerId, customerId),
+          opensServiceWindow
+        )
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+
+    return message || null;
   }
 }
 
