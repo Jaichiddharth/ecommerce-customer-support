@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { AuthGuard } from '../components/auth/AuthGuard';
 import { Sidebar, TabType } from '../components/Sidebar';
 import { DashboardView } from '../components/DashboardView';
@@ -8,6 +9,8 @@ import { InboxView, InboxCounts } from '../components/InboxView';
 import { IntegrationsView, IntegrationKey } from '../components/integrations/IntegrationsView';
 import { SettingsView } from '../components/SettingsView';
 import { gooeyToast } from '@/components/ui/goey-toaster';
+
+const FlowsWorkspace = dynamic(() => import('../components/flows/FlowsWorkspace'), { ssr: false });
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabType>('inbox');
@@ -82,6 +85,8 @@ export default function Home() {
                 }}
               />
             )}
+
+            {activeTab === 'automations' && <FlowsWorkspace />}
           </main>
         </div>
       </div>
