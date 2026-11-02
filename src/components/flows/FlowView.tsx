@@ -28,7 +28,11 @@ import { FlowPalette } from './FlowPalette';
 import { ConfigPanel } from './ConfigPanel';
 import { PALETTE_ITEMS } from './palette-config';
 import type { AutomationNodeData, WorkflowGraph } from './flow-types';
-import { Save, RotateCcw, Download, Upload, Maximize2, Zap } from 'lucide-react';
+import { Save, RotateCcw, Download, Upload, Maximize2, Zap, Power, Loader2, ArrowLeft } from 'lucide-react';
+import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
+import apiClient from '@/lib/api/client';
+import { notifyError } from '@/lib/api/notify';
+import { gooeyToast } from '@/components/ui/goey-toaster';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -41,7 +45,18 @@ const defaultEdgeOptions = {
   style: { stroke: '#94a3b8', strokeWidth: 2 },
 };
 
+// Before automations were stored per workspace, the builder kept one graph in this browser.
+// It is only read now so the listing can offer a one-time import (see loadLegacyBrowserAutomation).
 const STORAGE_KEY = 'unocx_flow_graph';
+const SERVER_ID_KEY = 'unocx_flow_automation_id';
+
+/** Strips React Flow UI state so only the graph the runtime needs is sent. */
+const toServerGraph = (nodes: Node[], edges: Edge[]) => ({
+  nodes: nodes.map(({ id, type, position, data }) => ({ id, type, position, data })),
+  edges: edges.map(({ id, source, target, sourceHandle, targetHandle, label }) => ({
+    id, source, target, sourceHandle, targetHandle, label: typeof label === 'string' ? label : undefined,
+  })),
+});
 
 // ─── Default demo graph ───────────────────────────────────────────────────────
 
@@ -124,6 +139,16 @@ const INITIAL_EDGES: Edge[] = [
   { id: 'e5', source: 'n4', target: 'n5', ...defaultEdgeOptions },
 ];
 
+/** Starting canvas for a new automation: a single trigger to build from. */
+const NEW_AUTOMATION_NODES: Node[] = [
+  {
+    id: 'n1',
+    type: 'trigger_incoming_message',
+    position: { x: 340, y: 80 },
+    data: { type: 'trigger_incoming_message', label: 'Incoming Message', configured: true },
+  },
+];
+
 // ─── Persistence helpers ──────────────────────────────────────────────────────
 
 function loadSaved(): { nodes: Node[]; edges: Edge[] } | null {
@@ -138,17 +163,98 @@ function loadSaved(): { nodes: Node[]; edges: Edge[] } | null {
   }
 }
 
+/**
+ * The graph saved in this browser by the earlier single-automation builder, if it was never
+ * stored in the workspace. Returned once so the listing can import it.
+ */
+export function loadLegacyBrowserAutomation(): { nodes: Node[]; edges: Edge[] } | null {
+  try {
+    if (localStorage.getItem(SERVER_ID_KEY)) return null; // already saved to the workspace
+  } catch {
+    return null;
+  }
+  return loadSaved();
+}
+
+export function forgetLegacyBrowserAutomation() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(SERVER_ID_KEY);
+  } catch { /* ignore */ }
+}
+
+export { toServerGraph };
+
+interface LoadedAutomation {
+  id: number | null;
+  name: string;
+  description: string;
+  isActive: boolean;
+  archived: boolean;
+  nodes: Node[];
+  edges: Edge[];
+}
+
+interface FlowViewProps {
+  /** Automation to open, or null to create a new one. */
+  automationId: number | null;
+  /** New automations only: an empty canvas with a trigger, or the example workflow. */
+  startFrom?: 'blank' | 'example';
+  onBack: () => void;
+  /** Called after the first save of a new automation. */
+  onCreated?: (id: number) => void;
+}
+
 // ─── Inner component (has access to useReactFlow hook) ────────────────────────
 
-function FlowEditor() {
-  const saved = useMemo(() => loadSaved(), []);
-
-  const [nodes, setNodes, onNodesChange] = useNodesState(saved?.nodes ?? INITIAL_NODES);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(saved?.edges ?? INITIAL_EDGES);
+function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation } & Omit<FlowViewProps, 'automationId'>) {
+  const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
+  const [name, setName] = useState(initial.name);
+  const [description, setDescription] = useState(initial.description);
+  const lastSaved = useRef({ nodes: initial.nodes, edges: initial.edges });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const reconnectSuccessful = useRef(true);
+  const [serverId, setServerId] = useState<number | null>(initial.id);
+  const [isActive, setIsActive] = useState(initial.isActive);
+  const [syncing, setSyncing] = useState(false);
+
+  /** Saves the graph to the server; `activate` also switches it on/off (validated by the server). */
+  const syncToServer = useCallback(
+    async (activate?: boolean) => {
+      setSyncing(true);
+      try {
+        const body = {
+          name: name.trim() || 'Untitled automation',
+          description: description.trim() || null,
+          graph: toServerGraph(nodes, edges),
+          ...(activate !== undefined ? { isActive: activate } : {}),
+        };
+        const res = serverId
+          ? await apiClient.put(`/api/automations/${serverId}`, body)
+          : await apiClient.post('/api/automations', body);
+        const saved = res.data?.automation;
+        if (saved?.id && saved.id !== serverId) {
+          setServerId(saved.id);
+          onCreated?.(saved.id);
+        }
+        setIsActive(!!saved?.isActive);
+        lastSaved.current = { nodes, edges };
+        return true;
+      } catch (err) {
+        notifyError(err, {
+          where: 'FlowView.syncToServer',
+          title: activate ? "Automation can't be activated" : "Automation wasn't saved",
+        });
+        return false;
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [nodes, edges, serverId, name, description, onCreated],
+  );
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const { screenToFlowPosition, fitView, deleteElements } = useReactFlow();
@@ -314,27 +420,29 @@ function FlowEditor() {
   );
 
   // ── Save ───────────────────────────────────────────────────────────────
-  const onSave = useCallback(() => {
-    const graph: WorkflowGraph = {
-      id: 'flow_main',
-      name: 'My Automation',
-      nodes: nodes as unknown as WorkflowGraph['nodes'],
-      edges: edges as unknown as WorkflowGraph['edges'],
-      updatedAt: new Date().toISOString(),
-    };
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(graph));
+  const onSave = useCallback(async () => {
+    if (await syncToServer()) {
       setIsDirty(false);
-      showToast('Flow saved');
-    } catch { /* ignore */ }
-  }, [nodes, edges, showToast]);
+      showToast('Automation saved');
+    }
+  }, [showToast, syncToServer]);
 
-  // ── Reset ──────────────────────────────────────────────────────────────
+  const onToggleActive = useCallback(async () => {
+    const next = !isActive;
+    if (await syncToServer(next)) {
+      setIsDirty(false);
+      gooeyToast.success(next ? 'Automation activated' : 'Automation paused', {
+        description: next ? 'It now runs on matching incoming messages.' : undefined,
+      });
+    }
+  }, [isActive, syncToServer]);
+
+  // ── Reset (back to the last saved version) ─────────────────────────────
   const onReset = useCallback(() => {
-    setNodes(INITIAL_NODES);
-    setEdges(INITIAL_EDGES);
+    setNodes(lastSaved.current.nodes);
+    setEdges(lastSaved.current.edges);
     setSelectedNodeId(null);
-    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    setIsDirty(false);
   }, [setNodes, setEdges]);
 
   // ── Keyboard save ──────────────────────────────────────────────────────
@@ -381,10 +489,30 @@ function FlowEditor() {
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top bar */}
         <div className="h-12 px-4 bg-white border-b border-slate-200 flex items-center gap-3 shrink-0 z-10">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-[13px] font-semibold text-slate-800">Automation Builder</span>
-            <span className="text-[11px] text-slate-400">/ Untitled Flow</span>
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              onClick={() => (!isDirty || window.confirm('You have unsaved changes. Leave without saving?')) && onBack()}
+              className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
+              title="Back to automations"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-300'}`} />
+            <span className="text-[13px] font-semibold text-slate-800 hidden xl:inline">Automation Builder</span>
+            <span className="text-[11px] text-slate-400 hidden xl:inline">/</span>
+            <input
+              value={name}
+              onChange={(e) => { setName(e.target.value); setIsDirty(true); }}
+              placeholder="Automation name"
+              className="w-44 text-[12px] font-semibold text-slate-700 bg-transparent border border-transparent rounded-lg px-2 py-1 hover:border-slate-200 focus:border-[#3440a8]/40 focus:outline-none"
+            />
+            <input
+              value={description}
+              onChange={(e) => { setDescription(e.target.value); setIsDirty(true); }}
+              placeholder="Add a description…"
+              maxLength={500}
+              className="w-56 text-[11px] text-slate-500 bg-transparent border border-transparent rounded-lg px-2 py-1 hover:border-slate-200 focus:border-[#3440a8]/40 focus:outline-none hidden lg:block"
+            />
             {isDirty && (
               <span className="text-[10px] font-medium text-amber-500 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md">
                 Unsaved
@@ -393,6 +521,19 @@ function FlowEditor() {
           </div>
           <div className="flex-1" />
           <div className="flex items-center gap-1.5">
+            <button
+              onClick={onToggleActive}
+              disabled={syncing}
+              className={`flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-60 ${
+                isActive
+                  ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
+                  : 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'
+              }`}
+              title={isActive ? 'Running on incoming messages. Click to pause.' : 'Validate, save and start running this automation'}
+            >
+              {syncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Power className="w-3.5 h-3.5" />}
+              {isActive ? 'Active' : 'Activate'}
+            </button>
             <button
               onClick={onSave}
               className="flex items-center gap-1.5 text-[11px] font-semibold text-white bg-[#3440a8] hover:bg-[#2a3490] px-3 py-1.5 rounded-lg transition-colors"
@@ -541,10 +682,69 @@ function FlowEditor() {
 
 // ─── Public export (wraps FlowEditor in ReactFlowProvider) ───────────────────
 
-export default function FlowView() {
+export default function FlowView({ automationId, startFrom = 'blank', onBack, onCreated }: FlowViewProps) {
+  const [loaded, setLoaded] = useState<LoadedAutomation | null>(null);
+  const [error, setError] = useState<unknown>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    if (automationId === null) {
+      const example = startFrom === 'example';
+      setLoaded({
+        id: null,
+        name: example ? 'Keyword help desk' : 'Untitled automation',
+        description: '',
+        isActive: false,
+        archived: false,
+        nodes: example ? INITIAL_NODES : NEW_AUTOMATION_NODES,
+        edges: example ? INITIAL_EDGES : [],
+      });
+      return;
+    }
+    try {
+      const a = (await apiClient.get(`/api/automations/${automationId}`)).data.automation;
+      setLoaded({
+        id: a.id,
+        name: a.name,
+        description: a.description ?? '',
+        isActive: !!a.isActive,
+        archived: !!a.archivedAt,
+        // Saved nodes/edges carry their full builder data, so they open exactly as configured
+        nodes: (a.graph?.nodes ?? []) as Node[],
+        edges: ((a.graph?.edges ?? []) as Edge[]).map((e) => ({
+          ...defaultEdgeOptions,
+          ...e,
+          ...(e.sourceHandle === 'true' ? { style: { stroke: '#16a34a', strokeWidth: 2 }, markerEnd: { type: MarkerType.ArrowClosed, color: '#16a34a' } } : {}),
+          ...(e.sourceHandle === 'false' ? { style: { stroke: '#dc2626', strokeWidth: 2 }, markerEnd: { type: MarkerType.ArrowClosed, color: '#dc2626' } } : {}),
+        })),
+      });
+    } catch (err) {
+      setError(err);
+    }
+  }, [automationId, startFrom]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (error) return <ErrorState error={error} title="Couldn't open this automation" onRetry={load} className="h-full" />;
+  if (!loaded) return <LoadingState label="Opening automation…" className="h-full" />;
+  if (loaded.archived) {
+    return (
+      <EmptyState
+        className="h-full"
+        title="This automation is archived"
+        description="Restore it from the automations list to edit or activate it."
+        action={
+          <button onClick={onBack} className="text-[12px] font-semibold text-white bg-[#3440a8] hover:bg-[#2a3490] px-3.5 py-2 rounded-lg">
+            Back to automations
+          </button>
+        }
+      />
+    );
+  }
+
   return (
     <ReactFlowProvider>
-      <FlowEditor />
+      <FlowEditor initial={loaded} onBack={onBack} onCreated={onCreated} />
     </ReactFlowProvider>
   );
 }

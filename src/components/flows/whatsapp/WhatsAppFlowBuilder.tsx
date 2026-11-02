@@ -17,18 +17,18 @@ import {
 } from '@dnd-kit/core';
 import { arrayMove, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import {
-  Save, Download, Copy, Eye, PencilRuler, Braces, Plus, Trash2, AlertTriangle,
-  CheckCircle2, ChevronUp, ChevronDown, Sparkles, FilePlus2, MessageSquareText,
+  Save, Download, Copy, Eye, PencilRuler, Braces, AlertTriangle,
+  CheckCircle2, ChevronUp, ChevronDown, ArrowLeft, Rocket, Loader2, Info,
 } from 'lucide-react';
 import { gooeyToast } from '@/components/ui/goey-toaster';
-import { EmptyState, LoadingState } from '@/components/ui/states';
+import { ErrorState, LoadingState } from '@/components/ui/states';
+import { notifyError } from '@/lib/api/notify';
 
-import type { WaComponent, WaComponentType, WaFlow, WaScreen } from './wa-flow-types';
+import type { WaComponent, WaComponentType, WaFlow, WaScreen } from '@/lib/whatsapp-flows/wa-flow-types';
 import {
   LIMITS,
   allFieldNames,
   cloneComponent,
-  createBlankFlow,
   createComponent,
   createSampleFlow,
   createScreen,
@@ -37,10 +37,12 @@ import {
   toScreenId,
   uid,
   uniqueName,
-} from './wa-component-registry';
-import { buildFlowJson } from './wa-flow-json';
-import { validateFlow, validateMetaJson } from './wa-flow-validation';
-import { deleteFlow, loadFlows, saveFlow } from './wa-flow-storage';
+} from '@/lib/whatsapp-flows/wa-component-registry';
+import { buildFlowJson } from '@/lib/whatsapp-flows/wa-flow-json';
+import { validateFlow, validateMetaJson } from '@/lib/whatsapp-flows/wa-flow-validation';
+import { sanitizeFlowDefinition } from '@/lib/whatsapp-flows/wa-flow-sanitize';
+import { flowsApi, type FlowDetails } from './wa-api';
+import { StatusBadge } from './wa-ui';
 import { WaComponentPalette, WaPaletteIcon } from './WaComponentPalette';
 import { WaScreenTabs } from './WaScreenTabs';
 import { WaScreenCanvas, SCREEN_DROP_ID } from './WaScreenCanvas';
@@ -48,7 +50,8 @@ import { WaPropertiesPanel } from './WaPropertiesPanel';
 import { WaFlowPreview } from './WaFlowPreview';
 import { WaComponentRenderer } from './WaComponentRenderer';
 
-type Mode = 'edit' | 'preview' | 'json';
+export type BuilderMode = 'edit' | 'preview' | 'json';
+type Mode = BuilderMode;
 
 type ActiveDrag =
   | { source: 'palette'; type: WaComponentType }
@@ -74,8 +77,24 @@ const collisionDetection: CollisionDetection = (args) => {
   });
 };
 
-export default function WhatsAppFlowBuilder() {
-  const [savedFlows, setSavedFlows] = useState<WaFlow[] | null>(null);
+interface BuilderProps {
+  /** Existing Flow to edit, or null to create a new one from `initialDraft`. */
+  flowId: number | null;
+  initialDraft?: WaFlow;
+  initialMode?: Mode;
+  onBack: () => void;
+  /** Called after the first save of a new Flow (so the parent can track its id). */
+  onCreated?: (id: number) => void;
+  onOpenDetails?: (id: number) => void;
+}
+
+export default function WhatsAppFlowBuilder({ flowId, initialDraft, initialMode = 'edit', onBack, onCreated, onOpenDetails }: BuilderProps) {
+  const [currentId, setCurrentId] = useState<number | null>(flowId);
+  const [record, setRecord] = useState<FlowDetails | null>(null);
+  const [loading, setLoading] = useState(flowId !== null);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [saving, setSaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [flow, setFlow] = useState<WaFlow | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState('');
   const [activeScreenUid, setActiveScreenUid] = useState('');
@@ -85,21 +104,38 @@ export default function WhatsAppFlowBuilder() {
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
   const [insertBeforeUid, setInsertBeforeUid] = useState<string | null>(null);
 
-  // ── Load saved flows (client-only storage) ─────────────────────────────
+  // ── Load the Flow (server) or start a new draft ────────────────────────
   const openFlow = useCallback((f: WaFlow, persisted: boolean) => {
     setFlow(f);
     setSavedSnapshot(persisted ? snapshot(f) : '');
     setActiveScreenUid(f.screens[0]?.uid ?? '');
     setSelectedUid(null);
-    setMode('edit');
   }, []);
 
+  const load = useCallback(async () => {
+    if (flowId === null) {
+      openFlow(initialDraft ?? createSampleFlow(), false);
+      setMode(initialMode);
+      return;
+    }
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const details = await flowsApi.get(flowId);
+      const draft = sanitizeFlowDefinition(details.draft) ?? createSampleFlow(details.name);
+      setRecord(details);
+      openFlow({ ...draft, name: details.name }, true);
+      setMode(initialMode);
+    } catch (err) {
+      setLoadError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [flowId, initialDraft, initialMode, openFlow]);
+
   useEffect(() => {
-    const flows = loadFlows();
-    setSavedFlows(flows);
-    const latest = [...flows].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-    if (latest) openFlow(latest, true);
-  }, [openFlow]);
+    load();
+  }, [load]);
 
   // ── Derived state ──────────────────────────────────────────────────────
   const issues = useMemo(() => (flow ? validateFlow(flow) : []), [flow]);
@@ -290,56 +326,70 @@ export default function WhatsAppFlowBuilder() {
   );
 
   // ── Flow operations ────────────────────────────────────────────────────
+  /** Saves the draft to the server (create on first save). Returns the Flow id, or null on failure. */
+  const persist = useCallback(async (): Promise<number | null> => {
+    if (!flow) return null;
+    if (!flow.name.trim()) {
+      gooeyToast.error('Flow name is required');
+      return null;
+    }
+    setSaving(true);
+    try {
+      const details = currentId === null
+        ? await flowsApi.create({ name: flow.name.trim(), draft: flow })
+        : await flowsApi.update(currentId, { name: flow.name.trim(), draft: flow });
+      setRecord(details);
+      setSavedSnapshot(snapshot(flow));
+      if (currentId === null) {
+        setCurrentId(details.id);
+        onCreated?.(details.id);
+      }
+      return details.id;
+    } catch (err) {
+      notifyError(err, { where: 'WhatsAppFlowBuilder.save', title: "Couldn't save flow" });
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  }, [flow, currentId, onCreated]);
+
+  const onSave = useCallback(async () => {
+    const id = await persist();
+    if (id === null) return;
+    if (errors.length) {
+      gooeyToast.warning('Draft saved', { description: `${errors.length} validation error(s) must be fixed before publishing.` });
+    } else {
+      gooeyToast.success('Flow saved');
+    }
+  }, [persist, errors.length]);
+
+  /** Saves pending edits, then publishes them as a new immutable version on Meta. */
+  const onPublish = useCallback(async () => {
+    if (errors.length) {
+      setShowIssues(true);
+      gooeyToast.error('Fix validation errors first', { description: `${errors.length} error(s) block publishing.` });
+      return;
+    }
+    if (!window.confirm('Publish this Flow to WhatsApp? A published version can no longer be edited; later changes are published as a new version.')) return;
+    const id = isDirty || currentId === null ? await persist() : currentId;
+    if (id === null) return;
+    setPublishing(true);
+    try {
+      const details = await flowsApi.action(id, 'publish');
+      setRecord(details);
+      gooeyToast.success('Flow published', { description: `Version ${details.versions[0]?.versionNumber ?? ''} is live on WhatsApp.` });
+    } catch (err) {
+      notifyError(err, { where: 'WhatsAppFlowBuilder.publish', title: 'Publish failed' });
+      flowsApi.get(id).then(setRecord).catch(() => {});
+    } finally {
+      setPublishing(false);
+    }
+  }, [errors.length, currentId, isDirty, persist]);
+
   const confirmDiscard = useCallback(
     () => !isDirty || window.confirm('You have unsaved changes. Discard them?'),
     [isDirty],
   );
-
-  const onSave = useCallback(() => {
-    if (!flow) return;
-    try {
-      const saved = saveFlow(flow);
-      setFlow(saved);
-      setSavedSnapshot(snapshot(saved));
-      setSavedFlows(loadFlows());
-      if (errors.length) {
-        gooeyToast.warning('Draft saved', { description: `${errors.length} validation error(s) must be fixed before export.` });
-      } else {
-        gooeyToast.success('Flow saved');
-      }
-    } catch {
-      gooeyToast.error("Couldn't save flow", { description: 'Browser storage is unavailable or full.' });
-    }
-  }, [flow, errors.length]);
-
-  const onNewFlow = useCallback(
-    (sample: boolean) => {
-      if (!confirmDiscard()) return;
-      openFlow(sample ? createSampleFlow() : createBlankFlow(), false);
-    },
-    [confirmDiscard, openFlow],
-  );
-
-  const onSwitchFlow = useCallback(
-    (id: string) => {
-      const f = savedFlows?.find((x) => x.id === id);
-      if (f && confirmDiscard()) openFlow(f, true);
-    },
-    [savedFlows, confirmDiscard, openFlow],
-  );
-
-  const onDeleteFlow = useCallback(() => {
-    if (!flow || !window.confirm(`Delete flow "${flow.name}"? This cannot be undone.`)) return;
-    try {
-      deleteFlow(flow.id);
-    } catch { /* storage unavailable — nothing persisted to remove */ }
-    const remaining = loadFlows();
-    setSavedFlows(remaining);
-    const next = [...remaining].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-    if (next) openFlow(next, true);
-    else { setFlow(null); setSavedSnapshot(''); }
-    gooeyToast.success('Flow deleted');
-  }, [flow, openFlow]);
 
   /** Export is the publication gate: editor validation and a structural check on the generated JSON must both pass. */
   const exportGate = useCallback((): string | null => {
@@ -453,39 +503,17 @@ export default function WhatsAppFlowBuilder() {
     setInsertBeforeUid(null);
   };
 
-  // ── Render: loading / empty ────────────────────────────────────────────
-  if (savedFlows === null) {
-    return <LoadingState label="Loading WhatsApp flows…" className="h-full" />;
+  // ── Render: loading / error ────────────────────────────────────────────
+  if (loading) {
+    return <LoadingState label="Loading flow…" className="h-full" />;
+  }
+  if (loadError) {
+    return <ErrorState error={loadError} title="Couldn't load this flow" onRetry={load} className="h-full" />;
   }
 
-  if (!flow || !screen || !metaJson) {
-    return (
-      <EmptyState
-        className="h-full"
-        icon={<MessageSquareText className="w-10 h-10 text-slate-300" />}
-        title="No WhatsApp Flows yet"
-        description="Build multi-screen forms customers fill in without leaving WhatsApp, then export Meta-ready Flow JSON."
-        action={
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => onNewFlow(true)}
-              className="flex items-center gap-1.5 text-[12px] font-semibold text-white bg-[#3440a8] hover:bg-[#2a3490] px-3.5 py-2 rounded-lg transition-colors"
-            >
-              <Sparkles className="w-3.5 h-3.5" /> Start from example
-            </button>
-            <button
-              onClick={() => onNewFlow(false)}
-              className="flex items-center gap-1.5 text-[12px] font-semibold text-slate-600 border border-slate-200 hover:bg-slate-50 px-3.5 py-2 rounded-lg transition-colors"
-            >
-              <FilePlus2 className="w-3.5 h-3.5" /> Blank flow
-            </button>
-          </div>
-        }
-      />
-    );
-  }
+  if (!flow || !screen || !metaJson) return null;
 
-  const isPersisted = savedFlows.some((f) => f.id === flow.id);
+  const latestVersion = record?.versions[0];
   const dragged = activeDrag?.source === 'canvas' ? screen.components.find((c) => c.uid === activeDrag.uid) : null;
 
   // ── Render: builder ────────────────────────────────────────────────────
@@ -505,17 +533,13 @@ export default function WhatsAppFlowBuilder() {
           {/* ── Top bar ─────────────────────────────────────────────────── */}
           <div className="min-h-12 px-4 py-2 bg-white border-b border-slate-200 flex flex-wrap items-center gap-x-3 gap-y-2 shrink-0 z-10">
             <div className="flex items-center gap-2 min-w-0">
-              <select
-                value={isPersisted ? flow.id : ''}
-                onChange={(e) => onSwitchFlow(e.target.value)}
-                className="max-w-[160px] text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#3440a8]/20"
-                title="Open a saved flow"
+              <button
+                onClick={() => confirmDiscard() && onBack()}
+                className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
+                title="Back to flows"
               >
-                {!isPersisted && <option value="">New (unsaved)</option>}
-                {savedFlows.map((f) => (
-                  <option key={f.id} value={f.id}>{f.name || 'Untitled'}</option>
-                ))}
-              </select>
+                <ArrowLeft className="w-4 h-4" />
+              </button>
               <input
                 value={flow.name}
                 onChange={(e) => updateFlow((f) => ({ ...f, name: e.target.value }))}
@@ -523,8 +547,14 @@ export default function WhatsAppFlowBuilder() {
                 className={`w-44 text-[13px] font-semibold text-slate-800 bg-transparent border rounded-lg px-2 py-1 hover:border-slate-200 focus:border-[#3440a8]/40 focus:outline-none
                   ${flow.name.trim() ? 'border-transparent' : 'border-red-300'}`}
               />
+              <StatusBadge status={record?.status ?? 'draft'} />
               {isDirty && (
                 <span className="text-[10px] font-medium text-amber-500 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md">Unsaved</span>
+              )}
+              {!isDirty && record?.hasUnpublishedChanges && record.publishedVersionId && (
+                <span className="text-[10px] font-medium text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-md" title="The live version stays unchanged until you publish again">
+                  Changes not published
+                </span>
               )}
             </div>
 
@@ -561,9 +591,19 @@ export default function WhatsAppFlowBuilder() {
               </button>
               <button
                 onClick={onSave}
-                className="flex items-center gap-1.5 text-[11px] font-semibold text-white bg-[#3440a8] hover:bg-[#2a3490] px-3 py-1.5 rounded-lg transition-colors"
+                disabled={saving || publishing}
+                className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
               >
-                <Save className="w-3.5 h-3.5" /> Save
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} Save
+              </button>
+              <button
+                onClick={onPublish}
+                disabled={saving || publishing}
+                className="flex items-center gap-1.5 text-[11px] font-semibold text-white bg-[#3440a8] hover:bg-[#2a3490] px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+                title={errors.length ? 'Fix validation errors to publish' : 'Publish as a new version on WhatsApp'}
+              >
+                {publishing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Rocket className="w-3.5 h-3.5" />}
+                {record?.publishedVersionId ? 'Publish new version' : 'Publish'}
               </button>
               <button
                 onClick={onExport}
@@ -579,24 +619,29 @@ export default function WhatsAppFlowBuilder() {
               >
                 <Copy className="w-3.5 h-3.5" />
               </button>
-              <div className="w-px h-5 bg-slate-200 mx-0.5" />
-              <button
-                onClick={() => onNewFlow(false)}
-                className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100 transition-colors"
-                title="New blank flow"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={onDeleteFlow}
-                disabled={!isPersisted}
-                className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-red-400 hover:bg-red-50 hover:border-red-200 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
-                title="Delete flow"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+              {currentId !== null && onOpenDetails && (
+                <button
+                  onClick={() => confirmDiscard() && onOpenDetails(currentId)}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100 transition-colors"
+                  title="Flow details: versions, templates, automations and submissions"
+                >
+                  <Info className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           </div>
+
+          {latestVersion && latestVersion.status !== 'published' && (latestVersion.status === 'failed' || latestVersion.lastError) && (
+            <div className="px-4 py-2 bg-red-50 border-b border-red-100 text-[11px] text-red-600 flex items-start gap-2 shrink-0">
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>
+                Version {latestVersion.versionNumber} was not published: {latestVersion.lastError ?? 'Meta rejected the Flow.'}
+                {latestVersion.validationErrors.length > 0 && (
+                  <> ({latestVersion.validationErrors.map((e) => e.message || e.error).filter(Boolean).slice(0, 3).join(' · ')})</>
+                )}
+              </span>
+            </div>
+          )}
 
           {mode === 'edit' && (
             <WaScreenTabs

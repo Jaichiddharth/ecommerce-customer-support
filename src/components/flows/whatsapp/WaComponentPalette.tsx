@@ -6,8 +6,8 @@ import {
   Heading1, Heading2, AlignLeft, Type, TextCursorInput, FileText, Calendar,
   SquareChevronDown, CircleDot, SquareCheck, ShieldCheck, RectangleHorizontal,
 } from 'lucide-react';
-import { WA_GROUP_LABELS, WA_PALETTE_ITEMS, type WaPaletteGroup, type WaPaletteItem } from './wa-component-registry';
-import type { WaComponentType } from './wa-flow-types';
+import { WA_GROUP_LABELS, WA_PALETTE_ITEMS, type WaPaletteGroup, type WaPaletteItem } from '@/lib/whatsapp-flows/wa-component-registry';
+import type { WaComponentType } from '@/lib/whatsapp-flows/wa-flow-types';
 
 const ICON_MAP: Record<string, React.FC<{ className?: string }>> = {
   Heading1, Heading2, AlignLeft, Type, TextCursorInput, FileText, Calendar,

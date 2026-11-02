@@ -2,10 +2,10 @@
 
 import React, { useMemo, useState } from 'react';
 import { ArrowLeft, X, RotateCcw, CheckCircle2, XCircle } from 'lucide-react';
-import type { WaComponent, WaFlow } from './wa-flow-types';
-import { isInputComponent } from './wa-flow-types';
-import { normalizeOrder } from './wa-component-registry';
-import { analyzeNavigation, footerOf } from './wa-flow-json';
+import type { WaComponent, WaFlow } from '@/lib/whatsapp-flows/wa-flow-types';
+import { isInputComponent } from '@/lib/whatsapp-flows/wa-flow-types';
+import { normalizeOrder } from '@/lib/whatsapp-flows/wa-component-registry';
+import { analyzeNavigation, footerOf } from '@/lib/whatsapp-flows/wa-flow-json';
 import { WaComponentRenderer, type WaFieldValue } from './WaComponentRenderer';
 
 function isFilled(c: WaComponent, v: WaFieldValue) {

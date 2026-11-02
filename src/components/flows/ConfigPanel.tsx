@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { X, Save, Trash2 } from 'lucide-react';
 import type { AutomationNodeData } from './flow-types';
+import { SendWhatsAppFlowFields, WaitForFlowSubmissionFields } from './whatsapp/AutomationFlowFields';
 
 interface ConfigPanelProps {
   nodeId: string;
@@ -268,6 +269,12 @@ function TypeFields({
           </Field>
         </div>
       );
+
+    case 'action_send_whatsapp_flow':
+      return <SendWhatsAppFlowFields local={local} set={set} inputCls={inputCls} Field={Field} />;
+
+    case 'flow_wait_flow_submission':
+      return <WaitForFlowSubmissionFields local={local} set={set} inputCls={inputCls} Field={Field} />;
 
     default:
       return (

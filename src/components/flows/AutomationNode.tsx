@@ -5,7 +5,7 @@ import { Handle, Position, NodeProps, useReactFlow } from '@xyflow/react';
 import {
   MessageCircle, Hash, Bell, GitBranch, Search, UserCheck,
   Send, FileText, UserPlus, PenLine, Clock, Shuffle, StopCircle,
-  Settings2, Trash2,
+  Settings2, Trash2, MessageSquareText, Hourglass,
 } from 'lucide-react';
 import type { AutomationNodeData } from './flow-types';
 
@@ -25,6 +25,8 @@ const TYPE_ICON: Record<string, React.FC<{ className?: string }>> = {
   flow_delay: Clock,
   flow_branch: Shuffle,
   flow_end: StopCircle,
+  action_send_whatsapp_flow: MessageSquareText,
+  flow_wait_flow_submission: Hourglass,
 };
 
 // ─── Node colour tokens ───────────────────────────────────────────────────────
@@ -52,6 +54,8 @@ const NODE_THEMES: Record<string, NodeTheme> = {
   flow_delay:                 { bg: '#faf5ff', border: '#d8b4fe', icon: '#7e22ce', badge: '#f3e8ff', badgeText: '#6b21a8', categoryLabel: 'Flow Control' },
   flow_branch:                { bg: '#faf5ff', border: '#d8b4fe', icon: '#7e22ce', badge: '#f3e8ff', badgeText: '#6b21a8', categoryLabel: 'Flow Control' },
   flow_end:                   { bg: '#fff1f2', border: '#fca5a5', icon: '#b91c1c', badge: '#fee2e2', badgeText: '#991b1b', categoryLabel: 'Flow Control' },
+  action_send_whatsapp_flow:  { bg: '#f0fdf4', border: '#86efac', icon: '#15803d', badge: '#dcfce7', badgeText: '#166534', categoryLabel: 'Action' },
+  flow_wait_flow_submission:  { bg: '#faf5ff', border: '#d8b4fe', icon: '#7e22ce', badge: '#f3e8ff', badgeText: '#6b21a8', categoryLabel: 'Flow Control' },
 };
 
 const DEFAULT_THEME: NodeTheme = {
@@ -249,6 +253,12 @@ function getPreviewText(data: AutomationNodeData): string {
       return d.branches ? `${(d.branches as string[]).length} branches` : '';
     case 'flow_end':
       return 'End of workflow';
+    case 'action_send_whatsapp_flow':
+      return d.flowName
+        ? `${d.flowName}${d.sendMethod === 'interactive' ? ' · interactive' : d.templateName ? ` · ${d.templateName}` : ''}`
+        : '';
+    case 'flow_wait_flow_submission':
+      return `Wait up to ${d.timeoutHours ?? 24}h for the response`;
     default:
       return '';
   }
@@ -280,4 +290,6 @@ export const NODE_TYPES = {
   flow_delay:                  MemoNode,
   flow_branch:                 MemoNode,
   flow_end:                    MemoNode,
+  action_send_whatsapp_flow:   MemoNode,
+  flow_wait_flow_submission:   MemoNode,
 } as const;

@@ -18,8 +18,8 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Copy, Trash2, Plus, Flag, CheckCircle2 } from 'lucide-react';
-import type { WaScreen } from './wa-flow-types';
-import { footerOf } from './wa-flow-json';
+import type { WaScreen } from '@/lib/whatsapp-flows/wa-flow-types';
+import { footerOf } from '@/lib/whatsapp-flows/wa-flow-json';
 
 interface TabProps {
   screen: WaScreen;

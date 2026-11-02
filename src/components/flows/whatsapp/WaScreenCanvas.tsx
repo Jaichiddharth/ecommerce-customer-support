@@ -5,8 +5,8 @@ import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, Copy, Trash2, AlertCircle, ArrowRight, Flag, MousePointerClick, X } from 'lucide-react';
-import type { WaComponent, WaFlow, WaScreen } from './wa-flow-types';
-import { paletteItem } from './wa-component-registry';
+import type { WaComponent, WaFlow, WaScreen } from '@/lib/whatsapp-flows/wa-flow-types';
+import { paletteItem } from '@/lib/whatsapp-flows/wa-component-registry';
 import { WaComponentRenderer } from './WaComponentRenderer';
 
 export const SCREEN_DROP_ID = 'screen-drop-zone';

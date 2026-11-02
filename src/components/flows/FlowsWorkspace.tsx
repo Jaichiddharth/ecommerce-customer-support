@@ -4,12 +4,12 @@ import React, { useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Workflow, MessageSquareText } from 'lucide-react';
 import { LoadingState } from '@/components/ui/states';
-import FlowView from './FlowView';
+import AutomationsModule from './automations/AutomationsModule';
 
-// The screen-based builder is isolated in ./whatsapp and only loaded when opened.
-const WhatsAppFlowBuilder = dynamic(() => import('./whatsapp/WhatsAppFlowBuilder'), {
+// The WhatsApp Flows module (listing, screen builder, templates, submissions) lives in ./whatsapp and only loads when opened.
+const WhatsAppFlowsModule = dynamic(() => import('./whatsapp/WhatsAppFlowsModule'), {
   ssr: false,
-  loading: () => <LoadingState label="Loading WhatsApp Flow builder…" className="h-full" />,
+  loading: () => <LoadingState label="Loading WhatsApp Flows…" className="h-full" />,
 });
 
 type BuilderKind = 'automation' | 'whatsapp';
@@ -19,7 +19,7 @@ const BUILDERS: { key: BuilderKind; label: string; icon: React.FC<{ className?: 
   { key: 'whatsapp', label: 'WhatsApp Flows', icon: MessageSquareText },
 ];
 
-/** Hosts the existing automation builder alongside the WhatsApp (Meta) Flow builder. */
+/** Hosts Automations (listing + node builder) alongside WhatsApp Flows (listing + screen builder). */
 export default function FlowsWorkspace() {
   const [kind, setKind] = useState<BuilderKind>('automation');
 
@@ -39,7 +39,7 @@ export default function FlowsWorkspace() {
         ))}
       </div>
       <div className="flex-1 min-h-0">
-        {kind === 'automation' ? <FlowView /> : <WhatsAppFlowBuilder />}
+        {kind === 'automation' ? <AutomationsModule /> : <WhatsAppFlowsModule />}
       </div>
     </div>
   );

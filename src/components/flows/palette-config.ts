@@ -107,6 +107,17 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     borderColor: '#86efac',
   },
 
+  {
+    type: 'action_send_whatsapp_flow',
+    label: 'Send WhatsApp Flow',
+    category: 'actions',
+    description: 'Send a published WhatsApp Flow form',
+    icon: 'MessageSquareText',
+    color: '#dcfce7',
+    textColor: '#15803d',
+    borderColor: '#86efac',
+  },
+
   // ── Flow Controls ─────────────────────────────────────────────────────────
   {
     type: 'flow_delay',
@@ -124,6 +135,16 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     category: 'flow-controls',
     description: 'Split into multiple paths',
     icon: 'Shuffle',
+    color: '#f3e8ff',
+    textColor: '#7e22ce',
+    borderColor: '#d8b4fe',
+  },
+  {
+    type: 'flow_wait_flow_submission',
+    label: 'Wait for Flow Submission',
+    category: 'flow-controls',
+    description: 'Pause until the customer submits the Flow',
+    icon: 'Hourglass',
     color: '#f3e8ff',
     textColor: '#7e22ce',
     borderColor: '#d8b4fe',

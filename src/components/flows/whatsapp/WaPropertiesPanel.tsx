@@ -9,8 +9,8 @@ import type {
   WaOption,
   WaOptionComponent,
   WaScreen,
-} from './wa-flow-types';
-import { isInputComponent, isOptionComponent } from './wa-flow-types';
+} from '@/lib/whatsapp-flows/wa-flow-types';
+import { isInputComponent, isOptionComponent } from '@/lib/whatsapp-flows/wa-flow-types';
 import {
   FLOW_JSON_VERSIONS,
   LIMITS,
@@ -19,8 +19,8 @@ import {
   toFieldName,
   toOptionId,
   toScreenId,
-} from './wa-component-registry';
-import { footerOf } from './wa-flow-json';
+} from '@/lib/whatsapp-flows/wa-component-registry';
+import { footerOf } from '@/lib/whatsapp-flows/wa-flow-json';
 import { WaPaletteIcon } from './WaComponentPalette';
 
 // ─── Field primitives (match ConfigPanel styling) ────────────────────────────

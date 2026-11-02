@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import {
   MessageCircle, Hash, Bell, GitBranch, Search, UserCheck,
   Send, FileText, UserPlus, PenLine, Clock, Shuffle, StopCircle,
+  MessageSquareText, Hourglass,
 } from 'lucide-react';
 import { PALETTE_ITEMS, CATEGORY_META } from './palette-config';
 import type { PaletteItem, NodeCategory } from './flow-types';
@@ -13,6 +14,7 @@ import type { PaletteItem, NodeCategory } from './flow-types';
 const ICON_MAP: Record<string, React.FC<{ className?: string }>> = {
   MessageCircle, Hash, Bell, GitBranch, Search, UserCheck,
   Send, FileText, UserPlus, PenLine, Clock, Shuffle, StopCircle,
+  MessageSquareText, Hourglass,
 };
 
 function NodeIcon({ name, className }: { name: string; className?: string }) {

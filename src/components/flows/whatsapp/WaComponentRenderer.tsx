@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Calendar, ChevronDown, Check } from 'lucide-react';
-import type { WaComponent } from './wa-flow-types';
+import type { WaComponent } from '@/lib/whatsapp-flows/wa-flow-types';
 
 export type WaFieldValue = string | string[] | boolean | undefined;
 
