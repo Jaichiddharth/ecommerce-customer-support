@@ -4,7 +4,6 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import apiClient from '@/lib/api/client';
 
 import {
-  Send,
   Paperclip,
   Smile,
   Plus,
@@ -28,8 +27,6 @@ import {
   ShoppingBag,
   Clock,
   AlertTriangle,
-  Search,
-  RefreshCw,
 } from 'lucide-react';
 import { Message, MessageStatus, normalizeMessageStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -57,6 +54,13 @@ import { VirtualMessageList } from './inbox/VirtualMessageList';
 import { InboxTopBar } from './inbox/InboxTopBar';
 import { ProductBrowser, type ShareProductArgs } from './shopify/ProductBrowser';
 import { useShopifyStore } from './shopify/useShopifyStore';
+import { TemplateComposer, forgetCachedTemplates, type TemplateDraft } from './inbox/TemplateComposer';
+import {
+  buildTemplateSendComponents,
+  getTemplateSendFields,
+  getTemplateValueErrors,
+  renderTemplateMessage,
+} from '@/lib/whatsapp-templates';
 import {
   CHANNEL_LABELS,
   CHANNEL_THREAD_LABELS,
@@ -163,7 +167,7 @@ const renderMessageWithLinks = (text: string) => {
 const isPlaceholderText = (text?: string) =>
   !text ||
   !text.trim() ||
-  /^\[(Image|Video|Audio|Document|Voice)\](\s*(No caption|attachment)?)?$/i.test(text) ||
+  /^\[(Image|Video|Audio|Document|Voice|Sticker)\](\s*(No caption|attachment)?)?$/i.test(text) ||
   text === '[Image] No caption' ||
   text === '[Video] No caption';
 
@@ -201,7 +205,8 @@ const mapApiMessage = (m: any, channel: string): Message => {
     status: m.status !== undefined ? normalizeMessageStatus(m.status) : MessageStatus.DELIVERED,
     errorCode: m.errorCode || undefined,
     type: m.mediaType || (m.mediaUrl ? 'image' : 'text'),
-    mediaType: m.mediaType || undefined,
+    // A template's header file is stored as its media; show it as the header's kind (image/video/document)
+    mediaType: m.metadata?.template?.headerFormat || m.mediaType || undefined,
     mediaUrl: m.mediaUrl || undefined,
     metaMessageId: m.metaMessageId || undefined,
     isInternalNote: Boolean(m.isInternalNote),
@@ -237,39 +242,6 @@ interface ThreadPaging {
 }
 
 type ComposerMode = 'reply' | 'note' | 'template';
-
-export interface MetaTemplateComponent {
-  type: string;
-  format?: string;
-  text?: string;
-  example?: {
-    body_text?: string[][];
-    header_text?: string[];
-    header_handle?: string[];
-  };
-  buttons?: Array<{
-    type: string;
-    text: string;
-    url?: string;
-    phone_number?: string;
-  }>;
-}
-
-export interface MetaTemplate {
-  id: string;
-  name: string;
-  status: string;
-  category: string;
-  language: string;
-  components?: MetaTemplateComponent[];
-}
-
-const SAVED_REPLIES = [
-  { title: 'Welcome greeting', text: 'Hi! Thank you for reaching out to us. How can I help you today?' },
-  { title: 'Order status check', text: 'We have checked your order details and it is currently in transit. Expected delivery is tomorrow.' },
-  { title: 'Refund / return policy', text: 'We offer a hassle-free 7-day return and exchange policy. Would you like me to generate a return label?' },
-  { title: 'Closing conversation', text: 'Thank you for contacting us! Please let us know if you need anything else. Have a wonderful day!' },
-];
 
 export interface InboxCounts {
   unread: number;
@@ -331,6 +303,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [templateDraft, setTemplateDraft] = useState<TemplateDraft | null>(null);
+  const [templateRevision, setTemplateRevision] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -473,6 +447,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       prev.map((c) => (c.customer.id === selectedCustomerId && c.unreadCount > 0 ? { ...c, unreadCount: 0 } : c))
     );
     setComposerMode('reply');
+    setTemplateDraft(null);
     setShowModeMenu(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCustomerId, fetchMessagesForCustomer]);
@@ -679,6 +654,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       fetchChannels();
       refreshConversationsSoon();
     },
+    // A newly approved (or paused) template must show up in, or drop out of, the Template tab
+    onTemplateStatus: () => {
+      forgetCachedTemplates();
+      setTemplateRevision((r) => r + 1);
+    },
   });
 
   // -------------------------------------------------------------
@@ -793,7 +773,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     for (let i = activeMessages.length - 1; i >= 0; i--) {
       const msg = activeMessages[i];
       const raw = msg.createdAt;
-      if (msg.sender === 'customer' && raw) {
+      // `system` notices (e.g. "customer changed number") come from WhatsApp, not the customer, so they don't open the window
+      if (msg.sender === 'customer' && msg.mediaType !== 'system' && raw) {
         const time = new Date(raw).getTime();
         if (!isNaN(time)) return time;
       }
@@ -804,6 +785,14 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     }
     return null;
   }, [activeMessages, activeConv?.lastReceivedMessageAt]);
+
+  // Ticks every minute so an open chat notices the window closing (and the hours left stay current)
+  const [windowClock, setWindowClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (activeChannelType !== 'whatsapp') return;
+    const timer = setInterval(() => setWindowClock(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [activeChannelType]);
 
   const window24hStatus = useMemo(() => {
     if (activeChannelType !== 'whatsapp') {
@@ -825,7 +814,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       };
     }
     const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
-    const elapsed = Date.now() - lastCustomerMessageTime;
+    // The clock can lag a message that just arrived by up to a minute; never let that read as negative time
+    const elapsed = Math.max(0, windowClock - lastCustomerMessageTime);
     if (elapsed > WINDOW_24H_MS) {
       const hoursAgo = Math.floor(elapsed / (1000 * 60 * 60));
       return {
@@ -845,179 +835,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       hoursSinceLast: null,
       hasReceivedMessage: true,
     };
-  }, [activeChannelType, lastCustomerMessageTime]);
+  }, [activeChannelType, lastCustomerMessageTime, windowClock]);
 
   const isWindowExpired = window24hStatus.isExpired;
-
-  // -------------------------------------------------------------
-  // WHATSAPP META TEMPLATES
-  // -------------------------------------------------------------
-  const [metaTemplates, setMetaTemplates] = useState<MetaTemplate[]>([]);
-  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState<MetaTemplate | null>(null);
-  const [templateSearch, setTemplateSearch] = useState('');
-  const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({});
-  const [isSendingTemplate, setIsSendingTemplate] = useState(false);
-
-  const fetchMetaTemplates = useCallback(async (phoneId?: string | null) => {
-    try {
-      setIsLoadingTemplates(true);
-      const url = phoneId
-        ? `/api/channels/whatsapp/meta-details?phoneNumberId=${encodeURIComponent(phoneId)}`
-        : '/api/channels/whatsapp/meta-details';
-      const res = await apiClient.get(url);
-      if (res.data?.success && Array.isArray(res.data.templates)) {
-        const approved = res.data.templates.filter(
-          (t: MetaTemplate) => !t.status || t.status.toUpperCase() === 'APPROVED'
-        );
-        setMetaTemplates(approved);
-      }
-    } catch (err) {
-      clientLogger.warn('InboxView.fetchMetaTemplates', 'Could not load WhatsApp templates', err);
-    } finally {
-      setIsLoadingTemplates(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (activeChannelType === 'whatsapp' && (composerMode === 'template' || isWindowExpired)) {
-      if (metaTemplates.length === 0 && !isLoadingTemplates) {
-        fetchMetaTemplates(conversationSendChannel?.metaPhoneNumberId);
-      }
-    }
-  }, [
-    activeChannelType,
-    composerMode,
-    isWindowExpired,
-    metaTemplates.length,
-    isLoadingTemplates,
-    fetchMetaTemplates,
-    conversationSendChannel?.metaPhoneNumberId,
-  ]);
-
-  useEffect(() => {
-    setSelectedTemplate(null);
-    setTemplateVariables({});
-    setTemplateSearch('');
-  }, [activeConv?.id]);
-
-  const handleSelectTemplate = (tpl: MetaTemplate) => {
-    setSelectedTemplate(tpl);
-    const bodyComp = tpl.components?.find((c) => c.type.toUpperCase() === 'BODY');
-    const matches = Array.from(new Set(bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || []));
-    const initVars: Record<string, string> = {};
-    for (const m of matches) {
-      const num = m.replace(/[{}]/g, '');
-      if (num === '1' && activeConv?.customer.name) {
-        initVars[num] = activeConv.customer.name;
-      } else {
-        initVars[num] = '';
-      }
-    }
-    setTemplateVariables(initVars);
-  };
-
-  const handleSendTemplate = async () => {
-    if (!selectedTemplate || !activeConv) return;
-    const customerPhone = activeConv.customer.phone;
-    if (!customerPhone) {
-      gooeyToast.error(`Customer "${activeConv.customer.name}" does not have a phone number.`);
-      return;
-    }
-    const targetChannel = conversationSendChannel;
-    if (!targetChannel) {
-      gooeyToast.error('No connected WhatsApp channel found. Please connect your WhatsApp account first.');
-      return;
-    }
-
-    const bodyComp = selectedTemplate.components?.find((c) => c.type.toUpperCase() === 'BODY');
-    const varMatches = Array.from(new Set(bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || []));
-
-    for (const match of varMatches) {
-      const num = match.replace(/[{}]/g, '');
-      if (!templateVariables[num]?.trim()) {
-        gooeyToast.error(`Please provide a value for variable {{${num}}}`);
-        return;
-      }
-    }
-
-    const components: Array<Record<string, unknown>> = [];
-    if (varMatches.length > 0) {
-      const sorted = [...varMatches].sort((a, b) => {
-        const numA = parseInt(a.replace(/\D/g, ''), 10);
-        const numB = parseInt(b.replace(/\D/g, ''), 10);
-        return numA - numB;
-      });
-      components.push({
-        type: 'body',
-        parameters: sorted.map((m) => {
-          const num = m.replace(/[{}]/g, '');
-          return { type: 'text', text: templateVariables[num].trim() };
-        }),
-      });
-    }
-
-    let renderedText = bodyComp?.text || `[Template: ${selectedTemplate.name}]`;
-    for (const [k, v] of Object.entries(templateVariables)) {
-      renderedText = renderedText.replaceAll(`{{${k}}}`, v.trim());
-    }
-
-    setIsSendingTemplate(true);
-    const convId = convKeyFor(activeConv.customer.id);
-    const tempId = `msg-${Date.now()}`;
-
-    const optimisticMsg: Message = {
-      id: tempId,
-      sender: 'agent',
-      senderId: dbUser?.id ?? null,
-      senderName: dbUser?.name ?? null,
-      channel: 'whatsapp',
-      text: renderedText,
-      timestamp: formatTime(),
-      createdAt: new Date().toISOString(),
-      status: MessageStatus.SENT,
-      type: 'template',
-      mediaType: 'template',
-    };
-
-    setMessagesMap((prev) => ({ ...prev, [convId]: [...(prev[convId] || []), optimisticMsg] }));
-
-    try {
-      const res = await apiClient.post('/api/channels/whatsapp/send', {
-        to: customerPhone,
-        channelId: targetChannel.id,
-        customerId: activeConv.customer.id,
-        type: 'template',
-        templateName: selectedTemplate.name,
-        languageCode: selectedTemplate.language || 'en_US',
-        components: components.length > 0 ? components : undefined,
-        text: renderedText,
-      });
-
-      if (res.data?.success) {
-        if (res.data?.persisted === false) {
-          notifyWarning('Template delivered, but not saved', res.data?.warning);
-        } else {
-          gooeyToast.success(`Template "${selectedTemplate.name}" sent successfully!`);
-        }
-        setSelectedTemplate(null);
-        setTemplateVariables({});
-        setComposerMode('reply');
-        fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
-        refreshConversationsSoon();
-      }
-    } catch (err) {
-      const apiError = notifyError(err, { where: 'InboxView.handleSendTemplate', title: 'Template not sent' });
-      setMessagesMap((prev) => ({
-        ...prev,
-        [convId]: (prev[convId] || []).map((m) =>
-          m.id === tempId ? { ...m, status: MessageStatus.FAILED, errorMessage: apiError.message } : m
-        ),
-      }));
-    } finally {
-      setIsSendingTemplate(false);
-    }
-  };
 
   const lastAiAction = useMemo(() => {
     for (let i = activeMessages.length - 1; i >= 0; i--) {
@@ -1082,6 +902,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // -------------------------------------------------------------
   const handleToggleReaction = async (msgId: string, emojiToSet: string) => {
     if (!activeConv) return;
+    if (activeChannelType === 'whatsapp' && isWindowExpired) {
+      gooeyToast.error('Reactions can only be sent within 24 hours of the customer’s last message.');
+      return;
+    }
     const numMsgId = Number(msgId);
     if (isNaN(numMsgId)) return;
 
@@ -1278,6 +1102,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       }
     } catch (err) {
       const apiError = notifyError(err, { where: 'InboxView.handleSend', title: 'Message not sent' });
+      // The server's clock is the authority; if it says the window closed, take the agent to templates
+      if (apiError.code === 'MESSAGE_WINDOW_EXPIRED') setComposerMode('template');
       const metaCode = typeof apiError.details?.metaCode === 'number' ? apiError.details.metaCode : null;
       // Keep the bubble and mark it failed with the reason, so the agent sees what happened
       setMessagesMap((prev) => ({
@@ -1378,6 +1204,116 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     setComposerMode('reply');
     setShowProductPicker(false);
     requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  // -------------------------------------------------------------
+  // WHATSAPP TEMPLATES
+  // -------------------------------------------------------------
+  const templateDisabledReason = !activeConv
+    ? null
+    : activeChannelType !== 'whatsapp'
+      ? 'Message templates can only be sent on WhatsApp.'
+      : isChannelDisconnected
+        ? 'This WhatsApp number is disconnected. Reconnect it in Settings to send templates.'
+        : !activeConv.customer.phone
+          ? `${activeConv.customer.name} has no phone number.`
+          : !conversationSendChannel
+            ? 'No connected WhatsApp channel found.'
+            : null;
+
+  const templateReady = Boolean(
+    templateDraft && Object.keys(getTemplateValueErrors(templateDraft.template, templateDraft.values)).length === 0
+  );
+
+  /** Sends the chosen approved template; works outside the 24-hour window, unlike a normal reply */
+  const handleSendTemplate = async () => {
+    if (!activeConv || !templateDraft) return;
+    if (templateDisabledReason) {
+      gooeyToast.error(templateDisabledReason);
+      return;
+    }
+    if (!templateReady) {
+      gooeyToast.error('Fill in every template variable before sending.');
+      return;
+    }
+
+    const { template, values } = templateDraft;
+    const targetChannel = conversationSendChannel!;
+    const convId = convKeyFor(activeConv.customer.id);
+    const tempId = `msg-${Date.now()}`;
+    const text = renderTemplateMessage(template, values);
+
+    clientLogger.debug('InboxView.handleSendTemplate', 'Sending WhatsApp template', {
+      channelId: targetChannel.id,
+      customerId: activeConv.customer.id,
+      template: template.name,
+      language: template.language,
+    });
+
+    // Until the stored message arrives, show the header from the approved sample
+    const mediaField = getTemplateSendFields(template).find((f) => f.kind === 'header_media');
+    const headerPreview = mediaField?.example;
+
+    upsertMessage(convId, {
+      id: tempId,
+      sender: 'agent',
+      senderId: dbUser?.id ?? null,
+      senderName: dbUser?.name ?? null,
+      channel: 'whatsapp',
+      text,
+      timestamp: formatTime(),
+      createdAt: new Date().toISOString(),
+      status: MessageStatus.SENT,
+      type: 'template',
+      mediaType: mediaField?.mediaFormat?.toLowerCase() ?? 'template',
+      mediaUrl: headerPreview,
+    });
+    setIsSending(true);
+
+    try {
+      let sendValues = values;
+      if (mediaField && !values.header_media) {
+        // Meta's sample link can't be sent as-is; the server re-uploads it and returns a media id
+        const media = await apiClient.post('/api/channels/whatsapp/templates/header-media', {
+          channelId: targetChannel.id,
+          templateId: template.id,
+        });
+        sendValues = { ...values, header_media: media.data.data.mediaId };
+        // Keep the id so a retry doesn't upload the sample again
+        setTemplateDraft((d) => (d && d.template === template ? { ...d, values: sendValues } : d));
+      }
+
+      const res = await apiClient.post('/api/channels/whatsapp/send', {
+        to: activeConv.customer.phone,
+        channelId: targetChannel.id,
+        customerId: activeConv.customer.id,
+        type: 'template',
+        templateName: template.name,
+        languageCode: template.language,
+        components: buildTemplateSendComponents(template, sendValues),
+        // Stored as the message text so the thread shows what the customer received
+        text,
+      });
+      if (res.data?.persisted === false) {
+        notifyWarning('Template delivered, but not saved', res.data?.warning);
+      }
+      setTemplateDraft(null);
+      setComposerMode('reply');
+      fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
+      refreshConversationsSoon();
+    } catch (err) {
+      // The draft stays filled so the agent can fix it and resend
+      const apiError = notifyError(err, { where: 'InboxView.handleSendTemplate', title: 'Template not sent' });
+      const metaCode = typeof apiError.details?.metaCode === 'number' ? apiError.details.metaCode : null;
+      setMessagesMap((prev) => ({
+        ...prev,
+        [convId]: (prev[convId] || []).map((m) =>
+          m.id === tempId ? { ...m, status: MessageStatus.FAILED, errorCode: metaCode, errorMessage: apiError.message } : m
+        ),
+      }));
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleSubmitComposer = () => {
@@ -1501,7 +1437,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       if (rx.userId === dbUser?.id || (rx.userId && !rx.customerId)) cur.hasMyReaction = true;
       rxMap.set(rx.emoji, cur);
     }
-    const canReact = !msg.isInternalNote && !isNaN(Number(msg.id)) && canSendOnChannel;
+    // WhatsApp only delivers reactions inside the 24-hour window
+    const canReact =
+      !msg.isInternalNote && !isNaN(Number(msg.id)) && canSendOnChannel && !(activeChannelType === 'whatsapp' && isWindowExpired);
     if (rxMap.size === 0 && !canReact) return null;
 
     return (
@@ -1614,13 +1552,17 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         ? `INTERNAL NOTE · ${agentName.toUpperCase()}`
         : isAi
           ? `AI AGENT${msg.aiAction ? ` · ${msg.aiAction.toUpperCase()}` : ''}`
-          : agentName.toUpperCase();
+          : `${agentName.toUpperCase()}${msg.type === 'template' ? ' · TEMPLATE' : ''}`;
 
-    const bubbleClass = isCustomer
-      ? 'bg-white border border-slate-200 text-slate-800'
-      : isNote
-        ? 'bg-amber-50 border border-amber-200 text-slate-800'
-        : 'bg-[#eef0fb] text-slate-800';
+    // Stickers float on the thread background like in WhatsApp, without a bubble around them
+    const isSticker = msg.mediaType === 'sticker' && Boolean(msg.mediaUrl);
+    const bubbleClass = isSticker
+      ? 'text-slate-800'
+      : isCustomer
+        ? 'rounded-xl px-3.5 py-2.5 bg-white border border-slate-200 text-slate-800'
+        : isNote
+          ? 'rounded-xl px-3.5 py-2.5 bg-amber-50 border border-amber-200 text-slate-800'
+          : 'rounded-xl px-3.5 py-2.5 bg-[#eef0fb] text-slate-800';
 
     return (
       <React.Fragment key={msg.id}>
@@ -1632,7 +1574,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           </div>
         )}
         <div className={`group flex flex-col ${isCustomer ? 'items-start' : 'items-end'}`}>
-          <div className={`max-w-[78%] rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed ${bubbleClass}`}>
+          <div className={`max-w-[78%] text-[13px] leading-relaxed ${bubbleClass}`}>
             {label && (
               <p className={`text-[10px] font-semibold tracking-wider mb-1 ${isNote ? 'text-amber-700' : 'text-[#3440a8]'}`}>
                 {label}
@@ -1682,8 +1624,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     if (composerMode === 'note') return { text: 'Notes are only visible to your team', className: 'text-amber-700' };
     if (composerMode === 'template') {
       return {
-        text: selectedTemplate
-          ? `Template: ${selectedTemplate.name} (${selectedTemplate.language})`
+        text: templateDraft
+          ? `Template: ${templateDraft.template.name} (${templateDraft.template.language})`
           : 'Select an approved WhatsApp template to send',
         className: 'text-[#3440a8] font-medium',
       };
@@ -1767,29 +1709,30 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                   <div className="flex items-center gap-3 min-w-0">
                     <Avatar name={activeConv.customer.name} src={activeConv.customer.avatarUrl} size="lg" />
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h2 className="font-semibold text-[15px] text-slate-900 truncate">{activeConv.customer.name}</h2>
+                      {/* The name truncates first; badges never wrap, so the header keeps one line */}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <h2 className="min-w-0 font-semibold text-[15px] text-slate-900 truncate">{activeConv.customer.name}</h2>
                         {isChannelDisconnected && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                          <span className="shrink-0 whitespace-nowrap px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
                             Disconnected
                           </span>
                         )}
                         {activeChannelType === 'whatsapp' && (
                           window24hStatus.isWithin24Hours ? (
                             <span
-                              title={`24-hour customer window is active (~${window24hStatus.hoursRemaining}h remaining). Free-form text allowed.`}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              title={`24-hour customer window is open (~${window24hStatus.hoursRemaining}h left). Free-form messages allowed.`}
+                              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] leading-4 font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
                             >
                               <Clock className="w-3 h-3 text-emerald-600" />
-                              24h window active · {window24hStatus.hoursRemaining}h left
+                              {window24hStatus.hoursRemaining}h left
                             </span>
                           ) : (
                             <span
-                              title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.hoursSinceLast}h ago. Free-form text blocked.` : 'No incoming customer message. Free-form text blocked.'}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200"
+                              title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.hoursSinceLast}h ago. Only approved templates can be sent.` : 'This customer hasn’t messaged yet. Only approved templates can be sent.'}
+                              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] leading-4 font-medium bg-amber-50 text-amber-800 border border-amber-200"
                             >
                               <AlertTriangle className="w-3 h-3 text-amber-600" />
-                              24h window closed · Templates only
+                              Templates only
                             </span>
                           )
                         )}
@@ -1997,8 +1940,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                           key={mode}
                           onClick={() => setComposerMode(mode)}
                           className={`py-2.5 border-b-2 capitalize cursor-pointer flex items-center gap-1.5 ${composerMode === mode
-                              ? 'border-[#3440a8] text-[#3440a8] font-semibold'
-                              : 'border-transparent text-slate-600 hover:text-slate-900'
+                            ? 'border-[#3440a8] text-[#3440a8] font-semibold'
+                            : 'border-transparent text-slate-600 hover:text-slate-900'
                             }`}
                         >
                           <span>{mode}</span>
@@ -2050,176 +1993,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                   </div>
 
                   {composerMode === 'template' ? (
-                    activeChannelType === 'whatsapp' ? (
-                      <div className="mt-2 border border-slate-200 rounded-xl p-3 bg-slate-50/50">
-                        {selectedTemplate ? (
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold text-sm text-slate-900">{selectedTemplate.name}</span>
-                                <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
-                                  {selectedTemplate.category}
-                                </span>
-                                <span className="text-xs text-slate-500">({selectedTemplate.language})</span>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => setSelectedTemplate(null)}
-                                className="text-xs font-medium text-[#3440a8] hover:underline cursor-pointer"
-                              >
-                                Change template
-                              </button>
-                            </div>
-
-                            {/* Template Variable Inputs */}
-                            {(() => {
-                              const bodyComp = selectedTemplate.components?.find((c) => c.type.toUpperCase() === 'BODY');
-                              const varMatches = Array.from(new Set(bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || []));
-                              if (varMatches.length === 0) return null;
-
-                              const sorted = [...varMatches].sort((a, b) => {
-                                const numA = parseInt(a.replace(/\D/g, ''), 10);
-                                const numB = parseInt(b.replace(/\D/g, ''), 10);
-                                return numA - numB;
-                              });
-
-                              return (
-                                <div className="space-y-2 bg-white p-2.5 rounded-lg border border-slate-200">
-                                  <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wide">
-                                    Template Variables
-                                  </p>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                    {sorted.map((m) => {
-                                      const num = m.replace(/[{}]/g, '');
-                                      return (
-                                        <div key={num} className="space-y-1">
-                                          <label className="text-[11px] font-medium text-slate-600">
-                                            Variable {m} {num === '1' ? '(Customer name)' : ''}
-                                          </label>
-                                          <input
-                                            type="text"
-                                            value={templateVariables[num] || ''}
-                                            onChange={(e) =>
-                                              setTemplateVariables((prev) => ({ ...prev, [num]: e.target.value }))
-                                            }
-                                            placeholder={`Value for ${m}...`}
-                                            className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-md focus:bg-white focus:outline-none focus:border-[#3440a8] focus:ring-1 focus:ring-[#3440a8]"
-                                          />
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              );
-                            })()}
-
-                            {/* Message Preview */}
-                            <div className="bg-[#e7ffdb]/40 border border-[#b2d8a8] rounded-lg p-3 text-slate-800 text-[13px] leading-relaxed shadow-sm">
-                              <p className="text-[10px] font-semibold text-emerald-800 uppercase tracking-wider mb-1">
-                                WhatsApp Message Preview
-                              </p>
-                              {(() => {
-                                const bodyComp = selectedTemplate.components?.find((c) => c.type.toUpperCase() === 'BODY');
-                                let text = bodyComp?.text || `[Template: ${selectedTemplate.name}]`;
-                                for (const [k, v] of Object.entries(templateVariables)) {
-                                  text = text.replaceAll(`{{${k}}}`, v || `{{${k}}}`);
-                                }
-                                return <p className="whitespace-pre-wrap">{text}</p>;
-                              })()}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="space-y-2.5">
-                            <div className="flex items-center gap-2">
-                              <div className="relative flex-1">
-                                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                                <input
-                                  type="text"
-                                  value={templateSearch}
-                                  onChange={(e) => setTemplateSearch(e.target.value)}
-                                  placeholder="Search approved WhatsApp templates..."
-                                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#3440a8] focus:ring-1 focus:ring-[#3440a8]"
-                                />
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => fetchMetaTemplates(conversationSendChannel?.metaPhoneNumberId)}
-                                disabled={isLoadingTemplates}
-                                title="Refresh templates from Meta"
-                                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 cursor-pointer disabled:opacity-50"
-                              >
-                                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTemplates ? 'animate-spin' : ''}`} />
-                              </button>
-                            </div>
-
-                            {isLoadingTemplates ? (
-                              <div className="py-6 flex items-center justify-center gap-2 text-xs text-slate-500">
-                                <Loader2 className="w-4 h-4 animate-spin text-[#3440a8]" />
-                                Loading templates from Meta…
-                              </div>
-                            ) : (
-                              <div className="max-h-52 overflow-y-auto divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
-                                {metaTemplates
-                                  .filter(
-                                    (t) =>
-                                      !templateSearch.trim() ||
-                                      t.name.toLowerCase().includes(templateSearch.toLowerCase()) ||
-                                      t.components?.some((c) => (c.text || '').toLowerCase().includes(templateSearch.toLowerCase()))
-                                  )
-                                  .map((tpl) => {
-                                    const bodyComp = tpl.components?.find((c) => c.type.toUpperCase() === 'BODY');
-                                    return (
-                                      <button
-                                        key={tpl.id || tpl.name}
-                                        type="button"
-                                        onClick={() => handleSelectTemplate(tpl)}
-                                        className="w-full text-left p-2.5 hover:bg-slate-50 transition-colors cursor-pointer group"
-                                      >
-                                        <div className="flex items-center justify-between gap-2">
-                                          <span className="font-semibold text-xs text-slate-900 group-hover:text-[#3440a8]">
-                                            {tpl.name}
-                                          </span>
-                                          <div className="flex items-center gap-1.5 shrink-0">
-                                            <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                              Approved
-                                            </span>
-                                            <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-100 text-slate-600">
-                                              {tpl.category}
-                                            </span>
-                                          </div>
-                                        </div>
-                                        {bodyComp?.text && (
-                                          <p className="mt-1 text-xs text-slate-500 line-clamp-2 leading-relaxed">
-                                            {bodyComp.text}
-                                          </p>
-                                        )}
-                                      </button>
-                                    );
-                                  })}
-                                {metaTemplates.length === 0 && (
-                                  <div className="py-6 px-4 text-center text-xs text-slate-500">
-                                    No approved templates found for this WhatsApp account. Create templates in Meta Business Suite first.
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="mt-1 border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-48 overflow-y-auto">
-                        {SAVED_REPLIES.map((tpl) => (
-                          <button
-                            key={tpl.title}
-                            onClick={() => applySuggestion(tpl.text)}
-                            className="w-full text-left px-3 py-2 hover:bg-slate-50 cursor-pointer"
-                          >
-                            <span className="block text-[13px] font-medium text-slate-900">{tpl.title}</span>
-                            <span className="block text-xs text-slate-500 truncate">{tpl.text}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )
+                    <TemplateComposer
+                      phoneNumberId={conversationSendChannel?.metaPhoneNumberId}
+                      draft={templateDraft}
+                      onDraftChange={setTemplateDraft}
+                      disabledReason={templateDisabledReason}
+                      revision={templateRevision}
+                    />
                   ) : (
                     <>
                       {selectedFile && composerMode === 'reply' && (
@@ -2258,8 +2038,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
                       <div
                         className={`mt-1 flex items-end gap-2 rounded-lg border px-3 py-2 ${composerMode === 'note'
-                            ? 'bg-amber-50/60 border-amber-200 focus-within:border-amber-400'
-                            : 'border-slate-200 focus-within:border-[#3440a8] focus-within:ring-1 focus-within:ring-[#3440a8]'
+                          ? 'bg-amber-50/60 border-amber-200 focus-within:border-amber-400'
+                          : 'border-slate-200 focus-within:border-[#3440a8] focus-within:ring-1 focus-within:ring-[#3440a8]'
                           }`}
                       >
                         <textarea
@@ -2318,8 +2098,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                         <button
                           type="button"
                           onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                          disabled={composerMode === 'template'}
                           title="Insert emoji"
-                          className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 cursor-pointer"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <Smile className="w-[18px] h-[18px]" />
                         </button>
@@ -2376,25 +2157,27 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       type="button"
                       onClick={handleSubmitComposer}
                       disabled={
-                        composerMode === 'template'
-                          ? activeChannelType === 'whatsapp'
-                            ? !selectedTemplate || isSendingTemplate
-                            : true
-                          : isSending ||
-                            (activeChannelType === 'whatsapp' && isWindowExpired && composerMode === 'reply') ||
-                            (composerMode === 'note' ? !inputMessage.trim() : (!inputMessage.trim() && !selectedFile) || !canSendOnChannel)
+                        isSending ||
+                        (composerMode === 'template'
+                          ? !templateReady || Boolean(templateDisabledReason)
+                          : composerMode === 'note'
+                            ? !inputMessage.trim()
+                            : (!inputMessage.trim() && !selectedFile) ||
+                            !canSendOnChannel ||
+                            (activeChannelType === 'whatsapp' && isWindowExpired))
                       }
+                      title={composerMode === 'template' && templateDraft && !templateReady ? 'Fill in every template variable first' : undefined}
                       className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-[#3440a8] hover:bg-[#2b3590] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold cursor-pointer shrink-0"
                     >
-                      {(isSending || isSendingTemplate) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      {isSending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                       {composerMode === 'note'
                         ? 'Add note'
                         : composerMode === 'template'
                           ? 'Send template'
                           : 'Send'}
-                    </button>
-                  </div>
-                </div>
+                    </button >
+                  </div >
+                </div >
               </>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
@@ -2407,7 +2190,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                 </p>
               </div>
             )}
-          </section>
+          </section >
 
           <CustomerPanel
             conversation={activeConv}
@@ -2417,8 +2200,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
             onInsertProductText={handleInsertProductText}
             shareDisabledReason={shareDisabledReason}
           />
-        </div>
-      </div>
+        </div >
+      </div >
 
       {/* ======================================================== */}
       {/* MODALS                                                   */}
@@ -2532,102 +2315,104 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       </Modal>
 
       {/* Media Preview Modal */}
-      {previewMedia && (
-        <Modal
-          isOpen={!!previewMedia}
-          onClose={() => setPreviewMedia(null)}
-          title={
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="font-bold text-slate-900 text-sm">{previewMedia.senderName || 'Attachment preview'}</span>
-              {previewMedia.timestamp && (
-                <>
-                  <span className="text-slate-300">•</span>
-                  <span className="text-xs font-normal text-slate-500">{previewMedia.timestamp}</span>
-                </>
-              )}
-            </div>
-          }
-          icon={
-            previewMedia.type === 'image' ? (
-              <ImageIcon className="w-4 h-4 text-[#3440a8]" />
-            ) : previewMedia.type === 'video' ? (
-              <Film className="w-4 h-4 text-[#3440a8]" />
-            ) : previewMedia.type === 'audio' ? (
-              <Music className="w-4 h-4 text-[#3440a8]" />
-            ) : (
-              <FileText className="w-4 h-4 text-[#3440a8]" />
-            )
-          }
-          maxWidth={previewMedia.type === 'image' || previewMedia.type === 'video' || previewMedia.type === 'document' ? '3xl' : 'md'}
-        >
-          <div className="space-y-4">
-            {previewMedia.type === 'image' && (
-              <div className="w-full max-h-[70vh] flex items-center justify-center bg-slate-950/5 rounded-xl overflow-hidden p-2 border border-slate-100">
-                <img
-                  src={previewMedia.url}
-                  alt={previewMedia.caption || 'Attachment preview'}
-                  className="max-h-[65vh] w-auto max-w-full object-contain rounded-lg"
-                />
-              </div>
-            )}
-
-            {previewMedia.type === 'video' && (
-              <div className="w-full max-h-[70vh] flex items-center justify-center bg-black rounded-xl overflow-hidden">
-                <video src={previewMedia.url} controls autoPlay className="max-h-[65vh] w-full object-contain rounded-lg" />
-              </div>
-            )}
-
-            {previewMedia.type === 'audio' && (
-              <div className="w-full p-4 bg-slate-50 rounded-xl border border-slate-200">
-                <audio src={previewMedia.url} controls autoPlay className="w-full" />
-              </div>
-            )}
-
-            {previewMedia.type === 'document' && (
-              <div className="w-full space-y-3">
-                {previewMedia.url.match(/\.pdf($|\?)/i) || previewMedia.url.startsWith('blob:') ? (
-                  <iframe src={previewMedia.url} title="Document preview" className="w-full h-[65vh] rounded-xl border border-slate-200 bg-white" />
-                ) : (
-                  <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                    <FileText className="w-12 h-12 text-[#3440a8] mx-auto opacity-80" />
-                    <p className="text-sm font-semibold text-slate-800">{previewMedia.caption || 'Document file'}</p>
-                    <p className="text-xs text-slate-500">Document preview ready for download or external viewing.</p>
-                  </div>
+      {
+        previewMedia && (
+          <Modal
+            isOpen={!!previewMedia}
+            onClose={() => setPreviewMedia(null)}
+            title={
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-bold text-slate-900 text-sm">{previewMedia.senderName || 'Attachment preview'}</span>
+                {previewMedia.timestamp && (
+                  <>
+                    <span className="text-slate-300">•</span>
+                    <span className="text-xs font-normal text-slate-500">{previewMedia.timestamp}</span>
+                  </>
                 )}
               </div>
-            )}
-
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
-              {previewMedia.caption ? (
-                <div className="bg-slate-50 border border-slate-200/80 rounded-xl px-3.5 py-2 max-w-lg">
-                  <p className="text-xs text-slate-800 leading-relaxed break-words">{renderMessageWithLinks(previewMedia.caption)}</p>
-                </div>
+            }
+            icon={
+              previewMedia.type === 'image' ? (
+                <ImageIcon className="w-4 h-4 text-[#3440a8]" />
+              ) : previewMedia.type === 'video' ? (
+                <Film className="w-4 h-4 text-[#3440a8]" />
+              ) : previewMedia.type === 'audio' ? (
+                <Music className="w-4 h-4 text-[#3440a8]" />
               ) : (
-                <div />
+                <FileText className="w-4 h-4 text-[#3440a8]" />
+              )
+            }
+            maxWidth={previewMedia.type === 'image' || previewMedia.type === 'video' || previewMedia.type === 'document' ? '3xl' : 'md'}
+          >
+            <div className="space-y-4">
+              {previewMedia.type === 'image' && (
+                <div className="w-full max-h-[70vh] flex items-center justify-center bg-slate-950/5 rounded-xl overflow-hidden p-2 border border-slate-100">
+                  <img
+                    src={previewMedia.url}
+                    alt={previewMedia.caption || 'Attachment preview'}
+                    className="max-h-[65vh] w-auto max-w-full object-contain rounded-lg"
+                  />
+                </div>
               )}
-              <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
-                <a
-                  href={previewMedia.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg flex items-center gap-1.5 font-medium border border-slate-200"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  Open in tab
-                </a>
-                <a
-                  href={previewMedia.url}
-                  download
-                  className="px-3 py-1.5 bg-[#3440a8] hover:bg-[#2b3590] text-white rounded-lg flex items-center gap-1.5 font-semibold"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Download
-                </a>
+
+              {previewMedia.type === 'video' && (
+                <div className="w-full max-h-[70vh] flex items-center justify-center bg-black rounded-xl overflow-hidden">
+                  <video src={previewMedia.url} controls autoPlay className="max-h-[65vh] w-full object-contain rounded-lg" />
+                </div>
+              )}
+
+              {previewMedia.type === 'audio' && (
+                <div className="w-full p-4 bg-slate-50 rounded-xl border border-slate-200">
+                  <audio src={previewMedia.url} controls autoPlay className="w-full" />
+                </div>
+              )}
+
+              {previewMedia.type === 'document' && (
+                <div className="w-full space-y-3">
+                  {previewMedia.url.match(/\.pdf($|\?)/i) || previewMedia.url.startsWith('blob:') ? (
+                    <iframe src={previewMedia.url} title="Document preview" className="w-full h-[65vh] rounded-xl border border-slate-200 bg-white" />
+                  ) : (
+                    <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                      <FileText className="w-12 h-12 text-[#3440a8] mx-auto opacity-80" />
+                      <p className="text-sm font-semibold text-slate-800">{previewMedia.caption || 'Document file'}</p>
+                      <p className="text-xs text-slate-500">Document preview ready for download or external viewing.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
+                {previewMedia.caption ? (
+                  <div className="bg-slate-50 border border-slate-200/80 rounded-xl px-3.5 py-2 max-w-lg">
+                    <p className="text-xs text-slate-800 leading-relaxed break-words">{renderMessageWithLinks(previewMedia.caption)}</p>
+                  </div>
+                ) : (
+                  <div />
+                )}
+                <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                  <a
+                    href={previewMedia.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg flex items-center gap-1.5 font-medium border border-slate-200"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open in tab
+                  </a>
+                  <a
+                    href={previewMedia.url}
+                    download
+                    className="px-3 py-1.5 bg-[#3440a8] hover:bg-[#2b3590] text-white rounded-lg flex items-center gap-1.5 font-semibold"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Download
+                  </a>
+                </div>
               </div>
             </div>
-          </div>
-        </Modal>
-      )}
-    </div>
+          </Modal>
+        )
+      }
+    </div >
   );
 };

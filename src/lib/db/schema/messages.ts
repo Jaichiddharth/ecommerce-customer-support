@@ -1,5 +1,5 @@
 import { pgTable, serial, integer, varchar, text, boolean, timestamp, jsonb, index } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { and, eq, relations, sql } from "drizzle-orm";
 import { organizations } from "./organizations";
 import { customers } from "./customers";
 import { channels } from "./channels";
@@ -29,6 +29,8 @@ export interface SharedShopifyProduct {
 export interface MessageMetadata {
   aiAction?: string; // e.g. 'catalog lookup'
   shopifyProduct?: SharedShopifyProduct; // Set when an agent shares a Shopify product
+  /** Set on template messages; `headerFormat` tells the UI how to show the header media in `mediaUrl` */
+  template?: { name: string; language: string; headerFormat?: "image" | "video" | "document" };
   [key: string]: unknown;
 }
 
@@ -150,3 +152,12 @@ export const messagesRelations = relations(messages, ({ one, many }) => ({
 
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
+
+/**
+ * Messages that open WhatsApp's 24-hour customer service window: anything the customer sent,
+ * except `system` notices (e.g. "customer changed number"), which WhatsApp generates itself.
+ */
+export const opensServiceWindow = and(
+  eq(messages.senderType, "customer"),
+  sql`${messages.mediaType} is distinct from 'system'`
+);

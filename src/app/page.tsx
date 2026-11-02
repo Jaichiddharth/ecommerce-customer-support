@@ -7,6 +7,7 @@ import { DashboardView } from '../components/DashboardView';
 import { InboxView, InboxCounts } from '../components/InboxView';
 import { IntegrationsView, IntegrationKey } from '../components/integrations/IntegrationsView';
 import { SettingsView } from '../components/SettingsView';
+import { TemplatesView } from '../components/templates/TemplatesView';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 
 export default function Home() {
@@ -27,6 +28,9 @@ export default function Home() {
     if (params.get('tab') === 'integrations') {
       setActiveTab('integrations');
       if (params.get('integration') === 'shopify') setOpenIntegration('shopify');
+    }
+    if (params.get('tab') === 'templates') {
+      setActiveTab('templates');
     }
     const result = params.get('shopify');
     if (result === 'connected') {
@@ -73,6 +77,8 @@ export default function Home() {
             {activeTab === 'integrations' && (
               <IntegrationsView openIntegration={openIntegration} onOpenIntegration={setOpenIntegration} />
             )}
+
+            {activeTab === 'templates' && <TemplatesView />}
 
             {activeTab === 'settings' && (
               <SettingsView

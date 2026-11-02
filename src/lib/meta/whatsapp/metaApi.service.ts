@@ -2,6 +2,7 @@ import { AppError } from '../../errors';
 import { createLogger } from '../../logger';
 import { graphHttp, graphUpload, graphDownload } from '../graph-client';
 import type { WhatsAppBusinessProfile } from '@/types/whatsapp';
+import * as templateService from './template.service';
 
 const log = createLogger('MetaApi');
 
@@ -248,6 +249,44 @@ const resolveWabaAndPhoneFromToken = async (
   }
 };
 
+/** Every WhatsApp Business Account the token was granted (one token can cover several) */
+const getTokenWabaIds = async (accessToken: string): Promise<string[]> => {
+  const { appId, appSecret } = getAppCredentials();
+  const debugRes = await graphHttp.get<MetaDebugTokenResponse>('/debug_token', {
+    params: { input_token: accessToken, access_token: `${appId}|${appSecret}` },
+    operation: 'token.debug',
+  });
+  const ids = (debugRes.data?.data?.granular_scopes || [])
+    .filter((s) => s.scope === 'whatsapp_business_management' || s.scope === 'whatsapp_business_messaging')
+    .flatMap((s) => s.target_ids || []);
+  return [...new Set(ids)];
+};
+
+/** Whether `phoneNumberId` is one of the numbers in `wabaId` */
+const wabaHasPhoneNumber = async (wabaId: string, accessToken: string, phoneNumberId: string): Promise<boolean> => {
+  const response = await graphHttp.get<{ data: Array<{ id: string }> }>(`/${wabaId}/phone_numbers`, {
+    params: { fields: 'id' },
+    headers: bearer(accessToken),
+    operation: 'waba.phone_numbers',
+  });
+  return (response.data?.data || []).some((p) => p.id === phoneNumberId);
+};
+
+/**
+ * The WABA that owns `phoneNumberId`, among those the token can reach. Unlike taking the token's first
+ * WABA, this stays correct when one Meta user has connected numbers from several business accounts.
+ */
+const findWabaForPhoneNumber = async (accessToken: string, phoneNumberId: string): Promise<string | null> => {
+  try {
+    for (const wabaId of await getTokenWabaIds(accessToken)) {
+      if (await wabaHasPhoneNumber(wabaId, accessToken, phoneNumberId).catch(() => false)) return wabaId;
+    }
+  } catch (err) {
+    log.warn('Could not look up the WABA for a phone number', { err, phoneNumberId });
+  }
+  return null;
+};
+
 /* ----------------------------------------------------
    6. Full Meta Token Generation & Setup Pipeline
 -----------------------------------------------------*/
@@ -274,6 +313,11 @@ const generateMetaAuthToken = async (
   let activeWabaId = wabaId;
   let activePhoneId = phoneNumberId;
   let activePhoneData: MetaPhoneData | null = null;
+
+  // Only the number is known: take the WABA that contains it, not just the token's first one
+  if (!activeWabaId && activePhoneId) {
+    activeWabaId = (await findWabaForPhoneNumber(accessToken, activePhoneId)) || undefined;
+  }
 
   // If WABA ID or Phone Number ID is not passed, resolve automatically from token
   if (!activeWabaId || !activePhoneId) {
@@ -403,7 +447,10 @@ const getWabaTemplates = async (
   limit: number = 50
 ) => {
   const response = await graphHttp.get(`/${wabaId}/message_templates`, {
-    params: { limit },
+    params: {
+      limit,
+      fields: 'id,name,category,language,status,components,quality_score,rejected_reason',
+    },
     headers: bearer(accessToken),
     operation: 'waba.templates',
   });
@@ -613,6 +660,8 @@ export const metaApi = {
   getPhoneNumberFromCode,
   getPhoneNumberDetails: getPhoneNumberFromCode,
   resolveWabaAndPhoneFromToken,
+  findWabaForPhoneNumber,
+  wabaHasPhoneNumber,
   generateMetaAuthToken,
   sendWhatsAppTextMessage,
   sendWhatsAppTemplateMessage,
@@ -622,6 +671,12 @@ export const metaApi = {
   fetchWhatsAppMediaBinary,
   sendWhatsAppMediaMessage,
   getWabaTemplates,
+  getAllTemplates: templateService.getAllTemplates,
+  getTemplate: templateService.getTemplate,
+  createTemplate: templateService.createTemplate,
+  updateTemplate: templateService.updateTemplate,
+  deleteTemplate: templateService.deleteTemplate,
+  uploadTemplateMedia: templateService.uploadTemplateMedia,
   getWabaAccountDetails,
   getWabaPhoneNumbers,
   getPhoneNumberStatus,

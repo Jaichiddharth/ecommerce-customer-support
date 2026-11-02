@@ -12,6 +12,7 @@ export interface UseRealtimeOptions {
   onNotificationCount?: (event: Extract<RealtimeEvent, { type: 'notification.count' }>) => void;
   onConversationUpdated?: (event: Extract<RealtimeEvent, { type: 'conversation.updated' }>) => void;
   onChannelUpdated?: (event: Extract<RealtimeEvent, { type: 'channel.updated' }>) => void;
+  onTemplateStatus?: (event: Extract<RealtimeEvent, { type: 'template.status' }>) => void;
   onAnyEvent?: (event: RealtimeEvent) => void;
   enabled?: boolean;
 }
@@ -146,6 +147,18 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
         }
       });
 
+      // 7. Template Status Event (Meta approved, rejected, paused or disabled a template)
+      es.addEventListener('template.status', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          setLastEventTime(new Date());
+          callbacksRef.current.onTemplateStatus?.(payload);
+          callbacksRef.current.onAnyEvent?.(payload);
+        } catch (err) {
+          clientLogger.error('useRealtime', 'Could not handle template.status event', { err, data: e.data });
+        }
+      });
+
       // Generic Message Handler fallback
       es.onmessage = (e: MessageEvent) => {
         if (!e.data || e.data.startsWith(':')) return; // Ignore SSE comments/ping
@@ -164,6 +177,8 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
             callbacksRef.current.onConversationUpdated?.(payload);
           } else if (payload.type === 'channel.updated') {
             callbacksRef.current.onChannelUpdated?.(payload);
+          } else if (payload.type === 'template.status') {
+            callbacksRef.current.onTemplateStatus?.(payload);
           }
           callbacksRef.current.onAnyEvent?.(payload);
         } catch {}
