@@ -26,6 +26,10 @@ import {
   CircleCheck,
   RotateCcw,
   ShoppingBag,
+  Clock,
+  AlertTriangle,
+  Search,
+  RefreshCw,
 } from 'lucide-react';
 import { Message, MessageStatus, normalizeMessageStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -241,6 +245,32 @@ interface ThreadPaging {
 }
 
 type ComposerMode = 'reply' | 'note' | 'template';
+
+export interface MetaTemplateComponent {
+  type: string;
+  format?: string;
+  text?: string;
+  example?: {
+    body_text?: string[][];
+    header_text?: string[];
+    header_handle?: string[];
+  };
+  buttons?: Array<{
+    type: string;
+    text: string;
+    url?: string;
+    phone_number?: string;
+  }>;
+}
+
+export interface MetaTemplate {
+  id: string;
+  name: string;
+  status: string;
+  category: string;
+  language: string;
+  components?: MetaTemplateComponent[];
+}
 
 export interface InboxCounts {
   unread: number;
@@ -765,6 +795,239 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     );
   }, [activeConv, whatsappChannels]);
 
+  // -------------------------------------------------------------
+  // 24-HOUR CUSTOMER CARE WINDOW (WhatsApp Policy)
+  // -------------------------------------------------------------
+  const lastCustomerMessageTime = useMemo(() => {
+    for (let i = activeMessages.length - 1; i >= 0; i--) {
+      const msg = activeMessages[i];
+      const raw = msg.createdAt;
+      if (msg.sender === 'customer' && raw) {
+        const time = new Date(raw).getTime();
+        if (!isNaN(time)) return time;
+      }
+    }
+    if (activeConv?.lastReceivedMessageAt) {
+      const time = new Date(activeConv.lastReceivedMessageAt).getTime();
+      if (!isNaN(time)) return time;
+    }
+    return null;
+  }, [activeMessages, activeConv?.lastReceivedMessageAt]);
+
+  const window24hStatus = useMemo(() => {
+    if (activeChannelType !== 'whatsapp') {
+      return {
+        isExpired: false,
+        isWithin24Hours: true,
+        hoursRemaining: null,
+        hoursSinceLast: null,
+        hasReceivedMessage: true,
+      };
+    }
+    if (!lastCustomerMessageTime) {
+      return {
+        isExpired: true,
+        isWithin24Hours: false,
+        hoursRemaining: 0,
+        hoursSinceLast: null,
+        hasReceivedMessage: false,
+      };
+    }
+    const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
+    const elapsed = Date.now() - lastCustomerMessageTime;
+    if (elapsed > WINDOW_24H_MS) {
+      const hoursAgo = Math.floor(elapsed / (1000 * 60 * 60));
+      return {
+        isExpired: true,
+        isWithin24Hours: false,
+        hoursRemaining: 0,
+        hoursSinceLast: hoursAgo,
+        hasReceivedMessage: true,
+      };
+    }
+    const remainingMs = WINDOW_24H_MS - elapsed;
+    const hoursRemaining = Math.max(1, Math.ceil(remainingMs / (1000 * 60 * 60)));
+    return {
+      isExpired: false,
+      isWithin24Hours: true,
+      hoursRemaining,
+      hoursSinceLast: null,
+      hasReceivedMessage: true,
+    };
+  }, [activeChannelType, lastCustomerMessageTime]);
+
+  const isWindowExpired = window24hStatus.isExpired;
+
+  // -------------------------------------------------------------
+  // WHATSAPP META TEMPLATES
+  // -------------------------------------------------------------
+  const [metaTemplates, setMetaTemplates] = useState<MetaTemplate[]>([]);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState<MetaTemplate | null>(null);
+  const [templateSearch, setTemplateSearch] = useState('');
+  const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({});
+  const [isSendingTemplate, setIsSendingTemplate] = useState(false);
+
+  const fetchMetaTemplates = useCallback(async (phoneId?: string | null) => {
+    try {
+      setIsLoadingTemplates(true);
+      const url = phoneId
+        ? `/api/channels/whatsapp/meta-details?phoneNumberId=${encodeURIComponent(phoneId)}`
+        : '/api/channels/whatsapp/meta-details';
+      const res = await apiClient.get(url);
+      if (res.data?.success && Array.isArray(res.data.templates)) {
+        const approved = res.data.templates.filter(
+          (t: MetaTemplate) => !t.status || t.status.toUpperCase() === 'APPROVED'
+        );
+        setMetaTemplates(approved);
+      }
+    } catch (err) {
+      clientLogger.warn('InboxView.fetchMetaTemplates', 'Could not load WhatsApp templates', err);
+    } finally {
+      setIsLoadingTemplates(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeChannelType === 'whatsapp' && (composerMode === 'template' || isWindowExpired)) {
+      if (metaTemplates.length === 0 && !isLoadingTemplates) {
+        fetchMetaTemplates(conversationSendChannel?.metaPhoneNumberId);
+      }
+    }
+  }, [
+    activeChannelType,
+    composerMode,
+    isWindowExpired,
+    metaTemplates.length,
+    isLoadingTemplates,
+    fetchMetaTemplates,
+    conversationSendChannel?.metaPhoneNumberId,
+  ]);
+
+  useEffect(() => {
+    setSelectedTemplate(null);
+    setTemplateVariables({});
+    setTemplateSearch('');
+  }, [activeConv?.id]);
+
+  const handleSelectTemplate = (tpl: MetaTemplate) => {
+    setSelectedTemplate(tpl);
+    const bodyComp = tpl.components?.find((c) => c.type.toUpperCase() === 'BODY');
+    const matches = Array.from(new Set(bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || []));
+    const initVars: Record<string, string> = {};
+    for (const m of matches) {
+      const num = m.replace(/[{}]/g, '');
+      if (num === '1' && activeConv?.customer.name) {
+        initVars[num] = activeConv.customer.name;
+      } else {
+        initVars[num] = '';
+      }
+    }
+    setTemplateVariables(initVars);
+  };
+
+  const handleSendTemplate = async () => {
+    if (!selectedTemplate || !activeConv) return;
+    const customerPhone = activeConv.customer.phone;
+    if (!customerPhone) {
+      gooeyToast.error(`Customer "${activeConv.customer.name}" does not have a phone number.`);
+      return;
+    }
+    const targetChannel = conversationSendChannel;
+    if (!targetChannel) {
+      gooeyToast.error('No connected WhatsApp channel found. Please connect your WhatsApp account first.');
+      return;
+    }
+
+    const bodyComp = selectedTemplate.components?.find((c) => c.type.toUpperCase() === 'BODY');
+    const varMatches = Array.from(new Set(bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || []));
+
+    for (const match of varMatches) {
+      const num = match.replace(/[{}]/g, '');
+      if (!templateVariables[num]?.trim()) {
+        gooeyToast.error(`Please provide a value for variable {{${num}}}`);
+        return;
+      }
+    }
+
+    const components: Array<Record<string, unknown>> = [];
+    if (varMatches.length > 0) {
+      const sorted = [...varMatches].sort((a, b) => {
+        const numA = parseInt(a.replace(/\D/g, ''), 10);
+        const numB = parseInt(b.replace(/\D/g, ''), 10);
+        return numA - numB;
+      });
+      components.push({
+        type: 'body',
+        parameters: sorted.map((m) => {
+          const num = m.replace(/[{}]/g, '');
+          return { type: 'text', text: templateVariables[num].trim() };
+        }),
+      });
+    }
+
+    let renderedText = bodyComp?.text || `[Template: ${selectedTemplate.name}]`;
+    for (const [k, v] of Object.entries(templateVariables)) {
+      renderedText = renderedText.replaceAll(`{{${k}}}`, v.trim());
+    }
+
+    setIsSendingTemplate(true);
+    const convId = convKeyFor(activeConv.customer.id);
+    const tempId = `msg-${Date.now()}`;
+
+    const optimisticMsg: Message = {
+      id: tempId,
+      sender: 'agent',
+      senderId: dbUser?.id ?? null,
+      senderName: dbUser?.name ?? null,
+      channel: 'whatsapp',
+      text: renderedText,
+      timestamp: formatTime(),
+      createdAt: new Date().toISOString(),
+      status: MessageStatus.SENT,
+      type: 'template',
+      mediaType: 'template',
+    };
+
+    setMessagesMap((prev) => ({ ...prev, [convId]: [...(prev[convId] || []), optimisticMsg] }));
+
+    try {
+      const res = await apiClient.post('/api/channels/whatsapp/send', {
+        to: customerPhone,
+        channelId: targetChannel.id,
+        customerId: activeConv.customer.id,
+        type: 'template',
+        templateName: selectedTemplate.name,
+        languageCode: selectedTemplate.language || 'en_US',
+        components: components.length > 0 ? components : undefined,
+        text: renderedText,
+      });
+
+      if (res.data?.success) {
+        if (res.data?.persisted === false) {
+          notifyWarning('Template delivered, but not saved', res.data?.warning);
+        } else {
+          gooeyToast.success(`Template "${selectedTemplate.name}" sent successfully!`);
+        }
+        setSelectedTemplate(null);
+        setTemplateVariables({});
+        setComposerMode('reply');
+        fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
+        refreshConversationsSoon();
+      }
+    } catch (err) {
+      const apiError = notifyError(err, { where: 'InboxView.handleSendTemplate', title: 'Template not sent' });
+      setMessagesMap((prev) => ({
+        ...prev,
+        [convId]: (prev[convId] || []).map((m) =>
+          m.id === tempId ? { ...m, status: MessageStatus.FAILED, errorMessage: apiError.message } : m
+        ),
+      }));
+    } finally {
+      setIsSendingTemplate(false);
+    }
+  };
+
   const lastAiAction = useMemo(() => {
     for (let i = activeMessages.length - 1; i >= 0; i--) {
       if (activeMessages[i].sender === 'bot' && activeMessages[i].aiAction) return activeMessages[i].aiAction;
@@ -882,6 +1145,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // -------------------------------------------------------------
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
+      if (activeChannelType === 'whatsapp' && isWindowExpired) {
+        gooeyToast.error('24-hour messaging window has expired. Attachments cannot be sent outside the window. Please send an approved template instead.');
+        e.target.value = '';
+        return;
+      }
       const file = e.target.files[0];
       const check = validateWhatsAppMedia(file);
       if (!check.ok) {
@@ -918,6 +1186,12 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
   const handleSend = async () => {
     if ((!inputMessage.trim() && !selectedFile) || !activeConv) return;
+
+    if (activeChannelType === 'whatsapp' && isWindowExpired) {
+      gooeyToast.error('24-hour messaging window has expired. You can only send pre-approved template messages.');
+      setComposerMode('template');
+      return;
+    }
 
     if (!canSendOnChannel) {
       if (isChannelDisconnected) {
@@ -1074,11 +1348,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       ? 'This WhatsApp number is disconnected. Messaging is paused.'
       : !canSendOnChannel
         ? `Sending on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet. Use "Insert as text" instead.`
-        : !activeConv.customer.phone
-          ? `${activeConv.customer.name} has no phone number.`
-          : !conversationSendChannel
-            ? 'No connected WhatsApp channel found.'
-            : null;
+        : activeChannelType === 'whatsapp' && isWindowExpired
+          ? '24-hour customer window is closed. Share products using approved templates or wait for a customer reply.'
+          : !activeConv.customer.phone
+            ? `${activeConv.customer.name} has no phone number.`
+            : !conversationSendChannel
+              ? 'No connected WhatsApp channel found.'
+              : null;
 
   /** Sends the selected variant through the regular WhatsApp send path (the server re-checks it with Shopify) */
   const handleShareProduct = async ({ product, variant, caption }: ShareProductArgs): Promise<boolean> => {
@@ -1133,7 +1409,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   );
 
   /** Sends the chosen approved template; works outside the 24-hour window, unlike a normal reply */
-  const handleSendTemplate = async () => {
+  const handleSendTemplate24Hours = async () => {
     if (!activeConv || !templateDraft) return;
     if (templateDisabledReason) {
       gooeyToast.error(templateDisabledReason);
@@ -1523,8 +1799,19 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const composerStatus = (() => {
     if (!activeConv) return null;
     if (composerMode === 'note') return { text: 'Notes are only visible to your team', className: 'text-amber-700' };
+    if (composerMode === 'template') {
+      return {
+        text: selectedTemplate
+          ? `Template: ${selectedTemplate.name} (${selectedTemplate.language})`
+          : 'Select an approved WhatsApp template to send',
+        className: 'text-[#3440a8] font-medium',
+      };
+    }
     if (isChannelDisconnected) {
       return { text: 'Messaging is paused · This WhatsApp number is disconnected', className: 'text-amber-700 font-medium' };
+    }
+    if (activeChannelType === 'whatsapp' && isWindowExpired) {
+      return { text: '24h window closed · Switch to Template tab to send', className: 'text-amber-700 font-medium' };
     }
     if (!canSendOnChannel) {
       return { text: `Replying on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet`, className: 'text-amber-700' };
@@ -1605,6 +1892,25 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
                             Disconnected
                           </span>
+                        )}
+                        {activeChannelType === 'whatsapp' && (
+                          window24hStatus.isWithin24Hours ? (
+                            <span
+                              title={`24-hour customer window is active (~${window24hStatus.hoursRemaining}h remaining). Free-form text allowed.`}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
+                            >
+                              <Clock className="w-3 h-3 text-emerald-600" />
+                              24h window active · {window24hStatus.hoursRemaining}h left
+                            </span>
+                          ) : (
+                            <span
+                              title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.hoursSinceLast}h ago. Free-form text blocked.` : 'No incoming customer message. Free-form text blocked.'}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200"
+                            >
+                              <AlertTriangle className="w-3 h-3 text-amber-600" />
+                              24h window closed · Templates only
+                            </span>
+                          )
                         )}
                       </div>
                       <p className="text-[11.5px] text-slate-500 truncate">{headerSubtitle}</p>
@@ -1776,18 +2082,55 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
                 {/* Composer */}
                 <div className="border-t border-slate-200 px-4 pb-3 shrink-0">
+                  {/* WhatsApp 24h Window Warning Banner */}
+                  {activeChannelType === 'whatsapp' && isWindowExpired && (
+                    <div className="mt-3 mb-2 p-2.5 rounded-lg bg-amber-50/90 border border-amber-200/90 flex items-start justify-between gap-3 text-xs">
+                      <div className="flex items-start gap-2 min-w-0">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-semibold text-amber-900">24-Hour Customer Window Expired</p>
+                          <p className="text-amber-800 text-[11.5px] mt-0.5 leading-relaxed">
+                            {window24hStatus.hasReceivedMessage
+                              ? `Last customer message received ${window24hStatus.hoursSinceLast}h ago. `
+                              : 'No message received from this contact yet. '}
+                            WhatsApp Business policy requires sending an approved template to start or resume messaging. Regular text is disabled.
+                          </p>
+                        </div>
+                      </div>
+                      {composerMode !== 'template' && (
+                        <button
+                          type="button"
+                          onClick={() => setComposerMode('template')}
+                          className="px-2.5 py-1.5 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-medium text-[11.5px] shrink-0 cursor-pointer shadow-sm transition-colors"
+                        >
+                          Send Template
+                        </button>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4 text-[13px]">
                       {(['reply', 'note', 'template'] as ComposerMode[]).map((mode) => (
                         <button
                           key={mode}
                           onClick={() => setComposerMode(mode)}
-                          className={`py-2.5 border-b-2 capitalize cursor-pointer ${composerMode === mode
-                              ? 'border-[#3440a8] text-[#3440a8] font-semibold'
-                              : 'border-transparent text-slate-600 hover:text-slate-900'
+                          className={`py-2.5 border-b-2 capitalize cursor-pointer flex items-center gap-1.5 ${composerMode === mode
+                            ? 'border-[#3440a8] text-[#3440a8] font-semibold'
+                            : 'border-transparent text-slate-600 hover:text-slate-900'
                             }`}
                         >
-                          {mode}
+                          <span>{mode}</span>
+                          {mode === 'template' && activeChannelType === 'whatsapp' && isWindowExpired && (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                              Required
+                            </span>
+                          )}
+                          {mode === 'reply' && activeChannelType === 'whatsapp' && isWindowExpired && (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-100 text-slate-500">
+                              Locked
+                            </span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -1871,8 +2214,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
                       <div
                         className={`mt-1 flex items-end gap-2 rounded-lg border px-3 py-2 ${composerMode === 'note'
-                            ? 'bg-amber-50/60 border-amber-200 focus-within:border-amber-400'
-                            : 'border-slate-200 focus-within:border-[#3440a8] focus-within:ring-1 focus-within:ring-[#3440a8]'
+                          ? 'bg-amber-50/60 border-amber-200 focus-within:border-amber-400'
+                          : 'border-slate-200 focus-within:border-[#3440a8] focus-within:ring-1 focus-within:ring-[#3440a8]'
                           }`}
                       >
                         <textarea
@@ -1898,12 +2241,17 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                               ? 'Add an internal note — only your team sees this…'
                               : isChannelDisconnected
                                 ? 'Messaging is paused because this number is disconnected. Reconnect in Settings to send messages.'
-                                : selectedFile
-                                  ? 'Add a caption (optional)…'
-                                  : `Reply to ${activeConv.customer.name} on ${CHANNEL_LABELS[activeChannelType] || activeChannelType}…`
+                                : activeChannelType === 'whatsapp' && isWindowExpired
+                                  ? '24-hour window expired. Free-form text is disabled. Click the Template tab to send an approved template.'
+                                  : selectedFile
+                                    ? 'Add a caption (optional)…'
+                                    : `Reply to ${activeConv.customer.name} on ${CHANNEL_LABELS[activeChannelType] || activeChannelType}…`
                           }
-                          disabled={isChannelDisconnected && composerMode === 'reply'}
-                          className="flex-1 resize-none bg-transparent text-[13px] leading-5 text-slate-800 placeholder-slate-400 focus:outline-none py-0.5"
+                          disabled={
+                            (isChannelDisconnected && composerMode === 'reply') ||
+                            (activeChannelType === 'whatsapp' && isWindowExpired && composerMode === 'reply')
+                          }
+                          className="flex-1 resize-none bg-transparent text-[13px] leading-5 text-slate-800 placeholder-slate-400 focus:outline-none py-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
                         />
                         {composerMode === 'reply' && !inputMessage && suggestions[0] && (
                           <span className="text-[11px] text-slate-400 shrink-0 pb-0.5">Tab to accept</span>
@@ -1952,8 +2300,12 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={composerMode !== 'reply' || !canSendOnChannel}
-                        title="Attach file"
+                        disabled={composerMode !== 'reply' || !canSendOnChannel || (activeChannelType === 'whatsapp' && isWindowExpired)}
+                        title={
+                          activeChannelType === 'whatsapp' && isWindowExpired
+                            ? 'Attachments cannot be sent outside the 24-hour window'
+                            : 'Attach file'
+                        }
                         className={`p-1.5 rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${selectedFile ? 'text-[#3440a8] bg-[#eef0fb]' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
                           }`}
                       >
@@ -1962,8 +2314,12 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       <button
                         type="button"
                         onClick={() => setShowProductPicker(true)}
-                        disabled={composerMode !== 'reply' || !shopifyStore.isConnected}
-                        title={shopifyStore.isConnected ? 'Share a Shopify product' : 'Connect your Shopify store to share products'}
+                        disabled={composerMode !== 'reply' || !shopifyStore.isConnected || (activeChannelType === 'whatsapp' && isWindowExpired)}
+                        title={
+                          activeChannelType === 'whatsapp' && isWindowExpired
+                            ? 'Products cannot be sent outside the 24-hour window'
+                            : shopifyStore.isConnected ? 'Share a Shopify product' : 'Connect your Shopify store to share products'
+                        }
                         className="p-1.5 rounded-lg cursor-pointer text-slate-500 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <ShoppingBag className="w-[18px] h-[18px]" />
@@ -1977,21 +2333,26 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       type="button"
                       onClick={handleSubmitComposer}
                       disabled={
-                        isSending ||
-                        (composerMode === 'template'
-                          ? !templateReady || Boolean(templateDisabledReason)
-                          : composerMode === 'note'
-                            ? !inputMessage.trim()
-                            : (!inputMessage.trim() && !selectedFile) || !canSendOnChannel)
+                        composerMode === 'template'
+                          ? activeChannelType === 'whatsapp'
+                            ? !selectedTemplate || isSendingTemplate
+                            : true
+                          : isSending ||
+                          (activeChannelType === 'whatsapp' && isWindowExpired && composerMode === 'reply') ||
+                          (composerMode === 'note' ? !inputMessage.trim() : (!inputMessage.trim() && !selectedFile) || !canSendOnChannel)
                       }
                       title={composerMode === 'template' && templateDraft && !templateReady ? 'Fill in every template variable first' : undefined}
                       className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-[#3440a8] hover:bg-[#2b3590] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold cursor-pointer shrink-0"
                     >
-                      {isSending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      {composerMode === 'note' ? 'Add note' : composerMode === 'template' ? 'Send template' : 'Send'}
-                    </button>
-                  </div>
-                </div>
+                      {(isSending || isSendingTemplate) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      {composerMode === 'note'
+                        ? 'Add note'
+                        : composerMode === 'template'
+                          ? 'Send template'
+                          : 'Send'}
+                    </button >
+                  </div >
+                </div >
               </>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
@@ -2004,7 +2365,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                 </p>
               </div>
             )}
-          </section>
+          </section >
 
           <CustomerPanel
             conversation={activeConv}
@@ -2014,8 +2375,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
             onInsertProductText={handleInsertProductText}
             shareDisabledReason={shareDisabledReason}
           />
-        </div>
-      </div>
+        </div >
+      </div >
 
       {/* ======================================================== */}
       {/* MODALS                                                   */}
@@ -2129,102 +2490,104 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       </Modal>
 
       {/* Media Preview Modal */}
-      {previewMedia && (
-        <Modal
-          isOpen={!!previewMedia}
-          onClose={() => setPreviewMedia(null)}
-          title={
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="font-bold text-slate-900 text-sm">{previewMedia.senderName || 'Attachment preview'}</span>
-              {previewMedia.timestamp && (
-                <>
-                  <span className="text-slate-300">•</span>
-                  <span className="text-xs font-normal text-slate-500">{previewMedia.timestamp}</span>
-                </>
-              )}
-            </div>
-          }
-          icon={
-            previewMedia.type === 'image' ? (
-              <ImageIcon className="w-4 h-4 text-[#3440a8]" />
-            ) : previewMedia.type === 'video' ? (
-              <Film className="w-4 h-4 text-[#3440a8]" />
-            ) : previewMedia.type === 'audio' ? (
-              <Music className="w-4 h-4 text-[#3440a8]" />
-            ) : (
-              <FileText className="w-4 h-4 text-[#3440a8]" />
-            )
-          }
-          maxWidth={previewMedia.type === 'image' || previewMedia.type === 'video' || previewMedia.type === 'document' ? '3xl' : 'md'}
-        >
-          <div className="space-y-4">
-            {previewMedia.type === 'image' && (
-              <div className="w-full max-h-[70vh] flex items-center justify-center bg-slate-950/5 rounded-xl overflow-hidden p-2 border border-slate-100">
-                <img
-                  src={previewMedia.url}
-                  alt={previewMedia.caption || 'Attachment preview'}
-                  className="max-h-[65vh] w-auto max-w-full object-contain rounded-lg"
-                />
-              </div>
-            )}
-
-            {previewMedia.type === 'video' && (
-              <div className="w-full max-h-[70vh] flex items-center justify-center bg-black rounded-xl overflow-hidden">
-                <video src={previewMedia.url} controls autoPlay className="max-h-[65vh] w-full object-contain rounded-lg" />
-              </div>
-            )}
-
-            {previewMedia.type === 'audio' && (
-              <div className="w-full p-4 bg-slate-50 rounded-xl border border-slate-200">
-                <audio src={previewMedia.url} controls autoPlay className="w-full" />
-              </div>
-            )}
-
-            {previewMedia.type === 'document' && (
-              <div className="w-full space-y-3">
-                {previewMedia.url.match(/\.pdf($|\?)/i) || previewMedia.url.startsWith('blob:') ? (
-                  <iframe src={previewMedia.url} title="Document preview" className="w-full h-[65vh] rounded-xl border border-slate-200 bg-white" />
-                ) : (
-                  <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                    <FileText className="w-12 h-12 text-[#3440a8] mx-auto opacity-80" />
-                    <p className="text-sm font-semibold text-slate-800">{previewMedia.caption || 'Document file'}</p>
-                    <p className="text-xs text-slate-500">Document preview ready for download or external viewing.</p>
-                  </div>
+      {
+        previewMedia && (
+          <Modal
+            isOpen={!!previewMedia}
+            onClose={() => setPreviewMedia(null)}
+            title={
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-bold text-slate-900 text-sm">{previewMedia.senderName || 'Attachment preview'}</span>
+                {previewMedia.timestamp && (
+                  <>
+                    <span className="text-slate-300">•</span>
+                    <span className="text-xs font-normal text-slate-500">{previewMedia.timestamp}</span>
+                  </>
                 )}
               </div>
-            )}
-
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
-              {previewMedia.caption ? (
-                <div className="bg-slate-50 border border-slate-200/80 rounded-xl px-3.5 py-2 max-w-lg">
-                  <p className="text-xs text-slate-800 leading-relaxed break-words">{renderMessageWithLinks(previewMedia.caption)}</p>
-                </div>
+            }
+            icon={
+              previewMedia.type === 'image' ? (
+                <ImageIcon className="w-4 h-4 text-[#3440a8]" />
+              ) : previewMedia.type === 'video' ? (
+                <Film className="w-4 h-4 text-[#3440a8]" />
+              ) : previewMedia.type === 'audio' ? (
+                <Music className="w-4 h-4 text-[#3440a8]" />
               ) : (
-                <div />
+                <FileText className="w-4 h-4 text-[#3440a8]" />
+              )
+            }
+            maxWidth={previewMedia.type === 'image' || previewMedia.type === 'video' || previewMedia.type === 'document' ? '3xl' : 'md'}
+          >
+            <div className="space-y-4">
+              {previewMedia.type === 'image' && (
+                <div className="w-full max-h-[70vh] flex items-center justify-center bg-slate-950/5 rounded-xl overflow-hidden p-2 border border-slate-100">
+                  <img
+                    src={previewMedia.url}
+                    alt={previewMedia.caption || 'Attachment preview'}
+                    className="max-h-[65vh] w-auto max-w-full object-contain rounded-lg"
+                  />
+                </div>
               )}
-              <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
-                <a
-                  href={previewMedia.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg flex items-center gap-1.5 font-medium border border-slate-200"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  Open in tab
-                </a>
-                <a
-                  href={previewMedia.url}
-                  download
-                  className="px-3 py-1.5 bg-[#3440a8] hover:bg-[#2b3590] text-white rounded-lg flex items-center gap-1.5 font-semibold"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Download
-                </a>
+
+              {previewMedia.type === 'video' && (
+                <div className="w-full max-h-[70vh] flex items-center justify-center bg-black rounded-xl overflow-hidden">
+                  <video src={previewMedia.url} controls autoPlay className="max-h-[65vh] w-full object-contain rounded-lg" />
+                </div>
+              )}
+
+              {previewMedia.type === 'audio' && (
+                <div className="w-full p-4 bg-slate-50 rounded-xl border border-slate-200">
+                  <audio src={previewMedia.url} controls autoPlay className="w-full" />
+                </div>
+              )}
+
+              {previewMedia.type === 'document' && (
+                <div className="w-full space-y-3">
+                  {previewMedia.url.match(/\.pdf($|\?)/i) || previewMedia.url.startsWith('blob:') ? (
+                    <iframe src={previewMedia.url} title="Document preview" className="w-full h-[65vh] rounded-xl border border-slate-200 bg-white" />
+                  ) : (
+                    <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                      <FileText className="w-12 h-12 text-[#3440a8] mx-auto opacity-80" />
+                      <p className="text-sm font-semibold text-slate-800">{previewMedia.caption || 'Document file'}</p>
+                      <p className="text-xs text-slate-500">Document preview ready for download or external viewing.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
+                {previewMedia.caption ? (
+                  <div className="bg-slate-50 border border-slate-200/80 rounded-xl px-3.5 py-2 max-w-lg">
+                    <p className="text-xs text-slate-800 leading-relaxed break-words">{renderMessageWithLinks(previewMedia.caption)}</p>
+                  </div>
+                ) : (
+                  <div />
+                )}
+                <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                  <a
+                    href={previewMedia.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg flex items-center gap-1.5 font-medium border border-slate-200"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open in tab
+                  </a>
+                  <a
+                    href={previewMedia.url}
+                    download
+                    className="px-3 py-1.5 bg-[#3440a8] hover:bg-[#2b3590] text-white rounded-lg flex items-center gap-1.5 font-semibold"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Download
+                  </a>
+                </div>
               </div>
             </div>
-          </div>
-        </Modal>
-      )}
-    </div>
+          </Modal>
+        )
+      }
+    </div >
   );
 };

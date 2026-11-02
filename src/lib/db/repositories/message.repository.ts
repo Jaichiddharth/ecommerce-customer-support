@@ -56,8 +56,8 @@ export class MessageRepository {
       data.status !== undefined
         ? normalizeMessageStatus(data.status)
         : data.isRead
-        ? MessageStatus.READ
-        : MessageStatus.SENT;
+          ? MessageStatus.READ
+          : MessageStatus.SENT;
 
     const [created] = await db
       .insert(messages)
@@ -332,6 +332,30 @@ export class MessageRepository {
         )
       )
       .groupBy(name, language);
+  }
+
+
+  /* Find the most recent inbound message received from a customer (senderType = 'customer')
+     */
+
+  async findLastReceivedFromCustomer(
+    customerId: number,
+    organizationId: number
+  ): Promise<Message | null> {
+    const [message] = await db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.organizationId, organizationId),
+          eq(messages.customerId, customerId),
+          eq(messages.senderType, "customer")
+        )
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+
+    return message || null;
   }
 }
 
