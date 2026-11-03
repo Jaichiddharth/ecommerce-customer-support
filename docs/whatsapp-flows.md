@@ -51,6 +51,12 @@ contact's number to be on the Flow's WABA. It creates the execution with a fresh
 through the existing `whatsAppService.sendMessage`. Template sends use a `button/flow` parameter carrying
 the token. Interactive sends use `interactive.type = flow`, version 3.
 
+**Test Flow** (`sendTest`): from the Flow details page or a template row/details. Sends an `APPROVED`
+template of the Flow to any number (with country code) from a live number on the template's WABA,
+preferring the template's own number. The number is resolved to a contact on that number (created if new,
+as any outbound send does), then the normal template send above runs: a real Cloud API request, an
+execution with its own `flow_token`, and the tester's answer is stored as a submission.
+
 **Response**: the webhook saves the inbound message as before, then stores the submission inside the
 request. The execution is matched by `flow_token`, falling back to `context.id` = the wamid we sent, since
 Meta doesn't guarantee the token is in `response_json`. The match is checked for org and contact.
@@ -93,6 +99,7 @@ storage is offered once as an import.
 | `GET/POST /api/whatsapp-flows` | list (`q`, `status`, `page`, `pageSize`; `published=1` for pickers) / create |
 | `GET/PATCH/DELETE /api/whatsapp-flows/:id` | details / save draft / delete (unused drafts) or archive |
 | `POST /api/whatsapp-flows/:id/{publish,sync,duplicate,restore,send}` | |
+| `POST /api/whatsapp-flows/:id/test` | Test Flow: `{ phone, templateId }`, a real template send to any number |
 | `POST /api/whatsapp-flows/:id/versions/:v/deprecate`, `GET …/preview` | |
 | `GET /api/whatsapp-flows/submissions`, `GET /api/whatsapp-flows/recipients?q=` | |
 | `GET/POST /api/whatsapp-templates`, `GET/DELETE …/:id`, `POST …/:id/{sync,retry}` | |

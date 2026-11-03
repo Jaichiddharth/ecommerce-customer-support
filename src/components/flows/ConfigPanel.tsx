@@ -19,7 +19,14 @@ export function ConfigPanel({ nodeId, data, onUpdate, onClose, onDelete }: Confi
   const set = (key: string, value: unknown) =>
     setLocal((prev) => ({ ...prev, [key]: value }));
 
+  const [error, setError] = useState<string | null>(null);
+
   const save = () => {
+    const problem = validateNode(data.type, local);
+    if (problem) {
+      setError(problem);
+      return;
+    }
     onUpdate(nodeId, { ...local, configured: true } as Partial<AutomationNodeData>);
     onClose();
   };
@@ -53,8 +60,14 @@ export function ConfigPanel({ nodeId, data, onUpdate, onClose, onDelete }: Confi
         </Field>
 
         {/* Type-specific fields */}
-        <TypeFields type={data.type} local={local} set={set} />
+        <TypeFields type={data.type} local={local} set={(k, v) => { setError(null); set(k, v); }} />
       </div>
+
+      {error && (
+        <p role="alert" className="mx-4 mb-0 mt-0 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-[11px] text-red-600 shrink-0">
+          {error}
+        </p>
+      )}
 
       {/* Footer actions */}
       <div className="px-4 py-3 border-t border-slate-100 shrink-0 flex items-center gap-2">
@@ -75,6 +88,21 @@ export function ConfigPanel({ nodeId, data, onUpdate, onClose, onDelete }: Confi
       </div>
     </div>
   );
+}
+
+// ─── Validation before saving (activation re-checks on the server) ───────────
+
+function validateNode(type: string, d: Record<string, unknown>): string | null {
+  if (type === 'action_send_whatsapp_flow') {
+    if (!d.flowId) return 'Choose a published WhatsApp Flow.';
+    if (d.sendMethod === 'interactive') {
+      if (!String(d.flowBody ?? '').trim()) return 'Enter the message text.';
+      if (!String(d.flowCta ?? '').trim()) return 'Enter the button text.';
+    } else if (!d.templateId) {
+      return 'Choose an approved template that opens this Flow.';
+    }
+  }
+  return null;
 }
 
 // ─── Type-specific field groups ───────────────────────────────────────────────

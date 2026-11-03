@@ -10,6 +10,7 @@ import {
   Video as VideoIcon,
   ExternalLink,
   Reply,
+  ClipboardList,
 } from 'lucide-react';
 import { HeaderType, TemplateButton } from '@/types/templates';
 
@@ -25,7 +26,7 @@ interface WhatsAppChatPreviewProps {
   /** bodySamples[0] fills {{1}}, bodySamples[1] fills {{2}}, … */
   bodySamples?: string[];
   footerText?: string;
-  buttons: Pick<TemplateButton, 'id' | 'type' | 'text'>[];
+  buttons: (Pick<TemplateButton, 'id' | 'text'> & { type: PreviewButtonType })[];
   timeString?: string;
 }
 
@@ -78,8 +79,12 @@ export const formatWhatsAppText = (text: string, samples: string[] = []): React.
   ));
 };
 
-const ButtonIcon: React.FC<{ type: TemplateButton['type'] }> = ({ type }) => {
+/** Template button types, plus the WhatsApp Flow button used by Flow templates */
+type PreviewButtonType = TemplateButton['type'] | 'FLOW';
+
+const ButtonIcon: React.FC<{ type: PreviewButtonType }> = ({ type }) => {
   if (type === 'URL') return <ExternalLink className="w-3.5 h-3.5" />;
+  if (type === 'FLOW') return <ClipboardList className="w-3.5 h-3.5" />;
   if (type === 'PHONE_NUMBER') return <Phone className="w-3.5 h-3.5" />;
   return <Reply className="w-3.5 h-3.5" />;
 };

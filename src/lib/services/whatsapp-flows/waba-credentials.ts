@@ -41,9 +41,9 @@ export function credentialsFor(channel: Channel): WabaCredentials {
 }
 
 /** Credentials for an organization's live channel on a given WABA (Flows and templates belong to a WABA). */
-export async function credentialsForWaba(organizationId: number, wabaId: string): Promise<WabaCredentials> {
+export async function credentialsForWaba(organizationId: number, wabaId: string, preferChannelId?: number | null): Promise<WabaCredentials> {
   const live = (await channelRepository.findByWabaIdLive(wabaId)).filter((c) => c.organizationId === organizationId);
-  const channel = live.find((c) => c.isActive) ?? live[0];
+  const channel = (preferChannelId ? live.find((c) => c.id === preferChannelId) : undefined) ?? live.find((c) => c.isActive) ?? live[0];
   if (!channel) {
     throw new AppError("WHATSAPP_CHANNEL_NOT_FOUND", {
       message: "The WhatsApp Business Account this item belongs to is no longer connected.",

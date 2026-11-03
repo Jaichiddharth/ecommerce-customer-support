@@ -89,6 +89,7 @@ export class WhatsAppTemplateService {
         flowName: flows.find((f) => f.id === t.flowId)?.name ?? null,
         versionNumber: version?.versionNumber ?? null,
         versionStatus: version?.status ?? null,
+        metaFlowId: version?.metaFlowId ?? null,
       };
     });
   }

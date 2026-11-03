@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ArrowLeft, Pencil, Eye, RefreshCw, Send, ExternalLink, Ban, Workflow, FileText, Inbox, AlertTriangle, Rocket, Loader2,
+  ArrowLeft, Pencil, Eye, RefreshCw, Send, ExternalLink, Ban, Workflow, FileText, Inbox, AlertTriangle, Rocket, Loader2, FlaskConical,
 } from 'lucide-react';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 import { ErrorState, LoadingState } from '@/components/ui/states';
@@ -10,6 +10,7 @@ import { notifyError } from '@/lib/api/notify';
 import { flowsApi, categoryLabel, type FlowDetails } from './wa-api';
 import { StatusBadge, formatDate, iconBtn, primaryBtn, secondaryBtn } from './wa-ui';
 import { SendFlowDialog } from './SendFlowDialog';
+import { TestFlowDialog } from './TestFlowDialog';
 
 function Card({ title, icon, action, children }: { title: string; icon?: React.ReactNode; action?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -44,6 +45,7 @@ export function FlowDetailsPage({
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
+  const [testOpen, setTestOpen] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -111,6 +113,14 @@ export function FlowDetailsPage({
             {busy === 'publish' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Rocket className="w-3.5 h-3.5" />} Publish
           </button>
         )}
+        <button
+          className={secondaryBtn}
+          disabled={!live || archived}
+          onClick={() => setTestOpen(true)}
+          title={live ? 'Send an approved template of this Flow to a WhatsApp number' : 'Publish the Flow first'}
+        >
+          <FlaskConical className="w-3.5 h-3.5" /> Test Flow
+        </button>
         <button className={primaryBtn} disabled={!live || archived} onClick={() => setSendOpen(true)} title={live ? 'Send to a contact' : 'Publish the Flow first'}>
           <Send className="w-3.5 h-3.5" /> Send
         </button>
@@ -260,6 +270,10 @@ export function FlowDetailsPage({
           onClose={() => setSendOpen(false)}
           onSent={() => { setSendOpen(false); gooeyToast.success('Flow sent'); }}
         />
+      )}
+
+      {testOpen && live && (
+        <TestFlowDialog flowId={flowId} flowName={flow.name} templates={flow.templates} onClose={() => setTestOpen(false)} />
       )}
     </div>
   );
