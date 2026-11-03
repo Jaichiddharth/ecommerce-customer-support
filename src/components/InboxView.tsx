@@ -550,6 +550,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                 metadata: rawMsg.metadata ?? null,
               },
               unreadCount: rawMsg.senderType === 'customer' && !isOpen ? conv.unreadCount + 1 : conv.unreadCount,
+              // Keeps the 24-hour window right before the thread's messages are (re)loaded
+              lastReceivedMessageAt:
+                rawMsg.senderType === 'customer' && rawMsg.mediaType !== 'system' && rawMsg.createdAt
+                  ? rawMsg.createdAt
+                  : conv.lastReceivedMessageAt,
             };
           return [updated, ...prev.slice(0, idx), ...prev.slice(idx + 1)];
         });
@@ -769,72 +774,53 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // -------------------------------------------------------------
   // 24-HOUR CUSTOMER CARE WINDOW (WhatsApp Policy)
   // -------------------------------------------------------------
-  const lastCustomerMessageTime = useMemo(() => {
-    for (let i = activeMessages.length - 1; i >= 0; i--) {
-      const msg = activeMessages[i];
-      const raw = msg.createdAt;
+  // Latest of: customer messages in the thread and the server's lastReceivedMessageAt. The newest one, not the
+  // last in the list: a delayed webhook can append an older message after a newer one.
+  const lastCustomerMessageTime = useMemo((): number | null => {
+    const times: number[] = [];
+    for (const msg of activeMessages) {
       // `system` notices (e.g. "customer changed number") come from WhatsApp, not the customer, so they don't open the window
-      if (msg.sender === 'customer' && msg.mediaType !== 'system' && raw) {
-        const time = new Date(raw).getTime();
-        if (!isNaN(time)) return time;
-      }
+      if (msg.sender === 'customer' && msg.mediaType !== 'system' && msg.createdAt) times.push(new Date(msg.createdAt).getTime());
     }
-    if (activeConv?.lastReceivedMessageAt) {
-      const time = new Date(activeConv.lastReceivedMessageAt).getTime();
-      if (!isNaN(time)) return time;
-    }
-    return null;
+    if (activeConv?.lastReceivedMessageAt) times.push(new Date(activeConv.lastReceivedMessageAt).getTime());
+    const valid = times.filter((t) => !isNaN(t));
+    return valid.length > 0 ? Math.max(...valid) : null;
   }, [activeMessages, activeConv?.lastReceivedMessageAt]);
 
-  // Ticks every minute so an open chat notices the window closing (and the hours left stay current)
+  // Ticks every minute so an open chat notices the window closing (and the time left stays current).
+  // Always running: pausing it on other channels would leave a stale clock when switching back to WhatsApp.
   const [windowClock, setWindowClock] = useState(() => Date.now());
   useEffect(() => {
-    if (activeChannelType !== 'whatsapp') return;
     const timer = setInterval(() => setWindowClock(Date.now()), 60_000);
     return () => clearInterval(timer);
-  }, [activeChannelType]);
+  }, []);
 
-  const window24hStatus = useMemo(() => {
+  /** `timeLeft` is "23h", or "12m" in the last hour (not rounded up to "1h"); `timeSinceLast` is "30h" */
+  const window24hStatus = useMemo((): {
+    isExpired: boolean;
+    isWithin24Hours: boolean;
+    timeLeft: string | null;
+    timeSinceLast: string | null;
+    hasReceivedMessage: boolean;
+  } => {
     if (activeChannelType !== 'whatsapp') {
-      return {
-        isExpired: false,
-        isWithin24Hours: true,
-        hoursRemaining: null,
-        hoursSinceLast: null,
-        hasReceivedMessage: true,
-      };
+      return { isExpired: false, isWithin24Hours: true, timeLeft: null, timeSinceLast: null, hasReceivedMessage: true };
     }
-    if (!lastCustomerMessageTime) {
-      return {
-        isExpired: true,
-        isWithin24Hours: false,
-        hoursRemaining: 0,
-        hoursSinceLast: null,
-        hasReceivedMessage: false,
-      };
+    if (lastCustomerMessageTime === null) {
+      return { isExpired: true, isWithin24Hours: false, timeLeft: null, timeSinceLast: null, hasReceivedMessage: false };
     }
-    const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
+    const HOUR_MS = 60 * 60 * 1000;
+    const WINDOW_24H_MS = 24 * HOUR_MS;
     // The clock can lag a message that just arrived by up to a minute; never let that read as negative time
     const elapsed = Math.max(0, windowClock - lastCustomerMessageTime);
     if (elapsed > WINDOW_24H_MS) {
-      const hoursAgo = Math.floor(elapsed / (1000 * 60 * 60));
-      return {
-        isExpired: true,
-        isWithin24Hours: false,
-        hoursRemaining: 0,
-        hoursSinceLast: hoursAgo,
-        hasReceivedMessage: true,
-      };
+      const timeSinceLast = `${Math.floor(elapsed / HOUR_MS)}h`;
+      return { isExpired: true, isWithin24Hours: false, timeLeft: null, timeSinceLast, hasReceivedMessage: true };
     }
     const remainingMs = WINDOW_24H_MS - elapsed;
-    const hoursRemaining = Math.max(1, Math.ceil(remainingMs / (1000 * 60 * 60)));
-    return {
-      isExpired: false,
-      isWithin24Hours: true,
-      hoursRemaining,
-      hoursSinceLast: null,
-      hasReceivedMessage: true,
-    };
+    const timeLeft =
+      remainingMs >= HOUR_MS ? `${Math.floor(remainingMs / HOUR_MS)}h` : `${Math.max(1, Math.ceil(remainingMs / 60_000))}m`;
+    return { isExpired: false, isWithin24Hours: true, timeLeft, timeSinceLast: null, hasReceivedMessage: true };
   }, [activeChannelType, lastCustomerMessageTime, windowClock]);
 
   const isWindowExpired = window24hStatus.isExpired;
@@ -1298,7 +1284,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         notifyWarning('Template delivered, but not saved', res.data?.warning);
       }
       setTemplateDraft(null);
-      setComposerMode('reply');
+      // A template doesn't open the window: with it closed, stay on templates instead of a locked reply box
+      setComposerMode(isWindowExpired ? 'template' : 'reply');
       fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
       refreshConversationsSoon();
     } catch (err) {
@@ -1720,15 +1707,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                         {activeChannelType === 'whatsapp' && (
                           window24hStatus.isWithin24Hours ? (
                             <span
-                              title={`24-hour customer window is open (~${window24hStatus.hoursRemaining}h left). Free-form messages allowed.`}
+                              title={`24-hour customer window is open (${window24hStatus.timeLeft} left). Free-form messages allowed.`}
                               className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] leading-4 font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
                             >
                               <Clock className="w-3 h-3 text-emerald-600" />
-                              {window24hStatus.hoursRemaining}h left
+                              {window24hStatus.timeLeft} left
                             </span>
                           ) : (
                             <span
-                              title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.hoursSinceLast}h ago. Only approved templates can be sent.` : 'This customer hasn’t messaged yet. Only approved templates can be sent.'}
+                              title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.timeSinceLast} ago. Only approved templates can be sent.` : 'This customer hasn’t messaged yet. Only approved templates can be sent.'}
                               className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] leading-4 font-medium bg-amber-50 text-amber-800 border border-amber-200"
                             >
                               <AlertTriangle className="w-3 h-3 text-amber-600" />
@@ -1915,7 +1902,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                           <p className="font-semibold text-amber-900">24-Hour Customer Window Expired</p>
                           <p className="text-amber-800 text-[11.5px] mt-0.5 leading-relaxed">
                             {window24hStatus.hasReceivedMessage
-                              ? `Last customer message received ${window24hStatus.hoursSinceLast}h ago. `
+                              ? `Last customer message received ${window24hStatus.timeSinceLast} ago. `
                               : 'No message received from this contact yet. '}
                             WhatsApp Business policy requires sending an approved template to start or resume messaging. Regular text is disabled.
                           </p>
