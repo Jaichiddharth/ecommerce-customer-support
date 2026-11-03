@@ -4,6 +4,10 @@ import { MessageStatus, MESSAGE_STATUS_VALUES } from '../../db/schema';
 import { publish } from '@/lib/realtime';
 import { AppError, describeMessageFailure, getMetaErrorInfo } from '@/lib/errors';
 import { createLogger } from '@/lib/logger';
+import { automationEngine } from '@/lib/automation/engine';
+import { whatsappFlowService } from '../whatsapp-flows/flow.service';
+import { whatsappTemplateService } from '../whatsapp-flows/template.service';
+import { whatsappFlowSubmissionService, parseFlowReply, summarizeFlowReply } from '../whatsapp-flows/flow-submission.service';
 
 const log = createLogger('WhatsAppWebhook');
 
@@ -34,6 +38,15 @@ interface ChangeContext {
   wabaId?: string;
   phoneNumberId: string;
   contactMap: Map<string, string>;
+  defer: (task: () => Promise<void>) => void;
+}
+
+export interface WebhookProcessingOptions {
+  /**
+   * Runs slow follow-up work (automations, Flow resumption) after the HTTP response is sent
+   * (the route passes Next's `after`). Without it, the work is awaited before returning.
+   */
+  defer?: (task: () => Promise<void>) => void;
 }
 
 export class WhatsAppWebhookService {
@@ -119,7 +132,13 @@ export class WhatsAppWebhookService {
    * Each message / status is processed independently: one failure is logged with full context
    * and does not stop the rest of the batch.
    */
-  async processWebhookPayload(payload: any): Promise<WebhookProcessingResult> {
+  async processWebhookPayload(payload: any, options: WebhookProcessingOptions = {}): Promise<WebhookProcessingResult> {
+    const inlineTasks: Promise<void>[] = [];
+    const defer =
+      options.defer ??
+      ((task: () => Promise<void>) => {
+        inlineTasks.push(task());
+      });
     const result: WebhookProcessingResult = {
       success: true,
       processedMessages: 0,
@@ -140,16 +159,25 @@ export class WhatsAppWebhookService {
         const field = change.field;
         const value = change.value;
 
-        if (field === 'message_template_status_update' && value && wabaId) {
+        // WABA-level lifecycle events for Flows and message templates (tenant resolved from the stored row)
+        if ((field === 'flows' || field === 'message_template_status_update') && value) {
           try {
-            await this.processTemplateStatusUpdate(wabaId, value);
+            if (field === 'flows') {
+              await whatsappFlowService.applyStatusWebhook(wabaId, value);
+            } else {
+              await whatsappTemplateService.applyStatusWebhook(wabaId, value);
+              // Notify open Templates pages on every workspace with a live number on this WABA
+              if (wabaId) await this.processTemplateStatusUpdate(wabaId, value);
+            }
+            result.processedStatuses++;
           } catch (err) {
             result.failed++;
-            log.error('Failed to process template status update', {
+            log.error('Failed to process WABA lifecycle webhook', {
               err,
+              field,
               wabaId,
-              templateId: value.message_template_id,
-              event: value.event,
+              templateId: value?.message_template_id,
+              event: value?.event,
             });
           }
           continue;
@@ -205,6 +233,7 @@ export class WhatsAppWebhookService {
           wabaId,
           phoneNumberId: phoneNumberId!,
           contactMap,
+          defer,
         };
 
         /* A. Incoming messages */
@@ -244,6 +273,8 @@ export class WhatsAppWebhookService {
         }
       }
     }
+
+    if (inlineTasks.length) await Promise.allSettled(inlineTasks);
 
     result.success = result.failed === 0;
     const summary = {
@@ -453,9 +484,53 @@ export class WhatsAppWebhookService {
         textContent: textBody,
         ...(repliedToId ? { repliedToId } : {}),
       });
+
+      await this.afterInboundMessage(msg, ctx, customer.id, savedMessage?.id ?? null, textBody, msgDate);
     }
 
     return 'saved';
+  }
+
+  /**
+   * Flow responses and automation triggers for a newly saved inbound message.
+   * Runs only for the first delivery of a wamid (duplicates return earlier) and never throws:
+   * message ingestion must not depend on these features.
+   */
+  private async afterInboundMessage(
+    msg: any,
+    ctx: ChangeContext,
+    customerId: number,
+    messageId: number | null,
+    text: string | null,
+    msgDate: Date
+  ): Promise<void> {
+    try {
+      if (parseFlowReply(msg)) {
+        // Stored inside the request so a crash can't lose it; resuming the automation is deferred
+        const submission = await whatsappFlowSubmissionService.record({
+          organizationId: ctx.orgId,
+          channelId: ctx.channelId,
+          customerId,
+          wamid: msg.id,
+          timestamp: msgDate,
+          msg,
+        });
+        if (submission) ctx.defer(() => whatsappFlowSubmissionService.process(submission));
+        return;
+      }
+      ctx.defer(() =>
+        automationEngine.handleInboundMessage({
+          organizationId: ctx.orgId,
+          channelId: ctx.channelId,
+          customerId,
+          messageId,
+          wamid: msg.id,
+          text: msg.type === 'text' ? text : null,
+        })
+      );
+    } catch (err) {
+      log.error('Post-processing of inbound message failed (message itself was saved)', { err, wamid: msg?.id, customerId });
+    }
   }
 
   /** Apply one delivery status (sent / delivered / read / failed) to the stored outbound message. */
@@ -588,6 +663,10 @@ export class WhatsAppWebhookService {
             summary: `[Interactive Button Clicked] "${msg.interactive.button_reply?.title}" (ID: ${msg.interactive.button_reply?.id})`,
             details: msg.interactive,
           };
+        }
+        if (msg.interactive?.type === 'nfm_reply') {
+          const reply = parseFlowReply(msg);
+          return { summary: summarizeFlowReply(reply?.response ?? {}), details: { type: 'nfm_reply' } };
         }
         if (msg.interactive?.type === 'list_reply') {
           return {
