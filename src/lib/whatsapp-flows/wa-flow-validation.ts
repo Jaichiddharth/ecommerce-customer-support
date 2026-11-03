@@ -118,6 +118,10 @@ function validateComponent(
     if (value && value.length > max) at(`${what} must be ${max} characters or fewer (${value.length}).`, field);
   };
 
+  const integer = (value: unknown, field: string, what: string) => {
+    if (value !== undefined && !Number.isInteger(value)) at(`${what} must be a whole number.`, field);
+  };
+
   if (isInputComponent(c)) {
     if (blank(c.name)) at('Field name is required.', 'name');
     else if (!FIELD_NAME_PATTERN.test(c.name)) at('Field name must start with a letter and use only letters, numbers and underscores.', 'name');
@@ -137,6 +141,8 @@ function validateComponent(
     case 'text_input':
       maxLen(c.label, LIMITS.textInputLabel, 'label', 'Label');
       maxLen(c.helperText, LIMITS.helperText, 'helperText', 'Helper text');
+      integer(c.minChars, 'minChars', 'Min characters');
+      integer(c.maxChars, 'maxChars', 'Max characters');
       if (c.minChars !== undefined && c.minChars < 0) at('Min characters cannot be negative.', 'minChars');
       if (c.maxChars !== undefined && c.maxChars < 1) at('Max characters must be at least 1.', 'maxChars');
       if (c.minChars !== undefined && c.maxChars !== undefined && c.minChars > c.maxChars) {
@@ -152,6 +158,7 @@ function validateComponent(
     case 'text_area':
       maxLen(c.label, LIMITS.textAreaLabel, 'label', 'Label');
       maxLen(c.helperText, LIMITS.helperText, 'helperText', 'Helper text');
+      integer(c.maxLength, 'maxLength', 'Max length');
       if (c.maxLength !== undefined && (c.maxLength < 1 || c.maxLength > LIMITS.textAreaMaxLength)) {
         at(`Max length must be between 1 and ${LIMITS.textAreaMaxLength}.`, 'maxLength');
       }
@@ -169,6 +176,8 @@ function validateComponent(
       validateOptions(c.options, LIMITS.selectionMaxOptions, at);
       if (c.type === 'checkbox') {
         const { minSelected: min, maxSelected: max } = c;
+        integer(min, 'minSelected', 'Min selections');
+        integer(max, 'maxSelected', 'Max selections');
         if (min !== undefined && (min < 0 || min > c.options.length)) at('Min selections must be between 0 and the number of options.', 'minSelected');
         if (max !== undefined && (max < 1 || max > c.options.length)) at('Max selections must be between 1 and the number of options.', 'maxSelected');
         if (min !== undefined && max !== undefined && min > max) at('Min selections cannot exceed max selections.', 'minSelected');
@@ -230,6 +239,10 @@ function validateOptions(
   });
 }
 
+/** Component props Meta types strictly; a string here is rejected at publish. */
+const INTEGER_PROPS = ['min-chars', 'max-chars', 'max-length', 'min-selected-items', 'max-selected-items'] as const;
+const BOOLEAN_PROPS = ['required', 'strikethrough', 'markdown'] as const;
+
 /**
  * Structural check on generated Meta JSON — a final guard that the transform
  * produced something Meta will accept (independent of the editor model).
@@ -251,6 +264,18 @@ export function validateMetaJson(json: { version?: unknown; screens?: unknown })
     if (layout?.type !== 'SingleColumnLayout' || !Array.isArray(layout.children)) {
       errors.push(`Screen "${id}" needs a SingleColumnLayout with children.`);
       continue;
+    }
+    for (const c of layout.children) {
+      for (const prop of INTEGER_PROPS) {
+        if (prop in c && !Number.isInteger(c[prop])) {
+          errors.push(`Screen "${id}" › ${String(c.type)}: "${prop}" must be a number.`);
+        }
+      }
+      for (const prop of BOOLEAN_PROPS) {
+        if (prop in c && typeof c[prop] !== 'boolean') {
+          errors.push(`Screen "${id}" › ${String(c.type)}: "${prop}" must be true or false.`);
+        }
+      }
     }
     const footers = layout.children.filter((c) => c.type === 'Footer');
     if (footers.length > 1) errors.push(`Screen "${id}" has more than one Footer.`);

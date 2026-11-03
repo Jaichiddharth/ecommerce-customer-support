@@ -90,7 +90,16 @@ function compact(obj: Record<string, unknown>): MetaComponent {
   return out as MetaComponent;
 }
 
-const str = (n: number | undefined) => (n === undefined ? undefined : String(n));
+/**
+ * Meta types these props as Integer (`min-chars`, `max-chars`, `max-length`,
+ * `min/max-selected-items`) and rejects strings. Coerces legacy drafts that
+ * stored them as strings and drops anything non-finite.
+ */
+const int = (n: unknown) => {
+  if (n === undefined || n === null || n === '') return undefined;
+  const v = Math.trunc(Number(n));
+  return Number.isFinite(v) ? v : undefined;
+};
 
 function toMetaComponent(
   c: WaComponent,
@@ -118,8 +127,8 @@ function toMetaComponent(
         label: c.label,
         'input-type': c.inputType,
         required: c.required,
-        'min-chars': str(c.minChars),
-        'max-chars': str(c.maxChars),
+        'min-chars': int(c.minChars),
+        'max-chars': int(c.maxChars),
         pattern: c.pattern,
         'helper-text': c.helperText,
       });
@@ -129,7 +138,7 @@ function toMetaComponent(
         name: c.name,
         label: c.label,
         required: c.required,
-        'max-length': str(c.maxLength),
+        'max-length': int(c.maxLength),
         'helper-text': c.helperText,
       });
     case 'dropdown':
@@ -150,8 +159,8 @@ function toMetaComponent(
         label: c.label,
         description: c.description,
         required: c.required,
-        'min-selected-items': c.minSelected,
-        'max-selected-items': c.maxSelected,
+        'min-selected-items': int(c.minSelected),
+        'max-selected-items': int(c.maxSelected),
         'data-source': dataSource(c.options),
       });
     case 'date':
