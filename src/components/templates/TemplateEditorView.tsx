@@ -17,6 +17,8 @@ import {
   Loader2,
   Upload,
   Lock,
+  AlertCircle,
+  Ban,
 } from 'lucide-react';
 import { WhatsAppChatPreview } from './WhatsAppChatPreview';
 import {
@@ -30,7 +32,15 @@ import {
   TEMPLATE_MEDIA_RULES,
   isMediaHeader,
 } from '@/types/templates';
-import { extractVariables, validateTemplateComponents } from '@/lib/whatsapp-templates';
+import {
+  bodyCharLimit,
+  extractVariables,
+  getBodyTextProblems,
+  getButtonProblems,
+  getFooterTextProblems,
+  getHeaderTextProblems,
+  validateTemplateComponents,
+} from '@/lib/whatsapp-templates';
 import { apiClient } from '@/lib/api/client';
 import { notifyError } from '@/lib/api/notify';
 import { gooeyToast } from '@/components/ui/goey-toaster';
@@ -110,6 +120,46 @@ const EMPTY_FORM: FormState = {
 
 let buttonSeq = 0;
 const newButtonId = () => `btn_${Date.now()}_${buttonSeq++}`;
+
+/** Text input styling; red border while the field has a problem */
+const fieldClass = (invalid = false) =>
+  `w-full px-3 py-2 text-sm bg-white border rounded-lg text-slate-800 focus:outline-none disabled:bg-slate-50 disabled:text-slate-500 ${
+    invalid ? 'border-red-400 focus:border-red-500' : 'border-slate-200 focus:border-[#3440a8]'
+  }`;
+
+/** "12/60" counter, like WhatsApp Manager; turns red past the limit */
+const CharCounter: React.FC<{ count: number; max: number; className?: string }> = ({ count, max, className = '' }) => (
+  <span
+    className={`pointer-events-none select-none font-mono text-[11px] tabular-nums ${
+      count > max ? 'font-semibold text-red-600' : 'text-slate-400'
+    } ${className}`}
+  >
+    {count}/{max}
+  </span>
+);
+
+/** Input with its counter inside the right edge */
+const CountedInput: React.FC<
+  Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'maxLength'> & { value: string; max: number; invalid?: boolean }
+> = ({ value, max, invalid, className = '', ...rest }) => (
+  <div className="relative min-w-0 flex-1">
+    <input {...rest} value={value} maxLength={max} className={`${fieldClass(invalid)} pr-20 ${className}`} />
+    <CharCounter count={value.length} max={max} className="absolute right-3 top-1/2 -translate-y-1/2" />
+  </div>
+);
+
+/** Problems shown right under the field they belong to */
+const FieldProblems: React.FC<{ problems: string[] }> = ({ problems }) =>
+  problems.length === 0 ? null : (
+    <ul className="mt-1.5 space-y-1">
+      {problems.map((p) => (
+        <li key={p} className="flex items-start gap-1.5 text-[11px] leading-snug text-red-600">
+          <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span>{p}</span>
+        </li>
+      ))}
+    </ul>
+  );
 
 /** Meta template → editor form (samples are read back from the `example` blocks) */
 function templateToForm(tpl: WhatsAppTemplate, mode: TemplateEditorMode): FormState {
@@ -266,8 +316,21 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
   }, [headerPreviewUrl]);
 
   const headerVariables = useMemo(() => extractVariables(form.headerText), [form.headerText]);
+  // What "+ Variable" would produce; it's disabled when that no longer fits in 60 characters
+  const headerWithVariable = `${form.headerText.trimEnd()} {{1}}`.trimStart();
   const bodyVariables = useMemo(() => extractVariables(form.bodyText), [form.bodyText]);
   const components = useMemo(() => formToComponents(form), [form]);
+
+  // Shown under each field as soon as it has content; the checklist also covers empty required fields
+  const headerProblems = useMemo(
+    () => (form.headerType === 'TEXT' && form.headerText ? getHeaderTextProblems(form.headerText) : []),
+    [form.headerType, form.headerText]
+  );
+  const bodyProblems = useMemo(() => getBodyTextProblems(form.bodyText), [form.bodyText]);
+  const bodyLimit = bodyCharLimit(form.bodyText);
+  const footerProblems = useMemo(() => (form.footerText ? getFooterTextProblems(form.footerText) : []), [form.footerText]);
+  const buttonProblems = (btn: TemplateButton) =>
+    btn.text || btn.url || btn.phone_number ? getButtonProblems(btn) : [];
 
   const nameValid = /^[a-z0-9_]+$/.test(form.name) && form.name.length <= TEMPLATE_LIMITS.name;
   const issues = useMemo(() => {
@@ -437,8 +500,7 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
   };
 
   const title = isEdit ? 'Edit template' : mode === 'duplicate' ? 'Duplicate template' : 'New template';
-  const inputClass =
-    'w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-[#3440a8] disabled:bg-slate-50 disabled:text-slate-500';
+  const inputClass = fieldClass();
 
   return (
     <div className="flex flex-col h-full bg-[#f8fafc] overflow-y-auto">
@@ -515,13 +577,14 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
                 Template name
                 {isEdit && <Lock className="w-3 h-3 text-slate-400" />}
               </label>
-              <input
+              <CountedInput
                 type="text"
                 value={form.name}
+                max={TEMPLATE_LIMITS.name}
                 onChange={handleNameChange}
                 disabled={isEdit}
                 placeholder="e.g. payment_reminder"
-                className={`${inputClass} font-mono`}
+                className="font-mono"
               />
               <p className="text-[11px] text-slate-400 mt-1">
                 {isEdit ? "Meta doesn't allow renaming a template" : 'Lowercase letters, numbers and underscores only'}
@@ -608,20 +671,26 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
               </select>
 
               {form.headerType === 'TEXT' && (
-                <div className="flex-1 flex items-center gap-2">
-                  <input
+                <div className="flex-1 flex items-center gap-2 min-w-0">
+                  <CountedInput
                     type="text"
                     value={form.headerText}
+                    max={TEMPLATE_LIMITS.headerText}
+                    invalid={headerProblems.length > 0}
                     onChange={(e) => update({ headerText: e.target.value })}
-                    maxLength={TEMPLATE_LIMITS.headerText}
                     placeholder="e.g. Order {{1}} · payment pending"
-                    className={inputClass}
                   />
                   {headerVariables.length === 0 && (
                     <button
                       type="button"
-                      onClick={() => update({ headerText: `${form.headerText.trimEnd()} {{1}}`.trimStart() })}
-                      className="shrink-0 text-xs font-semibold text-[#3440a8] hover:text-[#2b358d] flex items-center gap-1 cursor-pointer"
+                      onClick={() => update({ headerText: headerWithVariable })}
+                      disabled={headerWithVariable.length > TEMPLATE_LIMITS.headerText}
+                      title={
+                        headerWithVariable.length > TEMPLATE_LIMITS.headerText
+                          ? `No room for {{1}}: shorten the header to ${TEMPLATE_LIMITS.headerText - 6} characters or fewer`
+                          : 'Add {{1}} at the end'
+                      }
+                      className="shrink-0 text-xs font-semibold text-[#3440a8] hover:text-[#2b358d] flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed disabled:text-slate-300"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       Variable
@@ -656,6 +725,8 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
               )}
             </div>
 
+            <FieldProblems problems={headerProblems} />
+
             {form.headerType === 'TEXT' && headerVariables.length > 0 && (
               <div className="flex items-center gap-2 mt-2">
                 <span className="font-mono text-xs font-bold text-[#3440a8] bg-indigo-50 border border-indigo-100 px-2 py-1.5 rounded-lg shrink-0">
@@ -676,17 +747,27 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs font-semibold text-slate-700">Body</label>
-              <span className="text-[11px] text-slate-400 font-mono">
-                {form.bodyText.length} / {TEMPLATE_LIMITS.body}
+              <span
+                className="flex items-center gap-1"
+                title={`1024 characters, plus ${TEMPLATE_LIMITS.bodyPerVariable} for each variable`}
+              >
+                <CharCounter count={form.bodyText.length} max={bodyLimit} />
+                {bodyProblems.length > 0 && <Ban className="h-3.5 w-3.5 text-red-600" />}
               </span>
             </div>
 
-            <div className="border border-slate-200 rounded-xl overflow-hidden focus-within:border-[#3440a8] focus-within:ring-1 focus-within:ring-[#3440a8] bg-white transition-all">
+            {/* No maxLength: pasted text isn't cut off silently; the counter and error show what's too long */}
+            <div
+              className={`border rounded-xl overflow-hidden focus-within:ring-1 bg-white transition-all ${
+                bodyProblems.length > 0
+                  ? 'border-red-400 focus-within:border-red-500 focus-within:ring-red-500'
+                  : 'border-slate-200 focus-within:border-[#3440a8] focus-within:ring-[#3440a8]'
+              }`}
+            >
               <textarea
                 ref={bodyTextareaRef}
                 value={form.bodyText}
                 onChange={(e) => update({ bodyText: e.target.value })}
-                maxLength={TEMPLATE_LIMITS.body}
                 rows={5}
                 placeholder="Hi {{1}}, thanks for shopping with us..."
                 className="w-full p-3 text-sm text-slate-800 outline-none resize-none"
@@ -719,6 +800,7 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
                 </button>
               </div>
             </div>
+            <FieldProblems problems={bodyProblems} />
 
             {bodyVariables.length > 0 && (
               <div className="mt-3">
@@ -748,14 +830,15 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
           {/* Footer Section */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">Footer (optional)</label>
-            <input
+            <CountedInput
               type="text"
               value={form.footerText}
+              max={TEMPLATE_LIMITS.footer}
+              invalid={footerProblems.length > 0}
               onChange={(e) => update({ footerText: e.target.value })}
-              maxLength={TEMPLATE_LIMITS.footer}
               placeholder="e.g. Reply STOP to stop messages"
-              className={inputClass}
             />
+            <FieldProblems problems={footerProblems} />
           </div>
 
           {/* Buttons Section */}
@@ -782,13 +865,12 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
                         </option>
                       ))}
                     </select>
-                    <input
+                    <CountedInput
                       type="text"
                       value={btn.text}
+                      max={TEMPLATE_LIMITS.buttonText}
                       onChange={(e) => updateButton(btn.id, { text: e.target.value })}
                       placeholder="Button label"
-                      maxLength={TEMPLATE_LIMITS.buttonText}
-                      className={inputClass}
                     />
                     <button
                       type="button"
@@ -802,13 +884,13 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
 
                   {btn.type === 'URL' && (
                     <div className="flex flex-col sm:flex-row gap-2">
-                      <input
+                      <CountedInput
                         type="url"
                         value={btn.url ?? ''}
+                        max={TEMPLATE_LIMITS.url}
                         onChange={(e) => updateButton(btn.id, { url: e.target.value })}
-                        maxLength={TEMPLATE_LIMITS.url}
                         placeholder="https://example.com/track/{{1}}"
-                        className={`${inputClass} font-mono text-xs`}
+                        className="font-mono text-xs"
                       />
                       {extractVariables(btn.url).length > 0 && (
                         <input
@@ -823,14 +905,17 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
                   )}
 
                   {btn.type === 'PHONE_NUMBER' && (
-                    <input
+                    <CountedInput
                       type="tel"
                       value={btn.phone_number ?? ''}
+                      max={TEMPLATE_LIMITS.phoneNumber}
                       onChange={(e) => updateButton(btn.id, { phone_number: e.target.value })}
                       placeholder="+919876543210"
-                      className={`${inputClass} font-mono text-xs`}
+                      className="font-mono text-xs"
                     />
                   )}
+
+                  <FieldProblems problems={buttonProblems(btn)} />
                 </div>
               ))}
 

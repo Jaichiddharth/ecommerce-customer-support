@@ -61,13 +61,18 @@ export const isTemplateEditable = (tpl: Pick<WhatsAppTemplate, 'id' | 'status'>)
 export const TEMPLATE_LIMITS = {
   name: 512,
   headerText: 60,
+  /** Body without variables; see `bodyCharLimit` */
   body: 1024,
+  /** Extra body characters allowed per {{n}} placeholder (WhatsApp Manager: one variable → 1028, six → 1048) */
+  bodyPerVariable: 4,
   footer: 60,
   buttonText: 25,
   buttons: 10,
   urlButtons: 2,
   phoneButtons: 1,
   url: 2000,
+  /** "+" and up to 15 digits (E.164), with room for spaces */
+  phoneNumber: 20,
 } as const;
 
 /** Accepted header media and Meta's size caps */
