@@ -25,6 +25,95 @@ const isSequential = (vars: number[]) => vars.every((v, i) => v === i + 1);
 
 const PHONE_RE = /^\+?[1-9]\d{6,14}$/;
 
+/** Meta's wording, so agents see the same message as in WhatsApp Manager */
+export const MALFORMED_VARIABLE_MESSAGE =
+  'This template contains variable parameters with incorrect formatting. Variable parameters must be whole numbers with two sets of curly brackets (for example, {{1}}, {{2}}).';
+
+/** True when `text` has broken placeholders: {{1}, {1}}, {{ 1 }}, {{name}}, {{}} … */
+export const hasMalformedVariables = (text?: string): boolean =>
+  Boolean(text) && /\{\{|\}\}/.test(text!.replace(VARIABLE_RE, ''));
+
+/** Body length limit: 1024, plus 4 per {{n}} placeholder, as WhatsApp Manager counts it */
+export const bodyCharLimit = (text?: string): number =>
+  TEMPLATE_LIMITS.body + TEMPLATE_LIMITS.bodyPerVariable * (text?.match(VARIABLE_RE)?.length ?? 0);
+
+// -------------------------------------------------------------
+// PER-FIELD RULES: the editor shows these under each field, and
+// validateTemplateComponents (editor checklist + API route) reuses them
+// -------------------------------------------------------------
+
+/** Problems with header text (excluding "empty" and the sample, which are checked on submit) */
+export function getHeaderTextProblems(text: string): string[] {
+  const problems: string[] = [];
+  const vars = extractVariables(text);
+  if (hasMalformedVariables(text)) problems.push(MALFORMED_VARIABLE_MESSAGE);
+  if (text.length > TEMPLATE_LIMITS.headerText) problems.push(`Header text must be ${TEMPLATE_LIMITS.headerText} characters or fewer.`);
+  if (/[\n\r]/.test(text)) problems.push("Header text can't contain line breaks.");
+  if (vars.length > 1 || (vars.length === 1 && vars[0] !== 1)) {
+    problems.push('The header can have only one variable, and it must be {{1}}.');
+  }
+  return problems;
+}
+
+/** Problems with body text (excluding "empty" and samples, which are checked on submit) */
+export function getBodyTextProblems(text: string): string[] {
+  const problems: string[] = [];
+  const trimmed = text.trim();
+  if (!trimmed) return problems;
+
+  const vars = extractVariables(text);
+  const limit = bodyCharLimit(text);
+  if (hasMalformedVariables(text)) problems.push(MALFORMED_VARIABLE_MESSAGE);
+  if (text.length > limit) problems.push(`Body must be ${limit} characters or fewer (1024, plus 4 for each variable).`);
+  if (!isSequential(vars)) {
+    problems.push(`Body variables must be numbered {{1}} to {{${vars.length}}} with no gaps (found ${vars.map((v) => `{{${v}}}`).join(', ')}).`);
+  }
+  if (/^\{\{\d+\}\}/.test(trimmed) || /\{\{\d+\}\}$/.test(trimmed)) {
+    problems.push("The body can't start or end with a variable.");
+  }
+  if (/\n[ \t]*\n[ \t]*\n/.test(text)) {
+    problems.push('The body can have at most one empty line in a row.');
+  }
+  return problems;
+}
+
+/** Problems with footer text */
+export function getFooterTextProblems(text: string): string[] {
+  const problems: string[] = [];
+  if (text.length > TEMPLATE_LIMITS.footer) problems.push(`Footer must be ${TEMPLATE_LIMITS.footer} characters or fewer.`);
+  if (extractVariables(text).length > 0 || hasMalformedVariables(text)) problems.push("The footer can't contain variables.");
+  if (/[\n\r]/.test(text)) problems.push("The footer can't contain line breaks.");
+  return problems;
+}
+
+/** Problems with one button, worded to read on their own (the checklist adds "Button n: ") */
+export function getButtonProblems(btn: { type: string; text?: string; url?: string; phone_number?: string; example?: string | string[] }): string[] {
+  const problems: string[] = [];
+  const text = btn.text ?? '';
+  if (!text.trim()) problems.push('Add a button label.');
+  else if (text.length > TEMPLATE_LIMITS.buttonText) problems.push(`The label must be ${TEMPLATE_LIMITS.buttonText} characters or fewer.`);
+  if (extractVariables(text).length > 0 || hasMalformedVariables(text)) problems.push("The label can't contain variables.");
+
+  if (btn.type === 'URL') {
+    const url = btn.url?.trim() ?? '';
+    const vars = extractVariables(url);
+    const example = Array.isArray(btn.example) ? btn.example[0] : btn.example;
+    if (!/^https?:\/\/\S+\.\S+/.test(url)) problems.push('Enter a valid website URL (https://…).');
+    else if (url.length > TEMPLATE_LIMITS.url) problems.push(`The URL must be ${TEMPLATE_LIMITS.url} characters or fewer.`);
+    if (hasMalformedVariables(url)) problems.push(MALFORMED_VARIABLE_MESSAGE);
+    if (vars.length > 1 || (vars.length === 1 && (vars[0] !== 1 || !url.endsWith('{{1}}')))) {
+      problems.push('A dynamic URL can have one variable, {{1}}, at the very end.');
+    } else if (vars.length === 1 && !example?.trim()) {
+      problems.push('Add a sample value for the URL variable.');
+    }
+  }
+
+  if (btn.type === 'PHONE_NUMBER' && !PHONE_RE.test((btn.phone_number ?? '').replace(/[\s()-]/g, ''))) {
+    problems.push('Enter a phone number with country code, e.g. +919876543210.');
+  }
+  return problems;
+}
+
 /**
  * Validates components in Meta's create/edit payload shape (with `example` blocks).
  * Returns human-readable problems; an empty array means Meta should accept the structure.
@@ -38,12 +127,10 @@ export function validateTemplateComponents(components: TemplateComponent[]): str
 
   if (header?.format === 'TEXT') {
     const text = header.text ?? '';
-    const vars = extractVariables(text);
     if (!text.trim()) errors.push('Header text is empty. Add text or set the header to None.');
-    if (text.length > TEMPLATE_LIMITS.headerText) errors.push(`Header text must be ${TEMPLATE_LIMITS.headerText} characters or fewer.`);
-    if (vars.length > 1 || (vars.length === 1 && vars[0] !== 1)) {
-      errors.push('The header can have only one variable, and it must be {{1}}.');
-    } else if (vars.length === 1 && !header.example?.header_text?.[0]?.trim()) {
+    const problems = getHeaderTextProblems(text);
+    errors.push(...problems);
+    if (problems.length === 0 && extractVariables(text).length === 1 && !header.example?.header_text?.[0]?.trim()) {
       errors.push('Add a sample value for the header variable.');
     }
   } else if (header && isMediaHeader(header.format)) {
@@ -56,27 +143,15 @@ export function validateTemplateComponents(components: TemplateComponent[]): str
   if (!bodyText.trim()) {
     errors.push('Body text is required.');
   } else {
+    errors.push(...getBodyTextProblems(bodyText));
     const vars = extractVariables(bodyText);
-    if (bodyText.length > TEMPLATE_LIMITS.body) errors.push(`Body must be ${TEMPLATE_LIMITS.body} characters or fewer.`);
-    if (!isSequential(vars)) {
-      errors.push(`Body variables must be numbered {{1}} to {{${vars.length}}} with no gaps (found ${vars.map((v) => `{{${v}}}`).join(', ')}).`);
-    }
-    if (/^\{\{\d+\}\}/.test(bodyText.trim()) || /\{\{\d+\}\}$/.test(bodyText.trim())) {
-      errors.push("The body can't start or end with a variable.");
-    }
-    if (/\n[ \t]*\n[ \t]*\n/.test(bodyText)) {
-      errors.push('The body can have at most one empty line in a row.');
-    }
     const samples = body?.example?.body_text?.[0] ?? [];
     if (vars.length > 0 && (samples.length < vars.length || samples.some((s) => !s?.trim()))) {
       errors.push('Add a sample value for every body variable.');
     }
   }
 
-  if (footer) {
-    if ((footer.text ?? '').length > TEMPLATE_LIMITS.footer) errors.push(`Footer must be ${TEMPLATE_LIMITS.footer} characters or fewer.`);
-    if (extractVariables(footer.text).length > 0) errors.push("The footer can't contain variables.");
-  }
+  if (footer) errors.push(...getFooterTextProblems(footer.text ?? ''));
 
   if (buttons.length > TEMPLATE_LIMITS.buttons) errors.push(`A template can have at most ${TEMPLATE_LIMITS.buttons} buttons.`);
   if (buttons.filter((b) => b.type === 'URL').length > TEMPLATE_LIMITS.urlButtons) {
@@ -91,25 +166,7 @@ export function validateTemplateComponents(components: TemplateComponent[]): str
   if (groupSwitches > 1) errors.push('Keep quick reply buttons together, before or after the website/phone buttons.');
 
   buttons.forEach((btn, i) => {
-    const label = `Button ${i + 1}`;
-    if (!btn.text?.trim()) errors.push(`${label} needs a label.`);
-    else if (btn.text.length > TEMPLATE_LIMITS.buttonText) errors.push(`${label} label must be ${TEMPLATE_LIMITS.buttonText} characters or fewer.`);
-    if (extractVariables(btn.text).length > 0) errors.push(`${label} label can't contain variables.`);
-
-    if (btn.type === 'URL') {
-      const url = btn.url?.trim() ?? '';
-      const vars = extractVariables(url);
-      if (!/^https?:\/\/\S+\.\S+/.test(url)) errors.push(`${label} needs a valid website URL (https://…).`);
-      if (vars.length > 1 || (vars.length === 1 && (vars[0] !== 1 || !url.endsWith('{{1}}')))) {
-        errors.push(`${label}: a dynamic URL can have one variable, {{1}}, at the very end.`);
-      } else if (vars.length === 1 && !btn.example?.[0]?.trim()) {
-        errors.push(`${label}: add a sample value for the URL variable.`);
-      }
-    }
-
-    if (btn.type === 'PHONE_NUMBER' && !PHONE_RE.test((btn.phone_number ?? '').replace(/[\s()-]/g, ''))) {
-      errors.push(`${label} needs a phone number with country code, e.g. +919876543210.`);
-    }
+    for (const problem of getButtonProblems(btn)) errors.push(`Button ${i + 1}: ${problem}`);
   });
 
   return errors;

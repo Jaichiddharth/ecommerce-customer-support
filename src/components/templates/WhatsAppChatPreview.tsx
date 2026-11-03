@@ -133,8 +133,8 @@ export const WhatsAppChatPreview: React.FC<WhatsAppChatPreviewProps> = ({
         }}
       >
         <div className="w-full max-w-[340px] flex flex-col gap-1.5">
-          {/* Message Bubble Card */}
-          <div className="bg-white rounded-2xl rounded-tl-sm p-3.5 shadow-sm border border-black/5 text-[13px] text-slate-800 leading-relaxed relative">
+          {/* Message Bubble Card: long unbroken words wrap inside it instead of stretching it */}
+          <div className="min-w-0 bg-white rounded-2xl rounded-tl-sm p-3.5 shadow-sm border border-black/5 text-[13px] text-slate-800 leading-relaxed relative [overflow-wrap:anywhere]">
             {/* Header Content */}
             {headerType === 'TEXT' && headerText && (
               <div className="font-bold text-[14px] text-slate-900 pb-1.5 mb-1.5 border-b border-slate-100 leading-snug">
@@ -174,7 +174,7 @@ export const WhatsAppChatPreview: React.FC<WhatsAppChatPreviewProps> = ({
             )}
 
             {/* Body Content */}
-            <div className="whitespace-pre-wrap break-words text-slate-800 text-[13px]">
+            <div className="whitespace-pre-wrap text-slate-800 text-[13px]">
               {bodyText ? (
                 formatWhatsAppText(bodyText, bodySamples)
               ) : (
@@ -184,7 +184,7 @@ export const WhatsAppChatPreview: React.FC<WhatsAppChatPreviewProps> = ({
 
             {/* Footer Content */}
             {footerText && (
-              <div className="mt-2 text-[11px] text-slate-500 font-normal border-t border-slate-100/80 pt-1">
+              <div className="mt-2 text-[11px] text-slate-500 font-normal border-t border-slate-100/80 pt-1 whitespace-pre-wrap">
                 {footerText}
               </div>
             )}
