@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { whatsappWebhookService } from "@/lib/services/channels/whatsapp.webhook.service";
 import { apiHandler } from "@/lib/api/handler";
 import { AppError } from "@/lib/errors";
@@ -54,7 +54,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
 
   // 3. Process payload and persist messages (each item is isolated and logged inside the service)
   try {
-    const result = await whatsappWebhookService.processWebhookPayload(payload);
+    // Automations / Flow resumption run after Meta gets its 200, so slow sends never delay the webhook
+    const result = await whatsappWebhookService.processWebhookPayload(payload, {
+      defer: (task) =>
+        after(() => task().catch((err) => log.error("Deferred webhook task failed", { err }))),
+    });
     return NextResponse.json({
       success: result.success,
       message: result.success ? "Webhook event processed successfully." : "Webhook processed with failures (see server logs).",

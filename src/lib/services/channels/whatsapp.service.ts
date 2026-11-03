@@ -3,7 +3,7 @@ import { customerRepository } from "../../db/repositories/customer.repository";
 import { customerService } from "../customer.service";
 import { messageRepository } from "../../db/repositories/message.repository";
 import { messageReactionRepository } from "../../db/repositories/message-reaction.repository";
-import { metaApi } from "../../meta";
+import { metaApi, flowsApi } from "../../meta";
 import type {
   CreateTemplatePayload,
   GetTemplatesOptions,
@@ -682,7 +682,17 @@ export class WhatsAppService {
     repliedToId?: number | null;
     to: string;
     text?: string;
-    type?: 'text' | 'template' | 'image' | 'document' | 'video' | 'audio';
+    type?: 'text' | 'template' | 'image' | 'document' | 'video' | 'audio' | 'interactive';
+    /** Interactive WhatsApp Flow message (type 'interactive'); only valid inside the 24h service window. */
+    interactiveFlow?: {
+      flowId: string;
+      flowToken: string;
+      cta: string;
+      bodyText: string;
+      headerText?: string;
+      footerText?: string;
+      screen: string;
+    };
     mediaType?: 'image' | 'document' | 'video' | 'audio';
     mediaId?: string;
     /** Public https URL that Meta downloads itself, e.g. a Shopify product image */
@@ -913,6 +923,14 @@ export class WhatsAppService {
             ...(headerMediaId ? { headerFormat } : {}),
           },
         };
+      } else if (params.type === 'interactive' && params.interactiveFlow) {
+        metaRes = await flowsApi.sendInteractiveFlowMessage(
+          targetChannel.metaPhoneNumberId,
+          rawToken,
+          cleanTo,
+          params.interactiveFlow
+        );
+        storedMediaType = 'interactive';
       } else {
         if (!params.text || !params.text.trim()) {
           throw AppError.validation("Message text or media attachment cannot be empty.", "text");
