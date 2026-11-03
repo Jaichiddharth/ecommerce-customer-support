@@ -28,8 +28,13 @@ export class OrganizationRepository {
     return org;
   }
 
-  async listAll(): Promise<Organization[]> {
-    return await db.select().from(organizations);
+  async updatePermissions(id: number, permissions: Record<string, unknown>): Promise<Organization | null> {
+    const [updated] = await db
+      .update(organizations)
+      .set({ rolePermissions: permissions, updatedAt: new Date() })
+      .where(eq(organizations.id, id))
+      .returning();
+    return updated || null;
   }
 }
 

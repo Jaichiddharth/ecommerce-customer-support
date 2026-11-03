@@ -22,13 +22,17 @@ export class UserRepository {
   }
 
   /**
-   * Find a user by their ID
+   * Find a user by their ID, optionally scoped to an organization
    */
-  async findById(id: number): Promise<User | null> {
+  async findById(id: number, organizationId?: number): Promise<User | null> {
+    const condition = organizationId !== undefined
+      ? and(eq(users.id, id), eq(users.organizationId, organizationId))
+      : eq(users.id, id);
+
     const [user] = await db
       .select()
       .from(users)
-      .where(eq(users.id, id))
+      .where(condition)
       .limit(1);
 
     return user || null;
@@ -140,6 +144,166 @@ export class UserRepository {
       .select()
       .from(users)
       .where(eq(users.organizationId, organizationId));
+  }
+
+  /**
+   * Count total members in an organization
+   */
+  async countByOrg(organizationId: number): Promise<number> {
+    const list = await this.listByOrg(organizationId);
+    return list.length;
+  }
+
+  /**
+   * Invite or create a team member in an organization
+   */
+  async createTeamMember(data: {
+    organizationId: number;
+    name: string;
+    email: string;
+    role: string;
+    teams?: string[];
+    languages?: string[];
+    stores?: string[];
+    customPermissions?: Record<string, boolean> | null;
+    status?: string;
+  }): Promise<User> {
+    const [created] = await db
+      .insert(users)
+      .values({
+        organizationId: data.organizationId,
+        name: data.name.trim(),
+        email: data.email.toLowerCase().trim(),
+        passwordHash: "pending_invite",
+        role: data.role.toUpperCase(),
+        teams: data.teams ?? [],
+        languages: data.languages ?? ["EN"],
+        stores: data.stores ?? [],
+        customPermissions: data.customPermissions || null,
+        status: data.status ?? "invited",
+        firebaseIdToken: `invite_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+        firebaseGcmToken: "pending_fcm_token",
+      })
+      .returning();
+
+    return created;
+  }
+
+  /**
+   * Update a team member's role, teams, languages, stores, permissions, or status
+   */
+  async updateTeamMember(
+    id: number,
+    organizationId: number,
+    data: Partial<{
+      name: string;
+      role: string;
+      teams: string[];
+      languages: string[];
+      stores: string[];
+      customPermissions: Record<string, boolean> | null;
+      status: string;
+      avatarUrl: string | null;
+      twoFactorEnabled: boolean;
+      twoFactorSecret: string | null;
+      twoFactorBackupCodes: string[];
+    }>
+  ): Promise<User | null> {
+    const updatePayload: Record<string, unknown> = {
+      updatedAt: new Date(),
+    };
+    if (data.name !== undefined) updatePayload.name = data.name.trim();
+    if (data.role !== undefined) updatePayload.role = data.role.toUpperCase();
+    if (data.teams !== undefined) updatePayload.teams = data.teams;
+    if (data.languages !== undefined) updatePayload.languages = data.languages;
+    if (data.stores !== undefined) updatePayload.stores = data.stores;
+    if (data.customPermissions !== undefined) updatePayload.customPermissions = data.customPermissions;
+    if (data.status !== undefined) updatePayload.status = data.status;
+    if (data.avatarUrl !== undefined) updatePayload.avatarUrl = data.avatarUrl;
+    if (data.twoFactorEnabled !== undefined) updatePayload.twoFactorEnabled = data.twoFactorEnabled;
+    if (data.twoFactorSecret !== undefined) updatePayload.twoFactorSecret = data.twoFactorSecret;
+    if (data.twoFactorBackupCodes !== undefined) updatePayload.twoFactorBackupCodes = data.twoFactorBackupCodes;
+
+    const [updated] = await db
+      .update(users)
+      .set(updatePayload)
+      .where(and(eq(users.id, id), eq(users.organizationId, organizationId)))
+      .returning();
+
+    return updated || null;
+  }
+
+  /**
+   * Activate an invited user upon acceptance of invitation
+   */
+  async activateInvitedUser(
+    organizationId: number,
+    email: string,
+    data: {
+      name: string;
+      role: string;
+      teams: string[];
+      languages: string[];
+      stores?: string[];
+      customPermissions?: Record<string, boolean> | null;
+      firebaseIdToken: string;
+      avatarUrl?: string | null;
+    }
+  ): Promise<User> {
+    const existing = await this.findByEmailAndOrg(organizationId, email);
+    if (existing) {
+      const [updated] = await db
+        .update(users)
+        .set({
+          name: data.name.trim() || existing.name,
+          role: data.role.toUpperCase(),
+          teams: data.teams,
+          languages: data.languages,
+          stores: data.stores ?? existing.stores ?? [],
+          customPermissions: data.customPermissions !== undefined ? data.customPermissions : existing.customPermissions,
+          status: "active",
+          firebaseIdToken: data.firebaseIdToken,
+          avatarUrl: data.avatarUrl ?? existing.avatarUrl,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    // Otherwise create brand new user row in this org
+    const [created] = await db
+      .insert(users)
+      .values({
+        organizationId,
+        name: data.name.trim(),
+        email: email.toLowerCase().trim(),
+        passwordHash: "firebase_managed_auth",
+        role: data.role.toUpperCase(),
+        teams: data.teams,
+        languages: data.languages,
+        stores: data.stores ?? [],
+        customPermissions: data.customPermissions || null,
+        status: "active",
+        firebaseIdToken: data.firebaseIdToken,
+        firebaseGcmToken: "pending_fcm_token",
+        avatarUrl: data.avatarUrl || null,
+      })
+      .returning();
+
+    return created;
+  }
+
+  /**
+   * Remove a member from an organization
+   */
+  async deleteTeamMember(id: number, organizationId: number): Promise<boolean> {
+    const [deleted] = await db
+      .delete(users)
+      .where(and(eq(users.id, id), eq(users.organizationId, organizationId)))
+      .returning();
+
+    return Boolean(deleted);
   }
 
   /**

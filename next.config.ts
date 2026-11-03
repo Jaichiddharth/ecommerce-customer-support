@@ -2,7 +2,12 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  allowedDevOrigins: ['result-icy-material.ngrok-free.dev']
+  allowedDevOrigins: [
+    "*.ngrok-free.dev",
+    "*.ngrok-free.app",
+    "*.trycloudflare.com",
+    "cure-thriving-bobbing.ngrok-free.dev",
+  ],
 };
 
 export default nextConfig;

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { User } from "../db/schema";
-import { userRepository } from "../db/repositories";
+import { userRepository, organizationRepository } from "../db/repositories";
 import { adminAuth } from "../firebase/admin";
 import type { DecodedIdToken } from "firebase-admin/auth";
 import { AppError, toAppError } from "../errors";
@@ -12,13 +12,102 @@ const log = createLogger("auth");
 /** Longest a sign-in may last ("Keep me signed in"); the client enforces the shorter default itself. */
 const MAX_SESSION_AGE_SECONDS = 30 * 24 * 60 * 60;
 
+export type UserRole = 'OWNER' | 'ADMIN' | 'AGENT' | 'VIEWER';
+
+export type PermissionKey =
+  | 'view_and_reply_chats'
+  | 'see_all_chats'
+  | 'send_templates_outside_24h'
+  | 'create_and_launch_campaigns'
+  | 'edit_bots_and_flows'
+  | 'export_contacts_and_consent'
+  | 'erase_contacts'
+  | 'manage_billing_and_integrations';
+
+export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Record<PermissionKey, boolean>> = {
+  OWNER: {
+    view_and_reply_chats: true,
+    see_all_chats: true,
+    send_templates_outside_24h: true,
+    create_and_launch_campaigns: true,
+    edit_bots_and_flows: true,
+    export_contacts_and_consent: true,
+    erase_contacts: true,
+    manage_billing_and_integrations: true,
+  },
+  ADMIN: {
+    view_and_reply_chats: true,
+    see_all_chats: true,
+    send_templates_outside_24h: true,
+    create_and_launch_campaigns: true,
+    edit_bots_and_flows: true,
+    export_contacts_and_consent: true,
+    erase_contacts: true,
+    manage_billing_and_integrations: true,
+  },
+  AGENT: {
+    view_and_reply_chats: true,
+    see_all_chats: false,
+    send_templates_outside_24h: true,
+    create_and_launch_campaigns: false,
+    edit_bots_and_flows: false,
+    export_contacts_and_consent: false,
+    erase_contacts: false,
+    manage_billing_and_integrations: false,
+  },
+  VIEWER: {
+    view_and_reply_chats: false,
+    see_all_chats: true,
+    send_templates_outside_24h: false,
+    create_and_launch_campaigns: false,
+    edit_bots_and_flows: false,
+    export_contacts_and_consent: false,
+    erase_contacts: false,
+    manage_billing_and_integrations: false,
+  },
+};
+
+export function hasPermission(
+  role: string,
+  permission: PermissionKey,
+  orgCustomPermissions?: Record<string, Record<string, boolean>> | null
+): boolean {
+  const norm = role.toUpperCase() as UserRole;
+  if (norm === 'OWNER') return true;
+
+  if (orgCustomPermissions?.[norm]?.[permission] !== undefined) {
+    return Boolean(orgCustomPermissions[norm][permission]);
+  }
+
+  return Boolean(DEFAULT_ROLE_PERMISSIONS[norm]?.[permission]);
+}
+
+export function assertRole(userRole: string, allowedRoles: string[]): void {
+  const norm = userRole.toUpperCase();
+  const allowed = allowedRoles.map((r) => r.toUpperCase());
+  if (!allowed.includes(norm)) {
+    throw new AppError("FORBIDDEN", {
+      message: `Your role (${userRole}) does not have permission to perform this action.`,
+      expected: true,
+    });
+  }
+}
+
 export interface AuthUser {
   id: number;
   organizationId: number;
+  organizationName?: string | null;
+  organizationSlug?: string | null;
+  organizationPlan?: string | null;
+  organizationSeats?: number | null;
   uid: string;
   email: string;
   name: string;
   role: string;
+  permissions?: Record<PermissionKey, boolean>;
+  teams?: string[] | null;
+  languages?: string[] | null;
+  status?: string | null;
   avatarUrl?: string | null;
   isOnline?: boolean | null;
   createdAt?: Date;
@@ -79,13 +168,36 @@ export async function authenticate(req: NextRequest): Promise<AuthContext> {
     throw new AppError("AUTH_USER_NOT_FOUND", { expected: true, details: { hint: "Call /api/auth/sync after sign-in." } });
   }
 
+  const org = await organizationRepository.findById(dbUser.organizationId);
+  const normRole = (dbUser.role || "AGENT").toUpperCase() as UserRole;
+  const storedPermissions = (org?.rolePermissions as any) || {};
+
+  const effectivePermissions: Record<PermissionKey, boolean> = {
+    view_and_reply_chats: hasPermission(normRole, "view_and_reply_chats", storedPermissions),
+    see_all_chats: hasPermission(normRole, "see_all_chats", storedPermissions),
+    send_templates_outside_24h: hasPermission(normRole, "send_templates_outside_24h", storedPermissions),
+    create_and_launch_campaigns: hasPermission(normRole, "create_and_launch_campaigns", storedPermissions),
+    edit_bots_and_flows: hasPermission(normRole, "edit_bots_and_flows", storedPermissions),
+    export_contacts_and_consent: hasPermission(normRole, "export_contacts_and_consent", storedPermissions),
+    erase_contacts: hasPermission(normRole, "erase_contacts", storedPermissions),
+    manage_billing_and_integrations: hasPermission(normRole, "manage_billing_and_integrations", storedPermissions),
+  };
+
   const authUser: AuthUser = {
     id: dbUser.id,
     organizationId: dbUser.organizationId,
+    organizationName: org?.name ?? null,
+    organizationSlug: org?.slug ?? null,
+    organizationPlan: org?.plan ?? null,
+    organizationSeats: org?.maxSeats ?? null,
     uid: uid || dbUser.firebaseIdToken,
     email: dbUser.email,
     name: dbUser.name || decodedToken.name || email?.split("@")[0] || "User",
     role: dbUser.role || "AGENT",
+    permissions: effectivePermissions,
+    teams: dbUser.teams ?? [],
+    languages: dbUser.languages ?? ["EN"],
+    status: dbUser.status ?? "active",
     avatarUrl: dbUser.avatarUrl || (decodedToken.picture as string | undefined) || null,
     isOnline: dbUser.isOnline ?? true,
     createdAt: dbUser.createdAt,

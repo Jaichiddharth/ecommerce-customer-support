@@ -1,18 +1,27 @@
 import { NextResponse } from "next/server";
-import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, hasPermission } from "@/lib/security/auth";
 import { shopifyService } from "@/lib/services";
+import { organizationRepository } from "@/lib/db/repositories";
 import { AppError } from "@/lib/errors";
 
 /** GET /api/integrations/shopify — the organization's store connections (never includes tokens) */
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
+  const org = await organizationRepository.findById(req.user.organizationId);
+  const canManage = hasPermission(req.user.role, "manage_billing_and_integrations", org?.rolePermissions as any);
+  if (!canManage) {
+    return NextResponse.json({ success: true, configured: false, stores: [], restricted: true });
+  }
+
   const connection = await shopifyService.getConnection(req.user.organizationId);
   return NextResponse.json({ success: true, ...connection });
 });
 
-/** DELETE /api/integrations/shopify?storeId=… — disconnect one store (admins only) */
+/** DELETE /api/integrations/shopify?storeId=… — disconnect one store */
 export const DELETE = withAuth(async (req: AuthenticatedRequest) => {
-  if (req.user.role !== "ADMIN") {
-    throw new AppError("FORBIDDEN", { message: "Only workspace admins can disconnect the Shopify store.", expected: true });
+  const org = await organizationRepository.findById(req.user.organizationId);
+  const canManage = hasPermission(req.user.role, "manage_billing_and_integrations", org?.rolePermissions as any);
+  if (!canManage) {
+    throw new AppError("FORBIDDEN", { message: "You do not have permission to manage billing and integrations.", expected: true });
   }
   const storeId = Number(req.nextUrl.searchParams.get("storeId"));
   if (!Number.isInteger(storeId) || storeId <= 0) {

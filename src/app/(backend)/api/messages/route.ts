@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, hasPermission } from "@/lib/security/auth";
 import { messageRepository } from "@/lib/db/repositories/message.repository";
+import { organizationRepository } from "@/lib/db/repositories";
 import { customerService } from "@/lib/services";
 import { MessageStatus } from "@/lib/db/schema";
 import { publish } from "@/lib/realtime";
@@ -17,6 +18,15 @@ const MAX_PAGE_SIZE = 100;
  */
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
   const orgId = req.user.organizationId;
+
+  const org = await organizationRepository.findById(orgId);
+  if (!hasPermission(req.user.role, "view_and_reply_chats", org?.rolePermissions as any)) {
+    throw new AppError("FORBIDDEN", {
+      message: "Your role does not have permission to view chat messages.",
+      expected: true,
+    });
+  }
+
   const { searchParams } = new URL(req.url);
   const customerIdStr = searchParams.get("customerId");
 
@@ -64,6 +74,15 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
  */
 export const POST = withAuth(async (req: AuthenticatedRequest) => {
   const orgId = req.user.organizationId;
+
+  const org = await organizationRepository.findById(orgId);
+  if (!hasPermission(req.user.role, "view_and_reply_chats", org?.rolePermissions as any)) {
+    throw new AppError("FORBIDDEN", {
+      message: "Your role does not have permission to reply to chats or send messages.",
+      expected: true,
+    });
+  }
+
   const body = await readJson(req);
   const { customerId, textContent, mediaUrl, mediaType, isInternalNote, status, errorCode, repliedToId } = body ?? {};
 

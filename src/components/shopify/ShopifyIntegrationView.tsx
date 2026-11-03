@@ -11,6 +11,7 @@ import {
   Loader2,
   Lock,
   Plus,
+  ShieldAlert,
   Unplug,
 } from 'lucide-react';
 import apiClient from '@/lib/api/client';
@@ -55,7 +56,9 @@ interface ShopifyIntegrationViewProps {
 }
 
 export const ShopifyIntegrationView: React.FC<ShopifyIntegrationViewProps> = ({ onBack }) => {
-  const { dbUser } = useAuth();
+  const { dbUser, hasPermission } = useAuth();
+  const canManage = hasPermission('manage_billing_and_integrations');
+  const isAdmin = canManage;
   const { store: primaryStore, stores, configured, isLoading, error, refresh } = useShopifyStore();
   const [showConnect, setShowConnect] = useState(false);
   const [connectingShop, setConnectingShop] = useState<string | null>(null);
@@ -63,7 +66,28 @@ export const ShopifyIntegrationView: React.FC<ShopifyIntegrationViewProps> = ({ 
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const storeCount = useRef(stores.length);
 
-  const isAdmin = dbUser?.role === 'ADMIN';
+  if (!canManage) {
+    return (
+      <div className="h-full overflow-y-auto bg-slate-50/60 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200/90 shadow-xs p-8 text-center flex flex-col items-center">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 mb-4 shadow-2xs">
+            <Lock className="w-6 h-6 stroke-[2]" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900">Shopify Integration Restricted</h2>
+          <p className="mt-2 text-xs text-slate-500 leading-relaxed max-w-sm">
+            Your role does not have permission to manage billing and integrations. Contact your workspace administrator to connect or manage stores.
+          </p>
+          <button
+            type="button"
+            onClick={onBack}
+            className="mt-5 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-[#3440a8] hover:bg-[#2b358c] transition-colors cursor-pointer"
+          >
+            Back to Integrations
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Shopify's approval page opens in a new tab: pick up the new connection when the user comes back
   useEffect(() => {

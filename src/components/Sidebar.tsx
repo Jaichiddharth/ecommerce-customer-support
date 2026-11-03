@@ -11,6 +11,7 @@ import {
   FileText,
   Inbox,
   LayoutGrid,
+  Lock,
   LogOut,
   Megaphone,
   MoreHorizontal,
@@ -22,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { gooeyToast } from '@/components/ui/goey-toaster';
+import apiClient from '@/lib/api/client';
 
 export type TabType =
   | 'dashboard'
@@ -74,11 +76,28 @@ const initialsOf = (value?: string | null, fallback = '?') => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unreadCount = 0, aiCount = 0 }) => {
-  const { user, dbUser, logout } = useAuth();
+  const { user, dbUser, logout, hasPermission } = useAuth();
+  const canManageBillingAndIntegrations = hasPermission('manage_billing_and_integrations');
   const router = useRouter();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
+  const [channelCount, setChannelCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    apiClient
+      .get<{ channels: any[] }>('/api/channels')
+      .then((res) => {
+        if (isMounted && res.data?.channels) {
+          setChannelCount(res.data.channels.length);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, [dbUser?.organizationId]);
 
   // Restore collapse preference from localStorage
   useEffect(() => {
@@ -126,12 +145,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
 
   const userName = dbUser?.name || user?.displayName || user?.email || 'Arun Kumar';
   const userInitials = initialsOf(dbUser?.name || user?.displayName, user?.email?.slice(0, 2).toUpperCase() || 'AK');
-  const orgName = dbUser?.organizationName || 'Noctylle';
-  const orgInitials = initialsOf(orgName, 'NC');
+  const orgName = dbUser?.organizationName || 'Workspace';
+  const orgInitials = initialsOf(orgName, 'WS');
+  const planName = dbUser?.organizationPlan
+    ? dbUser.organizationPlan.charAt(0).toUpperCase() + dbUser.organizationPlan.slice(1).toLowerCase()
+    : 'Growth';
+  const seatsLimit = dbUser?.organizationSeats || 10;
 
   const badgeFor = (item: NavItem) => (item.badge === 'unread' ? unreadCount : item.badge === 'ai' ? aiCount : 0);
 
   const handleItemClick = (item: NavItem) => {
+    if (item.key === 'integrations' && !canManageBillingAndIntegrations) {
+      gooeyToast.info('Integrations are restricted for your role');
+      setActiveTab('integrations');
+      return;
+    }
     if (item.tab) {
       setActiveTab(item.tab);
     } else {
@@ -186,7 +214,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
                   {orgName}
                 </div>
                 <div className="text-[11px] text-slate-500 truncate leading-tight mt-0.5">
-                  Shopify · 3 channels
+                  {channelCount !== null ? `${channelCount} ${channelCount === 1 ? 'channel' : 'channels'}` : 'Omnichannel'} · {planName}
                 </div>
               </div>
               <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
@@ -243,11 +271,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
                   const Icon = item.icon;
                   const active = item.tab === activeTab;
                   const badge = badgeFor(item);
+                  const isRestricted = item.key === 'integrations' && !canManageBillingAndIntegrations;
                   return (
                     <button
                       key={item.key}
                       onClick={() => handleItemClick(item)}
-                      title={item.tab ? item.label : `${item.label} · coming soon`}
+                      title={isRestricted ? `${item.label} · restricted` : item.tab ? item.label : `${item.label} · coming soon`}
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-colors cursor-pointer ${
                         active
                           ? 'bg-[#eef0fb] text-[#3440a8] font-bold'
@@ -260,6 +289,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
                         }`}
                       />
                       <span className="flex-1 text-left truncate">{item.label}</span>
+                      {isRestricted && (
+                        <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      )}
                       {badge > 0 && (
                         <span className="px-2 py-0.5 rounded-full bg-[#eef0fb] text-[#3440a8] text-[11px] font-bold">
                           {badge > 99 ? '99+' : badge}
@@ -273,19 +305,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
           </nav>
 
           {/* Plan / Usage Card */}
-          <div className="px-3 py-2 shrink-0">
-            <div className="p-3 rounded-xl bg-[#f4f6fa] border border-slate-100">
-              <div className="text-[12px] font-semibold text-slate-800 leading-tight">
-                Growth · 10 seats
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1 leading-tight">
-                AI resolutions 214 / 300
-              </div>
-              <div className="w-full h-1.5 bg-slate-200 rounded-full mt-2.5 overflow-hidden">
-                <div className="h-full bg-[#3440a8] rounded-full w-[71%]" />
+          {canManageBillingAndIntegrations && (
+            <div className="px-3 py-2 shrink-0">
+              <div className="p-3 rounded-xl bg-[#f4f6fa] border border-slate-100">
+                <div className="text-[12px] font-semibold text-slate-800 leading-tight">
+                  {planName} · {seatsLimit} seats
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1 leading-tight">
+                  AI resolutions 214 / 300
+                </div>
+                <div className="w-full h-1.5 bg-slate-200 rounded-full mt-2.5 overflow-hidden">
+                  <div className="h-full bg-[#3440a8] rounded-full w-[71%]" />
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           {/* User Profile Card */}
           <div className="border-t border-slate-100 px-3 py-3 shrink-0 relative" ref={profileMenuRef}>
@@ -363,7 +397,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
 
             <div
               className="w-8 h-8 rounded-full bg-[#fde8ef] text-[#c0365f] flex items-center justify-center font-semibold text-xs cursor-pointer shadow-2xs hover:opacity-90"
-              title={`${orgName} · Shopify`}
+              title={`${orgName} · ${planName} plan`}
             >
               {orgInitials}
             </div>
@@ -401,17 +435,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
               const Icon = item.icon;
               const active = item.tab === activeTab;
               const badge = badgeFor(item);
+              const isRestricted = item.key === 'integrations' && !canManageBillingAndIntegrations;
               return (
                 <div key={item.key} className="relative">
                   <button
                     onClick={() => handleItemClick(item)}
-                    title={item.tab ? item.label : `${item.label} · coming soon`}
+                    title={isRestricted ? `${item.label} · restricted` : item.tab ? item.label : `${item.label} · coming soon`}
                     className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
                       active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-black hover:text-black hover:bg-slate-100'
                     }`}
                   >
                     <Icon className="w-[19px] h-[19px] stroke-[1.8]" />
                   </button>
+                  {isRestricted && (
+                    <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center pointer-events-none">
+                      <Lock className="w-2 h-2 text-slate-500" />
+                    </span>
+                  )}
                   {badge > 0 && (
                     <span className="absolute -top-1 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#3440a8] text-white text-[10px] font-semibold flex items-center justify-center ring-2 ring-white pointer-events-none">
                       {badge > 99 ? '99+' : badge}

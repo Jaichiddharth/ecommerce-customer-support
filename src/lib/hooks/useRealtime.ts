@@ -25,7 +25,7 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'er
  */
 export function useRealtime(options: UseRealtimeOptions = {}) {
   const { onMessageNew, onMessageStatus, onMessageReaction, onNotificationCount, onAnyEvent, enabled = true } = options;
-  const { user, getIdToken } = useAuth();
+  const { user, getIdToken, refreshDbUser } = useAuth();
 
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [lastEventTime, setLastEventTime] = useState<Date | null>(null);
@@ -146,6 +146,13 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
         }
       });
 
+      // 7. Permissions Updated Event
+      es.addEventListener('permissions.updated', () => {
+        try {
+          refreshDbUser?.();
+        } catch {}
+      });
+
       // Generic Message Handler fallback
       es.onmessage = (e: MessageEvent) => {
         if (!e.data || e.data.startsWith(':')) return; // Ignore SSE comments/ping
@@ -164,6 +171,8 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
             callbacksRef.current.onConversationUpdated?.(payload);
           } else if (payload.type === 'channel.updated') {
             callbacksRef.current.onChannelUpdated?.(payload);
+          } else if (payload.type === 'permissions.updated') {
+            refreshDbUser?.();
           }
           callbacksRef.current.onAnyEvent?.(payload);
         } catch {}

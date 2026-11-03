@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { userService } from "@/lib/services/user.service";
 import { adminAuth } from "@/lib/firebase/admin";
-import { verifyFirebaseToken } from "@/lib/security/auth";
+import { verifyFirebaseToken, hasPermission, UserRole, PermissionKey } from "@/lib/security/auth";
 import { apiHandler } from "@/lib/api/handler";
 import { createLogger, setRequestContext } from "@/lib/logger";
 import { organizationRepository } from "@/lib/db/repositories/organization.repository";
@@ -48,6 +48,19 @@ export const POST = apiHandler(async (req: NextRequest) => {
   }
 
   const organization = await organizationRepository.findById(user.organizationId);
+  const normRole = (user.role || "AGENT").toUpperCase() as UserRole;
+  const storedPermissions = (organization?.rolePermissions as any) || {};
+
+  const effectivePermissions: Record<PermissionKey, boolean> = {
+    view_and_reply_chats: hasPermission(normRole, "view_and_reply_chats", storedPermissions),
+    see_all_chats: hasPermission(normRole, "see_all_chats", storedPermissions),
+    send_templates_outside_24h: hasPermission(normRole, "send_templates_outside_24h", storedPermissions),
+    create_and_launch_campaigns: hasPermission(normRole, "create_and_launch_campaigns", storedPermissions),
+    edit_bots_and_flows: hasPermission(normRole, "edit_bots_and_flows", storedPermissions),
+    export_contacts_and_consent: hasPermission(normRole, "export_contacts_and_consent", storedPermissions),
+    erase_contacts: hasPermission(normRole, "erase_contacts", storedPermissions),
+    manage_billing_and_integrations: hasPermission(normRole, "manage_billing_and_integrations", storedPermissions),
+  };
 
   return NextResponse.json({
     success: true,
@@ -55,9 +68,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
       id: user.id,
       organizationId: user.organizationId,
       organizationName: organization?.name ?? null,
+      organizationSlug: organization?.slug ?? null,
+      organizationPlan: organization?.plan ?? null,
+      organizationSeats: organization?.maxSeats ?? null,
       name: user.name,
       email: user.email,
       role: user.role,
+      permissions: effectivePermissions,
       avatarUrl: user.avatarUrl,
       isOnline: user.isOnline,
       createdAt: user.createdAt,

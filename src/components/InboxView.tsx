@@ -30,6 +30,7 @@ import {
   AlertTriangle,
   Search,
   RefreshCw,
+  Lock,
 } from 'lucide-react';
 import { Message, MessageStatus, normalizeMessageStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -283,7 +284,10 @@ interface InboxViewProps {
 }
 
 export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, onSelectConversation, onCountsChange }) => {
-  const { dbUser } = useAuth();
+  const { dbUser, hasPermission } = useAuth();
+  const canViewAndReply = hasPermission('view_and_reply_chats');
+  const canSendTemplatesOutside24h = hasPermission('send_templates_outside_24h');
+  const canSeeAllChats = hasPermission('see_all_chats');
 
   // Channels & conversations from DB
   const [channels, setChannels] = useState<InboxChannel[]>([]);
@@ -401,6 +405,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // Fetches the newest batch (merged under any older batches already loaded).
   // It also marks the customer's unread messages as read on the server.
   const fetchMessagesForCustomer = useCallback(async (customerId: number, channelType = 'whatsapp'): Promise<ApiError | null> => {
+    if (!canViewAndReply) return null;
     const convId = convKeyFor(customerId);
     try {
       const res = await apiClient.get(`/api/messages?customerId=${customerId}&limit=${MESSAGE_PAGE_SIZE}`);
@@ -420,10 +425,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       setMessagesLoadError({ convId, error: apiError });
       return apiError;
     }
-  }, []);
+  }, [canViewAndReply]);
 
   // Fetches the batch above the oldest loaded message, triggered by scrolling to the top of the thread
   const loadOlderMessages = useCallback(async (customerId: number, beforeId: number, channelType = 'whatsapp') => {
+    if (!canViewAndReply) return;
     const convId = convKeyFor(customerId);
     if (loadingOlderRef.current.has(convId)) return;
     loadingOlderRef.current.add(convId);
@@ -445,7 +451,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       loadingOlderRef.current.delete(convId);
       setLoadingOlderConvId((prev) => (prev === convId ? null : prev));
     }
-  }, []);
+  }, [canViewAndReply]);
 
   useEffect(() => {
     fetchConversations();
@@ -466,7 +472,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
   // Load messages whenever a conversation is opened
   useEffect(() => {
-    if (!selectedCustomerId) return;
+    if (!selectedCustomerId || !canViewAndReply) return;
     fetchMessagesForCustomer(selectedCustomerId, activeChannelType);
     // Opening the thread reads it
     setConversations((prev) =>
@@ -918,6 +924,14 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   };
 
   const handleSendTemplate = async () => {
+    if (!canViewAndReply) {
+      gooeyToast.error('Your role does not have permission to reply to chats.');
+      return;
+    }
+    if (activeChannelType === 'whatsapp' && isWindowExpired && !canSendTemplatesOutside24h) {
+      gooeyToast.error('Your role does not have permission to send templates outside the 24-hour window.');
+      return;
+    }
     if (!selectedTemplate || !activeConv) return;
     const customerPhone = activeConv.customer.phone;
     if (!customerPhone) {
@@ -1176,6 +1190,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   };
 
   const handleSend = async () => {
+    if (!canViewAndReply) {
+      gooeyToast.error('Your role does not have permission to reply to chats.');
+      return;
+    }
     if ((!inputMessage.trim() && !selectedFile) || !activeConv) return;
 
     if (activeChannelType === 'whatsapp' && isWindowExpired) {
@@ -1292,6 +1310,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   };
 
   const handleAddNote = async () => {
+    if (!canViewAndReply) {
+      gooeyToast.error('Your role does not have permission to add notes or reply to chats.');
+      return;
+    }
     const text = inputMessage.trim();
     if (!text || !activeConv) return;
 
@@ -1381,9 +1403,18 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   };
 
   const handleSubmitComposer = () => {
+    if (!canViewAndReply) {
+      gooeyToast.error('Your role does not have permission to reply to chats.');
+      return;
+    }
     if (composerMode === 'note') handleAddNote();
-    else if (composerMode === 'template') handleSendTemplate();
-    else handleSend();
+    else if (composerMode === 'template') {
+      if (activeChannelType === 'whatsapp' && isWindowExpired && !canSendTemplatesOutside24h) {
+        gooeyToast.error('Your role does not have permission to send templates outside the 24-hour window.');
+        return;
+      }
+      handleSendTemplate();
+    } else handleSend();
   };
 
   const applySuggestion = (text: string) => {
@@ -1691,7 +1722,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     if (isChannelDisconnected) {
       return { text: 'Messaging is paused · This WhatsApp number is disconnected', className: 'text-amber-700 font-medium' };
     }
+    if (!canViewAndReply) {
+      return { text: 'Replying is disabled for your role', className: 'text-slate-500 font-medium' };
+    }
     if (activeChannelType === 'whatsapp' && isWindowExpired) {
+      if (!canSendTemplatesOutside24h) {
+        return { text: '24h window closed · Template sending disabled for your role', className: 'text-slate-500 font-medium' };
+      }
       return { text: '24h window closed · Switch to Template tab to send', className: 'text-amber-700 font-medium' };
     }
     if (!canSendOnChannel) {
@@ -1784,13 +1821,23 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                               24h window active · {window24hStatus.hoursRemaining}h left
                             </span>
                           ) : (
-                            <span
-                              title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.hoursSinceLast}h ago. Free-form text blocked.` : 'No incoming customer message. Free-form text blocked.'}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200"
-                            >
-                              <AlertTriangle className="w-3 h-3 text-amber-600" />
-                              24h window closed · Templates only
-                            </span>
+                            !canSendTemplatesOutside24h ? (
+                              <span
+                                title="24h window closed and your role is not permitted to send templates outside 24h."
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600 border border-slate-200"
+                              >
+                                <Lock className="w-3 h-3 text-slate-500" />
+                                24h window closed · Templates restricted
+                              </span>
+                            ) : (
+                              <span
+                                title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.hoursSinceLast}h ago. Free-form text blocked.` : 'No incoming customer message. Free-form text blocked.'}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200"
+                              >
+                                <AlertTriangle className="w-3 h-3 text-amber-600" />
+                                24h window closed · Templates only
+                              </span>
+                            )
                           )
                         )}
                       </div>
@@ -1895,7 +1942,17 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                 )}
 
                 {/* Thread */}
-                {messagesLoadError?.convId === convKeyFor(activeConv.customer.id) && activeMessages.length === 0 ? (
+                {!canViewAndReply ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center p-8 bg-slate-50/50">
+                    <div className="w-14 h-14 rounded-2xl bg-white border border-slate-200 shadow-2xs flex items-center justify-center mb-3 text-slate-400">
+                      <Lock className="w-6 h-6 stroke-[1.8]" />
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-800 mb-1">Chat Messages Restricted</h3>
+                    <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
+                      Your role does not have permission to view or reply to chats. Messages are not displayed.
+                    </p>
+                  </div>
+                ) : messagesLoadError?.convId === convKeyFor(activeConv.customer.id) && activeMessages.length === 0 ? (
                   <div className="flex-1 flex items-center justify-center">
                     <ErrorState
                       error={messagesLoadError.error}
@@ -1961,8 +2018,16 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                   />
                 )}
 
-                {/* Composer */}
-                <div className="border-t border-slate-200 px-4 pb-3 shrink-0">
+                {/* Composer / Read-only notice */}
+                {!canViewAndReply ? (
+                  <div className="border-t border-slate-200 px-4 py-4 shrink-0 bg-slate-50/70">
+                    <div className="p-3 bg-white rounded-xl border border-slate-200 text-center text-xs text-slate-500 font-medium flex items-center justify-center gap-2 shadow-2xs">
+                      <Lock className="w-3.5 h-3.5 text-slate-400 stroke-[2]" />
+                      <span>Replying disabled: Your role does not have permission to view and reply to chats or send messages.</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="border-t border-slate-200 px-4 pb-3 shrink-0">
                   {/* WhatsApp 24h Window Warning Banner */}
                   {activeChannelType === 'whatsapp' && isWindowExpired && (
                     <div className="mt-3 mb-2 p-2.5 rounded-lg bg-amber-50/90 border border-amber-200/90 flex items-start justify-between gap-3 text-xs">
@@ -1974,11 +2039,18 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                             {window24hStatus.hasReceivedMessage
                               ? `Last customer message received ${window24hStatus.hoursSinceLast}h ago. `
                               : 'No message received from this contact yet. '}
-                            WhatsApp Business policy requires sending an approved template to start or resume messaging. Regular text is disabled.
+                            WhatsApp Business policy requires sending an approved template to start or resume messaging.
+                            {!canSendTemplatesOutside24h ? (
+                              <strong className="block text-amber-950 font-semibold mt-1">
+                                Your role does not have permission to send templates outside the 24-hour window.
+                              </strong>
+                            ) : (
+                              ' Regular text is disabled.'
+                            )}
                           </p>
                         </div>
                       </div>
-                      {composerMode !== 'template' && (
+                      {canSendTemplatesOutside24h && composerMode !== 'template' && (
                         <button
                           type="button"
                           onClick={() => setComposerMode('template')}
@@ -1992,28 +2064,43 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4 text-[13px]">
-                      {(['reply', 'note', 'template'] as ComposerMode[]).map((mode) => (
-                        <button
-                          key={mode}
-                          onClick={() => setComposerMode(mode)}
-                          className={`py-2.5 border-b-2 capitalize cursor-pointer flex items-center gap-1.5 ${composerMode === mode
-                              ? 'border-[#3440a8] text-[#3440a8] font-semibold'
-                              : 'border-transparent text-slate-600 hover:text-slate-900'
-                            }`}
-                        >
-                          <span>{mode}</span>
-                          {mode === 'template' && activeChannelType === 'whatsapp' && isWindowExpired && (
-                            <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
-                              Required
-                            </span>
-                          )}
-                          {mode === 'reply' && activeChannelType === 'whatsapp' && isWindowExpired && (
-                            <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-100 text-slate-500">
-                              Locked
-                            </span>
-                          )}
-                        </button>
-                      ))}
+                      {(['reply', 'note', 'template'] as ComposerMode[]).map((mode) => {
+                        const isTemplateLocked = mode === 'template' && activeChannelType === 'whatsapp' && isWindowExpired && !canSendTemplatesOutside24h;
+                        return (
+                          <button
+                            key={mode}
+                            onClick={() => {
+                              if (isTemplateLocked) {
+                                gooeyToast.error('Your role does not have permission to send templates outside the 24-hour window.');
+                                return;
+                              }
+                              setComposerMode(mode);
+                            }}
+                            className={`py-2.5 border-b-2 capitalize cursor-pointer flex items-center gap-1.5 ${composerMode === mode
+                                ? 'border-[#3440a8] text-[#3440a8] font-semibold'
+                                : 'border-transparent text-slate-600 hover:text-slate-900'
+                              } ${isTemplateLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          >
+                            <span>{mode}</span>
+                            {mode === 'template' && activeChannelType === 'whatsapp' && isWindowExpired && (
+                              canSendTemplatesOutside24h ? (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                                  Required
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                                  Locked
+                                </span>
+                              )
+                            )}
+                            {mode === 'reply' && activeChannelType === 'whatsapp' && isWindowExpired && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-100 text-slate-500">
+                                Locked
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
 
                     <div className="relative" ref={copilotRef}>
@@ -2050,7 +2137,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                   </div>
 
                   {composerMode === 'template' ? (
-                    activeChannelType === 'whatsapp' ? (
+                    activeChannelType === 'whatsapp' && isWindowExpired && !canSendTemplatesOutside24h ? (
+                      <div className="mt-2 border border-slate-200 rounded-xl p-6 bg-slate-50 text-center text-xs text-slate-500">
+                        <Lock className="w-5 h-5 text-slate-400 mx-auto mb-2" />
+                        <p className="font-semibold text-slate-800 text-[13px]">Template Sending Restricted</p>
+                        <p className="text-slate-500 mt-1 max-w-md mx-auto">
+                          Your role does not have permission to send WhatsApp templates outside the 24-hour customer window.
+                        </p>
+                      </div>
+                    ) : activeChannelType === 'whatsapp' ? (
                       <div className="mt-2 border border-slate-200 rounded-xl p-3 bg-slate-50/50">
                         {selectedTemplate ? (
                           <div className="space-y-3">
@@ -2376,13 +2471,14 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       type="button"
                       onClick={handleSubmitComposer}
                       disabled={
-                        composerMode === 'template'
+                        !canViewAndReply ||
+                        (composerMode === 'template'
                           ? activeChannelType === 'whatsapp'
-                            ? !selectedTemplate || isSendingTemplate
+                            ? !selectedTemplate || isSendingTemplate || (isWindowExpired && !canSendTemplatesOutside24h)
                             : true
                           : isSending ||
                             (activeChannelType === 'whatsapp' && isWindowExpired && composerMode === 'reply') ||
-                            (composerMode === 'note' ? !inputMessage.trim() : (!inputMessage.trim() && !selectedFile) || !canSendOnChannel)
+                            (composerMode === 'note' ? !inputMessage.trim() : (!inputMessage.trim() && !selectedFile) || !canSendOnChannel))
                       }
                       className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-[#3440a8] hover:bg-[#2b3590] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold cursor-pointer shrink-0"
                     >
@@ -2395,6 +2491,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                     </button>
                   </div>
                 </div>
+                )}
               </>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-center p-8">

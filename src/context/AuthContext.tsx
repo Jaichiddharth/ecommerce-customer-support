@@ -70,9 +70,13 @@ export interface DbUser {
   id: number;
   organizationId: number;
   organizationName?: string | null;
+  organizationSlug?: string | null;
+  organizationPlan?: string | null;
+  organizationSeats?: number | null;
   name: string;
   email: string;
   role: string;
+  permissions?: Record<string, boolean>;
   avatarUrl: string | null;
   isOnline: boolean;
   createdAt: string;
@@ -81,6 +85,9 @@ export interface DbUser {
 interface AuthContextType {
   user: User | null;
   dbUser: DbUser | null;
+  permissions: Record<string, boolean> | null;
+  hasPermission: (key: string) => boolean;
+  refreshDbUser: () => Promise<void>;
   loading: boolean;
   error: string | null;
   loginWithEmail: (email: string, password: string, rememberMe?: boolean) => Promise<UserCredential>;
@@ -242,6 +249,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => clearInterval(id);
   }, [user]);
 
+  const refreshDbUser = useCallback(async () => {
+    try {
+      if (!auth.currentUser) return;
+      const idToken = await auth.currentUser.getIdToken();
+      const res = await axios.get('/api/auth/me', {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (res.data?.success && res.data.user) {
+        setDbUser(res.data.user);
+      }
+    } catch {
+      // silent
+    }
+  }, []);
+
+  const hasPermission = useCallback(
+    (permissionKey: string): boolean => {
+      if (!dbUser) return false;
+      const role = (dbUser.role || '').toUpperCase();
+      if (role === 'OWNER') return true;
+      if (dbUser.permissions && dbUser.permissions[permissionKey] !== undefined) {
+        return Boolean(dbUser.permissions[permissionKey]);
+      }
+      return false;
+    },
+    [dbUser]
+  );
+
+  // Auto-refresh permissions and role when window regains focus or every 20s
+  useEffect(() => {
+    if (!user) return;
+    const handleFocus = () => {
+      refreshDbUser();
+    };
+    window.addEventListener('focus', handleFocus);
+    const id = setInterval(refreshDbUser, 20000);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(id);
+    };
+  }, [user, refreshDbUser]);
+
   const clearError = () => setError(null);
 
   const loginWithEmail = async (email: string, password: string, rememberMe = false) => {
@@ -386,6 +435,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         dbUser,
+        permissions: dbUser?.permissions ?? null,
+        hasPermission,
+        refreshDbUser,
         loading,
         error,
         loginWithEmail,

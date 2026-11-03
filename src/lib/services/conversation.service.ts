@@ -8,8 +8,8 @@ const HANDLERS: string[] = Object.values(ConversationHandler);
 const STATUSES: string[] = Object.values(TicketStatus);
 
 export class ConversationService {
-  async listForInbox(organizationId: number): Promise<ConversationListItem[]> {
-    return await conversationRepository.listForInbox(organizationId);
+  async listForInbox(organizationId: number, onlyAssigneeId?: number): Promise<ConversationListItem[]> {
+    return await conversationRepository.listForInbox(organizationId, onlyAssigneeId);
   }
 
   /**
