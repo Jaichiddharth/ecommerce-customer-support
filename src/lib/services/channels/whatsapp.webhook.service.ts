@@ -140,6 +140,21 @@ export class WhatsAppWebhookService {
         const field = change.field;
         const value = change.value;
 
+        if (field === 'message_template_status_update' && value && wabaId) {
+          try {
+            await this.processTemplateStatusUpdate(wabaId, value);
+          } catch (err) {
+            result.failed++;
+            log.error('Failed to process template status update', {
+              err,
+              wabaId,
+              templateId: value.message_template_id,
+              event: value.event,
+            });
+          }
+          continue;
+        }
+
         if (field !== 'messages' || !value) {
           log.info('Ignoring webhook change', { field, wabaId });
           continue;
@@ -241,6 +256,48 @@ export class WhatsAppWebhookService {
     else log.info('Webhook processed', summary);
 
     return result;
+  }
+
+  /**
+   * Meta reviewed (or paused / disabled) a template: tell every workspace with a live number on that WABA.
+   * Templates aren't stored locally, so nothing is saved; open Templates pages update from the event.
+   */
+  private async processTemplateStatusUpdate(wabaId: string, value: any): Promise<void> {
+    const templateId = value.message_template_id != null ? String(value.message_template_id) : '';
+    const status = typeof value.event === 'string' ? value.event.toUpperCase() : '';
+    if (!templateId || !status) {
+      log.warn('Template status update without template id or event — ignored', { wabaId, value });
+      return;
+    }
+
+    const channels = await channelRepository.findByWabaIdLive(wabaId);
+    const orgIds = new Set(channels.map((c) => c.organizationId));
+    if (orgIds.size === 0) {
+      log.warn('No live channel on this WABA — template status update not delivered', { wabaId, templateId, status });
+      return;
+    }
+
+    const reason = typeof value.reason === 'string' && value.reason !== 'NONE' ? value.reason : null;
+    for (const orgId of orgIds) {
+      publish(orgId, {
+        type: 'template.status',
+        wabaId,
+        templateId,
+        name: value.message_template_name ?? '',
+        language: value.message_template_language ?? '',
+        status,
+        reason,
+      });
+    }
+
+    log.info('Template status update delivered', {
+      wabaId,
+      templateId,
+      name: value.message_template_name,
+      status,
+      reason,
+      orgs: orgIds.size,
+    });
   }
 
   /**

@@ -4,12 +4,18 @@ import { customerService } from "../customer.service";
 import { messageRepository } from "../../db/repositories/message.repository";
 import { messageReactionRepository } from "../../db/repositories/message-reaction.repository";
 import { metaApi } from "../../meta";
+import type {
+  CreateTemplatePayload,
+  GetTemplatesOptions,
+  UpdateTemplatePayload,
+} from "../../meta/whatsapp/template.service";
 import { encryptToken, decryptToken } from "../../security/crypto";
 import { Channel, ChannelStatus, Message, MessageStatus, type MessageMetadata } from "../../db/schema";
 import { publish } from "@/lib/realtime";
 import { AppError, toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { validateWhatsAppMedia } from "@/lib/media-limits";
+import { TEMPLATE_MEDIA_RULES, isMediaHeader } from "@/types/templates";
 import {
   WHATSAPP_BUSINESS_VERTICALS,
   WHATSAPP_PROFILE_LIMITS,
@@ -17,6 +23,12 @@ import {
 } from "@/types/whatsapp";
 
 const log = createLogger("WhatsAppService");
+
+/** WhatsApp's customer service window: free-form messages are allowed for 24h after the customer's last message */
+const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// Channel id → WABA id confirmed to contain the channel's number (checked once per server process)
+const verifiedWabaIds = new Map<number, string>();
 
 export interface ConnectWhatsAppDTO {
   code: string;
@@ -350,6 +362,212 @@ export class WhatsAppService {
     };
   }
 
+  /**
+   * Channel, decrypted token and WABA id for template calls: `phoneNumberId`'s channel, else the active one.
+   * Disconnected numbers are skipped; null when the organization has no live WhatsApp channel.
+   */
+  private async resolveWabaCredentials(organizationId: number, phoneNumberId?: string) {
+    const connections = (await this.getConnections(organizationId)).filter(
+      (c) => c.status !== ChannelStatus.DISCONNECTED
+    );
+    if (connections.length === 0) return null;
+
+    const activeChannel = phoneNumberId
+      ? connections.find((c) => c.metaPhoneNumberId === phoneNumberId)
+      : connections.find((c) => c.isActive) || connections[0];
+    // Falling back to another number would show or change that number's templates instead
+    if (!activeChannel) {
+      throw new AppError("WHATSAPP_CHANNEL_NOT_FOUND", { details: { phoneNumberId }, expected: true });
+    }
+
+    const rawToken = activeChannel.metaAccessToken ? decryptToken(activeChannel.metaAccessToken) : "";
+    const activeWabaId = rawToken ? await this.verifiedWabaId(activeChannel, rawToken) : activeChannel.wabaId;
+
+    return { activeChannel, rawToken, activeWabaId };
+  }
+
+  /**
+   * The channel's WABA, confirmed with Meta to contain its number. Repairs a wrong stored id, e.g. from a
+   * connect that took the token's first WABA while the number belongs to another one.
+   */
+  private async verifiedWabaId(channel: Channel, token: string): Promise<string | null> {
+    if (verifiedWabaIds.get(channel.id) === channel.wabaId && channel.wabaId) return channel.wabaId;
+    const phoneNumberId = channel.metaPhoneNumberId;
+    if (!phoneNumberId) return channel.wabaId;
+
+    if (channel.wabaId) {
+      const owns = await metaApi.wabaHasPhoneNumber(channel.wabaId, token, phoneNumberId).catch((err) => {
+        log.warn("Could not confirm the WABA of a WhatsApp channel", { err, channelId: channel.id });
+        return null;
+      });
+      // Meta unreachable: keep the stored id rather than guessing
+      if (owns === null) return channel.wabaId;
+      if (owns) {
+        verifiedWabaIds.set(channel.id, channel.wabaId);
+        return channel.wabaId;
+      }
+    }
+
+    const found = await metaApi.findWabaForPhoneNumber(token, phoneNumberId);
+    if (!found) return channel.wabaId;
+    if (found !== channel.wabaId) {
+      log.warn("Corrected the stored WABA of a WhatsApp channel", {
+        channelId: channel.id,
+        phoneNumberId,
+        from: channel.wabaId,
+        to: found,
+      });
+      await channelRepository.updateWabaId(channel.id, channel.organizationId, found);
+    }
+    verifiedWabaIds.set(channel.id, found);
+    return found;
+  }
+
+  /** Like resolveWabaCredentials, but throws when there is no channel able to manage templates */
+  private async requireWabaCredentials(organizationId: number, phoneNumberId?: string) {
+    const creds = await this.resolveWabaCredentials(organizationId, phoneNumberId);
+    if (!creds) {
+      throw new AppError("WHATSAPP_NOT_CONNECTED", { expected: true });
+    }
+    if (!creds.rawToken || !creds.activeWabaId) {
+      throw new AppError("WHATSAPP_CHANNEL_MISCONFIGURED", {
+        message: "This WhatsApp number has no valid Meta credentials or Business Account. Please reconnect it.",
+        details: { channelId: creds.activeChannel.id },
+        expected: true,
+      });
+    }
+    return { token: creds.rawToken, wabaId: creds.activeWabaId };
+  }
+
+  /**
+   * Message templates of the organization's WhatsApp Business Account, live from Meta
+   */
+  async getTemplates(
+    organizationId: number,
+    options: GetTemplatesOptions & { phoneNumberId?: string; language?: string } = {}
+  ) {
+    const { phoneNumberId, language, ...filters } = options;
+    const creds = await this.resolveWabaCredentials(organizationId, phoneNumberId);
+    if (!creds) {
+      return {
+        connected: false,
+        templates: [],
+        message: "No WhatsApp channels found for this organization.",
+      };
+    }
+
+    const { activeChannel, rawToken, activeWabaId } = creds;
+    const channel = {
+      id: activeChannel.id,
+      name: activeChannel.name,
+      phoneNumber: activeChannel.phoneNumber,
+      metaPhoneNumberId: activeChannel.metaPhoneNumberId,
+      wabaId: activeWabaId,
+    };
+
+    if (!rawToken || !activeWabaId) {
+      return {
+        connected: true,
+        channel,
+        templates: [],
+        error: "This WhatsApp number has no valid Meta credentials or Business Account. Please reconnect it.",
+      };
+    }
+
+    const res = await metaApi.getAllTemplates(activeWabaId, rawToken, { ...filters, limit: filters.limit || 100 });
+    const templates = language ? res.data.filter((t: any) => t.language === language) : res.data;
+
+    return {
+      connected: true,
+      wabaId: activeWabaId,
+      channel,
+      templates,
+      paging: res.paging,
+    };
+  }
+
+  /**
+   * Submit a new message template to Meta for review
+   */
+  async createTemplate(organizationId: number, template: CreateTemplatePayload, phoneNumberId?: string) {
+    const { token, wabaId } = await this.requireWabaCredentials(organizationId, phoneNumberId);
+    return metaApi.createTemplate(wabaId, token, template);
+  }
+
+  /**
+   * Edit an existing message template (Meta re-reviews it afterwards)
+   */
+  async updateTemplate(
+    organizationId: number,
+    templateId: string,
+    update: UpdateTemplatePayload,
+    phoneNumberId?: string
+  ) {
+    const { token } = await this.requireWabaCredentials(organizationId, phoneNumberId);
+    return metaApi.updateTemplate(templateId, token, update);
+  }
+
+  /**
+   * Delete a template: one language version when `hsmId` is given, otherwise every version of `templateName`
+   */
+  async deleteTemplate(organizationId: number, templateName: string, hsmId?: string, phoneNumberId?: string) {
+    const { token, wabaId } = await this.requireWabaCredentials(organizationId, phoneNumberId);
+    return metaApi.deleteTemplate(wabaId, token, templateName, hsmId);
+  }
+
+  /**
+   * Upload a sample header image/video/document; returns the handle for `example.header_handle`
+   */
+  async uploadTemplateMedia(organizationId: number, file: Buffer, mimeType: string, phoneNumberId?: string) {
+    const { token } = await this.requireWabaCredentials(organizationId, phoneNumberId);
+    return metaApi.uploadTemplateMedia(token, file, mimeType);
+  }
+
+  /**
+   * Media id for a template's image/video/document header: the approved sample, re-uploaded to the sending number.
+   * Meta's sample link is for review only, and sending it as the header `link` fails with 131053.
+   */
+  async prepareTemplateHeaderMedia(organizationId: number, channelId: number, templateId: string): Promise<{ mediaId: string }> {
+    const channel = await channelRepository.findById(channelId, organizationId);
+    if (!channel) {
+      throw new AppError("WHATSAPP_CHANNEL_NOT_FOUND", { details: { channelId }, expected: true });
+    }
+    if (channel.status === ChannelStatus.DISCONNECTED) {
+      throw new AppError("WHATSAPP_CHANNEL_DISCONNECTED", {
+        message: "This WhatsApp number is disconnected. Reconnect it in Settings to send messages.",
+        details: { channelId },
+        expected: true,
+      });
+    }
+    const { phoneNumberId, token } = this.requireCredentials(channel);
+
+    const template = await metaApi.getTemplate(templateId, token);
+    const header = template.components?.find((c) => c.type === "HEADER");
+    const sampleUrl = header?.example?.header_handle?.[0];
+    if (!header || !isMediaHeader(header.format) || !sampleUrl) {
+      throw AppError.validation("This template has no approved header file to send.", "templateId");
+    }
+
+    const rules = TEMPLATE_MEDIA_RULES[header.format];
+    const unavailable = new AppError("FILE_UPLOAD_FAILED", {
+      message: "The template's approved header file is no longer available from WhatsApp. Please try again later.",
+      details: { templateId },
+      expected: true,
+    });
+    const res = await fetch(sampleUrl).catch(() => null);
+    if (!res?.ok) throw unavailable;
+    const file = Buffer.from(await res.arrayBuffer());
+    if (file.length === 0 || file.length > rules.maxBytes) throw unavailable;
+
+    const served = res.headers.get("content-type")?.split(";")[0].trim() ?? "";
+    const mimeType = rules.accept.includes(served) ? served : rules.accept[0];
+    const extension = mimeType.split("/")[1].replace("jpeg", "jpg").replace("3gpp", "3gp");
+
+    const { id } = await metaApi.uploadWhatsAppMedia(phoneNumberId, token, file, mimeType, `${template.name}.${extension}`);
+    log.info("Template header sample uploaded", { channelId, templateId, mediaId: id });
+    return { mediaId: id };
+  }
+
   /** Decrypted credentials for calls made on a number's behalf; throws when the channel can't reach Meta */
   private requireCredentials(channel: Channel): { phoneNumberId: string; token: string } {
     const token = channel.metaAccessToken ? decryptToken(channel.metaAccessToken) : "";
@@ -423,6 +641,32 @@ export class WhatsAppService {
       log.info("WhatsApp business profile updated", { channelId: channel.id, fields: Object.keys(update) });
     }
     return metaApi.getBusinessProfile(phoneNumberId, token);
+  }
+
+  /**
+   * WhatsApp's 24-hour customer service window: anything other than an approved template (text, media,
+   * reactions) can only be sent within 24 hours of the customer's last message. Throws MESSAGE_WINDOW_EXPIRED
+   * when the window is closed or the customer has never written.
+   */
+  private async assertServiceWindowOpen(customerId: number | null, orgId: number, to?: string) {
+    const lastInbound = customerId ? await messageRepository.findLastReceivedFromCustomer(customerId, orgId) : null;
+    if (!lastInbound) {
+      throw new AppError("MESSAGE_WINDOW_EXPIRED", {
+        message: "This customer hasn't messaged you yet. Send an approved template message to start the conversation.",
+        expected: true,
+        details: { customerId, to, lastReceivedAt: null, reason: "no_incoming_message" },
+      });
+    }
+
+    const elapsedMs = Date.now() - new Date(lastInbound.createdAt).getTime();
+    if (elapsedMs > SERVICE_WINDOW_MS) {
+      const hoursAgo = Math.floor(elapsedMs / (60 * 60 * 1000));
+      throw new AppError("MESSAGE_WINDOW_EXPIRED", {
+        message: `The 24-hour messaging window has expired (last customer message was ${hoursAgo}h ago). You can only send pre-approved template messages.`,
+        expected: true,
+        details: { customerId, to, lastReceivedAt: lastInbound.createdAt, hoursSinceLastReceived: hoursAgo },
+      });
+    }
   }
 
   /**
@@ -513,49 +757,15 @@ export class WhatsAppService {
       throw AppError.validation("The recipient phone number is invalid.", "to");
     }
 
-    // 24-Hour Customer Care Window enforcement (WhatsApp Business Platform Policy):
-    // Free-form text and media messages can only be sent within 24 hours of the customer's last incoming message.
-    // Outside this window (or if no message was ever received), ONLY pre-approved templates can be sent.
-    const isTemplate = params.type === "template" || Boolean(params.templateName);
+    // Only a template can be sent outside the 24-hour window. Both fields are required, because the template
+    // branch below needs both: anything else falls through to the text/media branches and must be checked.
+    const isTemplate = params.type === "template" && Boolean(params.templateName);
+    if (params.type === "template" && !params.templateName) {
+      throw AppError.validation("Choose a template to send.", "templateName");
+    }
     if (!isTemplate) {
-      let targetCustomerForWindow = contact;
-      if (!targetCustomerForWindow) {
-        targetCustomerForWindow = await customerRepository.findByPhone(orgId, cleanTo, targetChannel.id);
-      }
-
-      let lastInbound: Message | null = null;
-      if (targetCustomerForWindow) {
-        lastInbound = await messageRepository.findLastReceivedFromCustomer(targetCustomerForWindow.id, orgId);
-      }
-
-      const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
-      if (!lastInbound) {
-        throw new AppError("MESSAGE_WINDOW_EXPIRED", {
-          message: "More than 24 hours have passed since the customer last messaged (or no message received yet). Send an approved template message to start the conversation.",
-          expected: true,
-          details: {
-            customerId: targetCustomerForWindow?.id,
-            to: cleanTo,
-            lastReceivedAt: null,
-            reason: "no_incoming_message",
-          },
-        });
-      }
-
-      const elapsedMs = Date.now() - new Date(lastInbound.createdAt).getTime();
-      if (elapsedMs > WINDOW_24H_MS) {
-        const hoursAgo = Math.floor(elapsedMs / (1000 * 60 * 60));
-        throw new AppError("MESSAGE_WINDOW_EXPIRED", {
-          message: `The 24-hour messaging window has expired (last customer message was ${hoursAgo}h ago). You can only send pre-approved template messages.`,
-          expected: true,
-          details: {
-            customerId: targetCustomerForWindow?.id,
-            to: cleanTo,
-            lastReceivedAt: lastInbound.createdAt,
-            hoursSinceLastReceived: hoursAgo,
-          },
-        });
-      }
+      const windowCustomer = contact ?? (await customerRepository.findByPhone(orgId, cleanTo, targetChannel.id));
+      await this.assertServiceWindowOpen(windowCustomer?.id ?? null, orgId, cleanTo);
     }
 
     // Resolve media type from mimeType or explicit type
@@ -604,6 +814,7 @@ export class WhatsAppService {
     let metaRes: any = null;
     let storedMediaUrl: string | null = null;
     let storedMediaType: string = params.type || 'text';
+    let storedMetadata: MessageMetadata | null = params.metadata ?? null;
 
     try {
       if (hasMediaFile && params.mediaFile) {
@@ -686,6 +897,22 @@ export class WhatsAppService {
           params.components || []
         );
         storedMediaType = 'template';
+
+        // Keep the header file (sent by media id) so the thread can show it like the customer sees it
+        const headerParam = (params.components ?? [])
+          .find((c) => c.type === 'header')
+          ?.parameters as Array<Record<string, any>> | undefined;
+        const headerFormat = headerParam?.[0]?.type as 'image' | 'video' | 'document' | undefined;
+        const headerMediaId = headerFormat ? headerParam?.[0]?.[headerFormat]?.id : undefined;
+        if (headerMediaId) storedMediaUrl = `whatsapp-media:${headerMediaId}`;
+        storedMetadata = {
+          ...storedMetadata,
+          template: {
+            name: params.templateName,
+            language: params.languageCode || 'en_US',
+            ...(headerMediaId ? { headerFormat } : {}),
+          },
+        };
       } else {
         if (!params.text || !params.text.trim()) {
           throw AppError.validation("Message text or media attachment cannot be empty.", "text");
@@ -751,7 +978,7 @@ export class WhatsAppService {
           status: MessageStatus.SENT, // Outbound message starts as SENT (0)
           metaMessageId: metaMessageId,
           repliedToId: repliedTo?.id ?? null,
-          metadata: params.metadata ?? null,
+          metadata: storedMetadata,
           createdAt: new Date(),
         });
         storedMessage = createdMessage ? { ...createdMessage, senderName: params.senderName ?? null } : null;
@@ -824,6 +1051,12 @@ export class WhatsAppService {
     const connections = await this.getConnections(orgId);
     const targetMetaId = params.targetMetaMessageId || targetMessage.metaMessageId;
     const resolvedCustomerId = targetMessage.customerId;
+
+    // A reaction is a free-form message, so WhatsApp only delivers it (or its removal) inside the 24-hour window.
+    // Checked before saving, so we never keep a reaction the customer can't see.
+    if (targetMetaId && connections.length > 0) {
+      await this.assertServiceWindowOpen(resolvedCustomerId, orgId);
+    }
 
     // 2. Upsert or delete reaction in DB
     const reactionRecord = await messageReactionRepository.upsertReaction({
