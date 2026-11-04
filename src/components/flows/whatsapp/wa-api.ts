@@ -87,6 +87,13 @@ export interface WaTemplate {
   flowName?: string | null;
   versionNumber?: number | null;
   versionStatus?: string | null;
+  metaFlowId?: string | null;
+}
+
+export interface FlowTestResult {
+  execution: { id: number; status: string; metaMessageId: string | null; sentAt: string | null };
+  to: string;
+  from: { channelId: number; name: string | null; phoneNumber: string | null };
 }
 
 export interface FlowSubmission {
@@ -158,6 +165,11 @@ export const flowsApi = {
   },
   async send(id: number, body: { customerId: number; method: 'template' | 'interactive'; templateId?: number; cta?: string; bodyText?: string }) {
     return (await apiClient.post(`/api/whatsapp-flows/${id}/send`, body)).data.execution;
+  },
+  /** Real send of an approved template of this Flow to any WhatsApp number (Test Flow). */
+  async test(id: number, body: { phone: string; templateId: number }): Promise<FlowTestResult> {
+    const { data } = await apiClient.post(`/api/whatsapp-flows/${id}/test`, body);
+    return { execution: data.execution, to: data.to, from: data.from };
   },
   async recipients(q: string): Promise<Recipient[]> {
     return (await apiClient.get('/api/whatsapp-flows/recipients', { params: { q } })).data.recipients;

@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { channelRepository, whatsappFlowRepository } from "../../db/repositories";
+import { channelRepository, customerRepository, normalizePhone, whatsappFlowRepository } from "../../db/repositories";
 import {
   SENDABLE_VERSION_STATUSES,
   WaFlowExecutionStatus,
@@ -11,6 +11,7 @@ import { customerService } from "../customer.service";
 import { AppError, toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { SENDABLE_TEMPLATE_STATUS } from "./template.service";
+import { credentialsForWaba } from "./waba-credentials";
 
 const log = createLogger("WhatsAppFlowSend");
 
@@ -37,6 +38,15 @@ export interface SendFlowInput {
   userId?: number | null;
   automationRunId?: number | null;
   automationNodeId?: string | null;
+}
+
+export interface SendFlowTestInput {
+  organizationId: number;
+  flowId: number;
+  templateId: number;
+  /** International format with country code; any formatting is stripped. */
+  phone: string;
+  userId?: number | null;
 }
 
 /** Unguessable, unique per send. Never derived from customer data. */
@@ -183,6 +193,46 @@ export class WhatsAppFlowSendService {
       await whatsappFlowRepository.updateExecution(execution.id, { status: WaFlowExecutionStatus.FAILED, lastError: appErr.message });
       throw appErr;
     }
+  }
+
+  /**
+   * Test send: delivers an approved template of this Flow to any WhatsApp number, from a live number on
+   * the template's WABA. The number is resolved to a contact on that number (created when new, as any
+   * outbound send does), so the real send path runs and the tester's response is recorded like any other.
+   */
+  async sendTest(input: SendFlowTestInput) {
+    const { organizationId } = input;
+    const phone = normalizePhone(input.phone);
+    if (!phone || phone.length < 8 || phone.length > 15) {
+      throw AppError.validation("Enter a valid WhatsApp number with its country code, e.g. +91 98765 43210.", "phone");
+    }
+    if (!input.templateId) throw AppError.validation("Choose an approved template for this Flow.", "templateId");
+    const template = await whatsappFlowRepository.findTemplate(input.templateId, organizationId);
+    if (!template || template.flowId !== input.flowId) {
+      throw AppError.validation("The selected template doesn't open this Flow.", "templateId");
+    }
+
+    // Templates belong to a WABA: send from the template's own number when still live, else another live one on it
+    const live = await credentialsForWaba(organizationId, template.wabaId, template.channelId);
+    const channel = live.channel;
+
+    const customer = await customerRepository.createCustomer(organizationId, { name: phone, phone, channelId: channel.id });
+    if (!customer) throw new AppError("INTERNAL_ERROR", { message: "Couldn't prepare the test recipient." });
+
+    const execution = await this.send({
+      organizationId,
+      customerId: customer.id,
+      flowId: input.flowId,
+      method: "template",
+      templateId: template.id,
+      userId: input.userId ?? null,
+    });
+    log.info("WhatsApp Flow test sent", { executionId: execution.id, flowId: input.flowId, templateId: template.id });
+    return {
+      execution,
+      to: phone,
+      from: { channelId: channel.id, name: channel.name, phoneNumber: channel.phoneNumber },
+    };
   }
 }
 

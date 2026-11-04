@@ -6,11 +6,44 @@ import { createLogger, getRequestContext } from "@/lib/logger";
 
 const log = createLogger("WhatsAppWebhook");
 
+/** When env STAGE_DOMAIN is dev.unocx.in, mirror every Meta webhook request to these dev tunnels. */
+const MIRROR_HOST = "dev.unocx.in";
+const MIRROR_URLS = [
+  "https://vdjh39fx-3000.inc1.devtunnels.ms/api/webhooks/whatsapp",
+  "https://result-icy-material.ngrok-free.dev/api/webhooks/whatsapp",
+];
+
+/**
+ * Fire-and-forget forward of the original request. Runs via after() so it never delays
+ * the response to Meta, and mirror results/failures are ignored (failures are only logged).
+ */
+function mirrorWebhook(req: NextRequest, method: "GET" | "POST", body?: string) {
+  if (process.env.STAGE_DOMAIN?.trim().toLowerCase() !== MIRROR_HOST) return;
+
+  const search = new URL(req.url).search;
+  const headers: Record<string, string> = {};
+  const contentType = req.headers.get("content-type");
+  const signature = req.headers.get("x-hub-signature-256");
+  if (contentType) headers["content-type"] = contentType;
+  if (signature) headers["x-hub-signature-256"] = signature;
+
+  after(() =>
+    Promise.allSettled(
+      MIRROR_URLS.map((url) =>
+        fetch(url + search, { method, headers, body, signal: AbortSignal.timeout(10_000) }).catch((err) =>
+          log.warn("Webhook mirror failed", { url, err: String(err) }),
+        ),
+      ),
+    ).then(() => undefined),
+  );
+}
+
 /**
  * GET Handler: Meta WhatsApp Webhook Verification
  * Responds to Meta verification challenge when setting up or checking the webhook.
  */
 export const GET = apiHandler(async (req: NextRequest) => {
+  mirrorWebhook(req, "GET");
   const { searchParams } = new URL(req.url);
 
   const result = whatsappWebhookService.verifyWebhook({
@@ -37,6 +70,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
  */
 export const POST = apiHandler(async (req: NextRequest) => {
   const rawBody = await req.text();
+  mirrorWebhook(req, "POST", rawBody);
 
   // 1. Verify Meta HMAC-SHA256 Signature (throws WEBHOOK_MISCONFIGURED in production without a secret)
   const isSignatureValid = whatsappWebhookService.verifySignature(rawBody, req.headers.get("x-hub-signature-256"));
