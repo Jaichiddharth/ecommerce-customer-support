@@ -45,10 +45,9 @@ export interface ConsentChange {
  * or templates of any category) until they opt back in; only the opt-out confirmation itself is sent.
  * The whole message must be the keyword (case-insensitive, surrounding punctuation ignored), so "please don't stop"
  * never opts anyone out.
- * "STOP PROMOTIONS" is the label of WhatsApp's marketing opt-out quick reply button.
- * நிறுத்து = "stop", வேண்டாம் = "don't want" (Tamil).
+ * நிறுத்து = "stop" (Tamil).
  */
-export const OPT_OUT_KEYWORDS = ['STOP', 'UNSUBSCRIBE', 'STOP PROMOTIONS', 'நிறுத்து', 'வேண்டாம்'];
+export const OPT_OUT_KEYWORDS = ['STOP', 'UNSUBSCRIBE', 'நிறுத்து'];
 
 /** Messages that opt the customer back in */
 export const OPT_IN_KEYWORDS = ['START'];
