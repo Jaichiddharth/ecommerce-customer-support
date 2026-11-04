@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { channels } from "@/lib/services";
+import { channels, customerService } from "@/lib/services";
 import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
 import { ChannelStatus } from "@/lib/db/schema";
 
@@ -9,7 +9,10 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
   const type = searchParams.get("type") || undefined;
 
   const includeDisconnected = searchParams.get("includeDisconnected") !== "false";
-  const list = await channels.list(orgId, type, { includeDisconnected });
+  const [list, contactCounts] = await Promise.all([
+    channels.list(orgId, type, { includeDisconnected }),
+    customerService.contactCountsByChannel(orgId),
+  ]);
 
   const formatted = list.map((c) => ({
     id: c.id,
@@ -30,6 +33,9 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
     tokenExpiresAt: c.tokenExpiresAt,
     lastError: c.lastError,
     isActive: c.isActive,
+    // Contacts on the channel and how many opted out; disconnected channels' contacts are hidden, so 0
+    contactCount: contactCounts.get(c.id)?.total ?? 0,
+    optedOutCount: contactCounts.get(c.id)?.optedOut ?? 0,
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
   }));

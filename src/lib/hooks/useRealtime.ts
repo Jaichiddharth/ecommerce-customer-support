@@ -13,6 +13,7 @@ export interface UseRealtimeOptions {
   onConversationUpdated?: (event: Extract<RealtimeEvent, { type: 'conversation.updated' }>) => void;
   onChannelUpdated?: (event: Extract<RealtimeEvent, { type: 'channel.updated' }>) => void;
   onTemplateStatus?: (event: Extract<RealtimeEvent, { type: 'template.status' }>) => void;
+  onCustomerConsent?: (event: Extract<RealtimeEvent, { type: 'customer.consent' }>) => void;
   onAnyEvent?: (event: RealtimeEvent) => void;
   enabled?: boolean;
 }
@@ -159,6 +160,18 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
         }
       });
 
+      // 8. Customer Consent Event (a contact opted out of / back in to WhatsApp marketing)
+      es.addEventListener('customer.consent', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          setLastEventTime(new Date());
+          callbacksRef.current.onCustomerConsent?.(payload);
+          callbacksRef.current.onAnyEvent?.(payload);
+        } catch (err) {
+          clientLogger.error('useRealtime', 'Could not handle customer.consent event', { err, data: e.data });
+        }
+      });
+
       // Generic Message Handler fallback
       es.onmessage = (e: MessageEvent) => {
         if (!e.data || e.data.startsWith(':')) return; // Ignore SSE comments/ping
@@ -179,6 +192,8 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
             callbacksRef.current.onChannelUpdated?.(payload);
           } else if (payload.type === 'template.status') {
             callbacksRef.current.onTemplateStatus?.(payload);
+          } else if (payload.type === 'customer.consent') {
+            callbacksRef.current.onCustomerConsent?.(payload);
           }
           callbacksRef.current.onAnyEvent?.(payload);
         } catch {}

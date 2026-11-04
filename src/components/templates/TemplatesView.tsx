@@ -14,6 +14,9 @@ import type { RealtimeEvent } from '@/lib/realtime';
 
 const TEMPLATE_STATUSES: TemplateStatus[] = ['APPROVED', 'PENDING', 'REJECTED', 'PAUSED', 'DISABLED'];
 
+/** Template names can be 80 characters with no spaces; this lets them wrap inside a toast */
+const WRAP_DESCRIPTION = { description: 'wrap-anywhere' };
+
 interface TemplatesChannel {
   name?: string;
   phoneNumber?: string;
@@ -91,11 +94,13 @@ export const TemplatesView: React.FC = () => {
       )
     );
 
+    // The name goes in the description, which wraps; toast titles stay on one line
     const label = `${event.name} (${event.language})`;
-    if (event.status === 'APPROVED') gooeyToast.success(`Template approved: ${label}`);
-    else if (event.status === 'REJECTED') gooeyToast.error(`Template rejected: ${label}`, { description: 'See the reason below the list.' });
-    else if (event.status === 'PAUSED' || event.status === 'DISABLED') {
-      gooeyToast.warning(`Template ${event.status.toLowerCase()} by Meta: ${label}`);
+    if (event.status === 'APPROVED') gooeyToast.success('Template approved', { description: label, classNames: WRAP_DESCRIPTION });
+    else if (event.status === 'REJECTED') {
+      gooeyToast.error('Template rejected', { description: `${label}. See the reason below the list.`, classNames: WRAP_DESCRIPTION });
+    } else if (event.status === 'PAUSED' || event.status === 'DISABLED') {
+      gooeyToast.warning(`Template ${event.status.toLowerCase()} by Meta`, { description: label, classNames: WRAP_DESCRIPTION });
     }
   };
 
@@ -113,7 +118,10 @@ export const TemplatesView: React.FC = () => {
       await apiClient.delete('/api/channels/whatsapp/templates', {
         params: { name: template.name, hsm_id: template.id, phoneNumberId: channel?.metaPhoneNumberId },
       });
-      gooeyToast.success(`Template "${template.name}" (${template.language}) deleted`);
+      gooeyToast.success('Template deleted', {
+        description: `${template.name} (${template.language})`,
+        classNames: WRAP_DESCRIPTION,
+      });
       // With an id only that language version is deleted on Meta; without one, every version of the name
       setTemplates((prev) =>
         prev.filter((t) => (template.id ? t.id !== template.id : t.name !== template.name))

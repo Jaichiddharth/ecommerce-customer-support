@@ -1,16 +1,21 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { InboxView, type InboxCounts } from '@/components/InboxView';
 
 export default function InboxPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [selectedConversationId, setSelectedConversationId] = useState(
-    searchParams.get('c') ?? ''
-  );
+  const urlConversationId = searchParams.get('c') ?? '';
+  const [selectedConversationId, setSelectedConversationId] = useState(urlConversationId);
   const [, setInboxCounts] = useState<InboxCounts>({ unread: 0, ai: 0 });
+
+  // Keep the selection in sync with the URL: clicking "Inbox" in the sidebar (plain /inbox)
+  // clears it, and links like /inbox?c=cust-<id> from Contacts/Settings open that conversation
+  useEffect(() => {
+    setSelectedConversationId(urlConversationId);
+  }, [urlConversationId]);
 
   const handleSelectConversation = (id: string) => {
     setSelectedConversationId(id);

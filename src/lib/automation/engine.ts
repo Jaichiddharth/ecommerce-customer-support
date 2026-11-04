@@ -540,6 +540,10 @@ export class AutomationEngine {
 
   private async execute(node: AutomationGraphNode, x: Exec): Promise<StepResult> {
     const d = node.data;
+    // An opted-out contact receives nothing until they reply START: end the run quietly instead of failing at the send
+    if (x.customer.isOptedOut && (d.type === "action_send_message" || d.type === "action_send_template" || d.type === SEND_FLOW_NODE)) {
+      return { kind: "stop", outcome: "contact opted out" };
+    }
     switch (d.type) {
       case "trigger_incoming_message":
       case "trigger_keyword":

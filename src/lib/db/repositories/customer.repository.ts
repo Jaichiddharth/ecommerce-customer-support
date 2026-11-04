@@ -1,6 +1,6 @@
 import { db } from "..";
 import { eq, and, or, sql, desc, ne, asc, ilike, inArray } from "drizzle-orm";
-import { customers, messages, channels, shopifyCustomerLinks, ChannelStatus, type Customer, type NewCustomer } from "../schema";
+import { customers, messages, channels, tickets, shopifyCustomerLinks, ChannelStatus, type Customer, type NewCustomer } from "../schema";
 import { createLogger } from "../../logger";
 import { AppError } from "../../errors";
 
@@ -35,6 +35,44 @@ const toCustomerWithChannel = (row: { customer: Customer; channelId: number; cha
 
 /** Escapes LIKE wildcards so a search term matches literally */
 const likePattern = (term: string) => `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+/** Name, email, handle, or (with 3+ digits) phone contains the term */
+const matchesTerm = (term: string) => {
+    const pattern = likePattern(term);
+    const digits = term.replace(/\D/g, "");
+    return or(
+        ilike(customers.name, pattern),
+        ilike(customers.email, pattern),
+        ilike(customers.handle, pattern),
+        digits.length >= 3 ? ilike(customers.phone, `%${digits}%`) : undefined
+    );
+};
+
+/** Latest message in any of the contact's conversations */
+const lastActiveAt = sql<Date | null>`(select max(${tickets.lastMessageAt}) from ${tickets} where ${tickets.customerId} = ${customers.id})`.mapWith(
+    tickets.lastMessageAt
+);
+
+/** The contact has a ticket, i.e. a conversation the inbox can open */
+const hasConversation = sql<boolean>`exists(select 1 from ${tickets} where ${tickets.customerId} = ${customers.id})`;
+
+export interface ContactListFilter {
+    channelId: number;
+    consent?: "opted_out";
+    search?: string;
+    /** Only contacts with a message in the last N days */
+    activeWithinDays?: number;
+    limit: number;
+    offset: number;
+}
+
+export type ContactListRow = CustomerWithChannel & { lastActiveAt: Date | null; hasConversation: boolean };
+
+export interface ChannelContactCounts {
+    channelId: number;
+    total: number;
+    optedOut: number;
+}
 
 export class CustomerRepository {
     /**
@@ -248,6 +286,35 @@ export class CustomerRepository {
     }
 
     /**
+     * Sets the contact's WhatsApp marketing consent (`is_opted_out`). The update only matches when the status really
+     * changes, so of two concurrent webhooks for the same contact exactly one reports `changed: true`.
+     * Returns null when the contact doesn't exist in the organization. A NULL column counts as opted in.
+     */
+    async setOptedOut(
+        id: number,
+        organizationId: number,
+        optedOut: boolean
+    ): Promise<{ customer: Customer; changed: boolean } | null> {
+        const [updated] = await db
+            .update(customers)
+            .set({ isOptedOut: optedOut, updatedAt: new Date() })
+            .where(
+                and(
+                    eq(customers.id, id),
+                    eq(customers.organizationId, organizationId),
+                    optedOut
+                        ? sql`coalesce(${customers.isOptedOut}, false) = false`
+                        : eq(customers.isOptedOut, true)
+                )
+            )
+            .returning();
+        if (updated) return { customer: updated, changed: true };
+
+        const existing = await this.findById(id, organizationId);
+        return existing ? { customer: existing, changed: false } : null;
+    }
+
+    /**
      * List all customers for an organization, optionally filtered by channel
      */
     async listByOrg(organizationId: number, channelId?: number): Promise<Customer[]> {
@@ -291,27 +358,70 @@ export class CustomerRepository {
 
     /** Visible contacts whose name, phone, email or handle contains the term */
     async searchVisible(organizationId: number, term: string, limit = 20): Promise<CustomerWithChannel[]> {
-        const pattern = likePattern(term);
-        const digits = term.replace(/\D/g, "");
         const rows = await db
             .select(withChannelColumns)
             .from(customers)
             .innerJoin(channels, onLiveChannel)
-            .where(
-                and(
-                    eq(customers.organizationId, organizationId),
-                    or(
-                        ilike(customers.name, pattern),
-                        ilike(customers.email, pattern),
-                        ilike(customers.handle, pattern),
-                        digits.length >= 3 ? ilike(customers.phone, `%${digits}%`) : undefined
-                    )
-                )
-            )
+            .where(and(eq(customers.organizationId, organizationId), matchesTerm(term)))
             .orderBy(desc(customers.updatedAt))
             .limit(limit);
 
         return rows.map(toCustomerWithChannel);
+    }
+
+    /**
+     * One page of a channel's contacts on the Contacts page: visible contacts matching the filters, most recently
+     * active first, with the number of matches across all pages.
+     */
+    async listContacts(organizationId: number, filter: ContactListFilter): Promise<{ rows: ContactListRow[]; total: number }> {
+        const where = and(
+            eq(customers.organizationId, organizationId),
+            eq(customers.channelId, filter.channelId),
+            filter.consent === "opted_out" ? eq(customers.isOptedOut, true) : undefined,
+            filter.search ? matchesTerm(filter.search) : undefined,
+            filter.activeWithinDays
+                ? sql`${lastActiveAt} >= now() - make_interval(days => ${filter.activeWithinDays}::int)`
+                : undefined
+        );
+
+        const [rows, [{ total }]] = await Promise.all([
+            db
+                .select({ ...withChannelColumns, lastActiveAt, hasConversation })
+                .from(customers)
+                .innerJoin(channels, onLiveChannel)
+                .where(where)
+                .orderBy(sql`${lastActiveAt} DESC NULLS LAST`, desc(customers.createdAt), desc(customers.id))
+                .limit(filter.limit)
+                .offset(filter.offset),
+            db
+                .select({ total: sql<number>`count(*)::int` })
+                .from(customers)
+                .innerJoin(channels, onLiveChannel)
+                .where(where),
+        ]);
+
+        return {
+            rows: rows.map((row) => ({
+                ...toCustomerWithChannel(row),
+                lastActiveAt: row.lastActiveAt ?? null,
+                hasConversation: Boolean(row.hasConversation),
+            })),
+            total,
+        };
+    }
+
+    /** Visible contacts per live channel, and how many of them opted out */
+    async countByChannel(organizationId: number): Promise<ChannelContactCounts[]> {
+        return await db
+            .select({
+                channelId: channels.id,
+                total: sql<number>`count(*)::int`,
+                optedOut: sql<number>`(count(*) filter (where ${customers.isOptedOut} = true))::int`,
+            })
+            .from(customers)
+            .innerJoin(channels, onLiveChannel)
+            .where(eq(customers.organizationId, organizationId))
+            .groupBy(channels.id);
     }
 
     /**

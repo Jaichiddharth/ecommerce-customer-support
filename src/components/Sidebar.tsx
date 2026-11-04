@@ -50,7 +50,7 @@ interface NavItem {
 const WORKSPACE_ITEMS: NavItem[] = [
   { key: 'home', label: 'Home', icon: LayoutGrid, path: '/dashboard' },
   { key: 'inbox', label: 'Inbox', icon: Inbox, path: '/inbox', activePrefix: '/inbox', badge: 'unread' },
-  { key: 'contacts', label: 'Contacts', icon: Users },
+  { key: 'contacts', label: 'Contacts', icon: Users, path: '/contacts' },
   { key: 'ai', label: 'AI agent', icon: Sparkles, badge: 'ai' },
   { key: 'flows', label: 'Flows', icon: Bot, path: '/flows/automations', activePrefix: '/flows' },
   { key: 'broadcasts', label: 'Broadcasts', icon: Megaphone },
@@ -150,9 +150,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ unreadCount = 0, aiCount = 0 }
 
   return (
     <aside
-      className={`bg-white border-r border-slate-200 flex flex-col shrink-0 h-full select-none z-20 transition-[width] duration-200 ease-in-out ${
-        isCollapsed ? 'w-[68px]' : 'w-[240px]'
-      }`}
+      className={`bg-white border-r border-slate-200 flex flex-col shrink-0 h-full select-none z-20 transition-[width] duration-200 ease-in-out ${isCollapsed ? 'w-[68px]' : 'w-[240px]'
+        }`}
     >
       {/* ============================================================ */}
       {/* EXPANDED VIEW                                                */}
@@ -219,16 +218,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ unreadCount = 0, aiCount = 0 }
                       key={item.key}
                       onClick={() => handleItemClick(item)}
                       title={item.path ? item.label : `${item.label} · coming soon`}
-                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-colors cursor-pointer ${
-                        active
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-colors cursor-pointer ${active
                           ? 'bg-[#eef0fb] text-[#3440a8] font-bold'
                           : 'text-black hover:text-black hover:bg-slate-100/70'
-                      }`}
+                        }`}
                     >
                       <Icon
-                        className={`w-[18px] h-[18px] stroke-[1.8] shrink-0 ${
-                          active ? 'text-[#3440a8]' : 'text-black'
-                        }`}
+                        className={`w-[18px] h-[18px] stroke-[1.8] shrink-0 ${active ? 'text-[#3440a8]' : 'text-black'
+                          }`}
                       />
                       <span className="flex-1 text-left truncate">{item.label}</span>
                       {badge > 0 && (
@@ -257,16 +254,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ unreadCount = 0, aiCount = 0 }
                       key={item.key}
                       onClick={() => handleItemClick(item)}
                       title={item.path ? item.label : `${item.label} · coming soon`}
-                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-colors cursor-pointer ${
-                        active
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-colors cursor-pointer ${active
                           ? 'bg-[#eef0fb] text-[#3440a8] font-bold'
                           : 'text-black hover:text-black hover:bg-slate-100/70'
-                      }`}
+                        }`}
                     >
                       <Icon
-                        className={`w-[18px] h-[18px] stroke-[1.8] shrink-0 ${
-                          active ? 'text-[#3440a8]' : 'text-black'
-                        }`}
+                        className={`w-[18px] h-[18px] stroke-[1.8] shrink-0 ${active ? 'text-[#3440a8]' : 'text-black'
+                          }`}
                       />
                       <span className="flex-1 text-left truncate">{item.label}</span>
                       {badge > 0 && (
@@ -389,9 +384,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ unreadCount = 0, aiCount = 0 }
                   <button
                     onClick={() => handleItemClick(item)}
                     title={item.path ? item.label : `${item.label} · coming soon`}
-                    className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
-                      active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-black hover:text-black hover:bg-slate-100'
-                    }`}
+                    className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-black hover:text-black hover:bg-slate-100'
+                      }`}
                   >
                     <Icon className="w-[19px] h-[19px] stroke-[1.8]" />
                   </button>
@@ -415,9 +409,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ unreadCount = 0, aiCount = 0 }
                   <button
                     onClick={() => handleItemClick(item)}
                     title={item.path ? item.label : `${item.label} · coming soon`}
-                    className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
-                      active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-black hover:text-black hover:bg-slate-100'
-                    }`}
+                    className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-black hover:text-black hover:bg-slate-100'
+                      }`}
                   >
                     <Icon className="w-[19px] h-[19px] stroke-[1.8]" />
                   </button>
