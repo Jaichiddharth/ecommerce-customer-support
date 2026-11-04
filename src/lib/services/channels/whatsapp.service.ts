@@ -3,7 +3,7 @@ import { customerRepository } from "../../db/repositories/customer.repository";
 import { customerService } from "../customer.service";
 import { messageRepository } from "../../db/repositories/message.repository";
 import { messageReactionRepository } from "../../db/repositories/message-reaction.repository";
-import { metaApi } from "../../meta";
+import { metaApi, flowsApi } from "../../meta";
 import type {
   CreateTemplatePayload,
   GetTemplatesOptions,
@@ -682,7 +682,17 @@ export class WhatsAppService {
     repliedToId?: number | null;
     to: string;
     text?: string;
-    type?: 'text' | 'template' | 'image' | 'document' | 'video' | 'audio';
+    type?: 'text' | 'template' | 'image' | 'document' | 'video' | 'audio' | 'interactive';
+    /** Interactive WhatsApp Flow message (type 'interactive'); only valid inside the 24h service window. */
+    interactiveFlow?: {
+      flowId: string;
+      flowToken: string;
+      cta: string;
+      bodyText: string;
+      headerText?: string;
+      footerText?: string;
+      screen: string;
+    };
     mediaType?: 'image' | 'document' | 'video' | 'audio';
     mediaId?: string;
     /** Public https URL that Meta downloads itself, e.g. a Shopify product image */
@@ -757,14 +767,23 @@ export class WhatsAppService {
       throw AppError.validation("The recipient phone number is invalid.", "to");
     }
 
-    // Only a template can be sent outside the 24-hour window. Both fields are required, because the template
-    // branch below needs both: anything else falls through to the text/media branches and must be checked.
-    const isTemplate = params.type === "template" && Boolean(params.templateName);
+    // Only a template can be sent outside the 24-hour window. The media branches below run before the template
+    // branch, so a "template" that also carries a file or media would go out as free-form media: reject it.
+    // (A template's header media travels in `components`, never as an attachment.)
+    const hasAttachment = Boolean(params.mediaFile || params.mediaId || params.mediaLink);
     if (params.type === "template" && !params.templateName) {
       throw AppError.validation("Choose a template to send.", "templateName");
     }
+    if (params.type === "template" && hasAttachment) {
+      throw AppError.validation("A template can't be sent with an attachment; its header media is part of the template.", "type");
+    }
+    const isTemplate = params.type === "template" && Boolean(params.templateName);
     if (!isTemplate) {
-      const windowCustomer = contact ?? (await customerRepository.findByPhone(orgId, cleanTo, targetChannel.id));
+      // The window is per customer AND per business number: judge it on the number we're sending from
+      const windowCustomer =
+        contact && (!contact.channelId || contact.channelId === targetChannel.id)
+          ? contact
+          : await customerRepository.findByPhone(orgId, cleanTo, targetChannel.id);
       await this.assertServiceWindowOpen(windowCustomer?.id ?? null, orgId, cleanTo);
     }
 
@@ -913,6 +932,14 @@ export class WhatsAppService {
             ...(headerMediaId ? { headerFormat } : {}),
           },
         };
+      } else if (params.type === 'interactive' && params.interactiveFlow) {
+        metaRes = await flowsApi.sendInteractiveFlowMessage(
+          targetChannel.metaPhoneNumberId,
+          rawToken,
+          cleanTo,
+          params.interactiveFlow
+        );
+        storedMediaType = 'interactive';
       } else {
         if (!params.text || !params.text.trim()) {
           throw AppError.validation("Message text or media attachment cannot be empty.", "text");

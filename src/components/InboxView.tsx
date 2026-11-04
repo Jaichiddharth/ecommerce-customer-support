@@ -27,7 +27,6 @@ import {
   ShoppingBag,
   Clock,
   AlertTriangle,
-  Lock,
 } from 'lucide-react';
 import { Message, MessageStatus, normalizeMessageStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -256,10 +255,7 @@ interface InboxViewProps {
 }
 
 export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, onSelectConversation, onCountsChange }) => {
-  const { dbUser, hasPermission } = useAuth();
-  const canViewAndReply = hasPermission('view_and_reply_chats');
-  const canSendTemplatesOutside24h = hasPermission('send_templates_outside_24h');
-  const canSeeAllChats = hasPermission('see_all_chats');
+  const { dbUser } = useAuth();
 
   // Channels & conversations from DB
   const [channels, setChannels] = useState<InboxChannel[]>([]);
@@ -379,7 +375,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // Fetches the newest batch (merged under any older batches already loaded).
   // It also marks the customer's unread messages as read on the server.
   const fetchMessagesForCustomer = useCallback(async (customerId: number, channelType = 'whatsapp'): Promise<ApiError | null> => {
-    if (!canViewAndReply) return null;
     const convId = convKeyFor(customerId);
     try {
       const res = await apiClient.get(`/api/messages?customerId=${customerId}&limit=${MESSAGE_PAGE_SIZE}`);
@@ -399,11 +394,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       setMessagesLoadError({ convId, error: apiError });
       return apiError;
     }
-  }, [canViewAndReply]);
+  }, []);
 
   // Fetches the batch above the oldest loaded message, triggered by scrolling to the top of the thread
   const loadOlderMessages = useCallback(async (customerId: number, beforeId: number, channelType = 'whatsapp') => {
-    if (!canViewAndReply) return;
     const convId = convKeyFor(customerId);
     if (loadingOlderRef.current.has(convId)) return;
     loadingOlderRef.current.add(convId);
@@ -425,7 +419,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       loadingOlderRef.current.delete(convId);
       setLoadingOlderConvId((prev) => (prev === convId ? null : prev));
     }
-  }, [canViewAndReply]);
+  }, []);
 
   useEffect(() => {
     fetchConversations();
@@ -446,7 +440,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
   // Load messages whenever a conversation is opened
   useEffect(() => {
-    if (!selectedCustomerId || !canViewAndReply) return;
+    if (!selectedCustomerId) return;
     fetchMessagesForCustomer(selectedCustomerId, activeChannelType);
     // Opening the thread reads it
     setConversations((prev) =>
@@ -556,6 +550,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                 metadata: rawMsg.metadata ?? null,
               },
               unreadCount: rawMsg.senderType === 'customer' && !isOpen ? conv.unreadCount + 1 : conv.unreadCount,
+              // Keeps the 24-hour window right before the thread's messages are (re)loaded
+              lastReceivedMessageAt:
+                rawMsg.senderType === 'customer' && rawMsg.mediaType !== 'system' && rawMsg.createdAt
+                  ? rawMsg.createdAt
+                  : conv.lastReceivedMessageAt,
             };
           return [updated, ...prev.slice(0, idx), ...prev.slice(idx + 1)];
         });
@@ -775,245 +774,56 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // -------------------------------------------------------------
   // 24-HOUR CUSTOMER CARE WINDOW (WhatsApp Policy)
   // -------------------------------------------------------------
-  const lastCustomerMessageTime = useMemo(() => {
-    for (let i = activeMessages.length - 1; i >= 0; i--) {
-      const msg = activeMessages[i];
-      const raw = msg.createdAt;
+  // Latest of: customer messages in the thread and the server's lastReceivedMessageAt. The newest one, not the
+  // last in the list: a delayed webhook can append an older message after a newer one.
+  const lastCustomerMessageTime = useMemo((): number | null => {
+    const times: number[] = [];
+    for (const msg of activeMessages) {
       // `system` notices (e.g. "customer changed number") come from WhatsApp, not the customer, so they don't open the window
-      if (msg.sender === 'customer' && msg.mediaType !== 'system' && raw) {
-        const time = new Date(raw).getTime();
-        if (!isNaN(time)) return time;
-      }
+      if (msg.sender === 'customer' && msg.mediaType !== 'system' && msg.createdAt) times.push(new Date(msg.createdAt).getTime());
     }
-    if (activeConv?.lastReceivedMessageAt) {
-      const time = new Date(activeConv.lastReceivedMessageAt).getTime();
-      if (!isNaN(time)) return time;
-    }
-    return null;
+    if (activeConv?.lastReceivedMessageAt) times.push(new Date(activeConv.lastReceivedMessageAt).getTime());
+    const valid = times.filter((t) => !isNaN(t));
+    return valid.length > 0 ? Math.max(...valid) : null;
   }, [activeMessages, activeConv?.lastReceivedMessageAt]);
 
-  // Ticks every minute so an open chat notices the window closing (and the hours left stay current)
+  // Ticks every minute so an open chat notices the window closing (and the time left stays current).
+  // Always running: pausing it on other channels would leave a stale clock when switching back to WhatsApp.
   const [windowClock, setWindowClock] = useState(() => Date.now());
   useEffect(() => {
-    if (activeChannelType !== 'whatsapp') return;
     const timer = setInterval(() => setWindowClock(Date.now()), 60_000);
     return () => clearInterval(timer);
-  }, [activeChannelType]);
+  }, []);
 
-  const window24hStatus = useMemo(() => {
+  /** `timeLeft` is "23h", or "12m" in the last hour (not rounded up to "1h"); `timeSinceLast` is "30h" */
+  const window24hStatus = useMemo((): {
+    isExpired: boolean;
+    isWithin24Hours: boolean;
+    timeLeft: string | null;
+    timeSinceLast: string | null;
+    hasReceivedMessage: boolean;
+  } => {
     if (activeChannelType !== 'whatsapp') {
-      return {
-        isExpired: false,
-        isWithin24Hours: true,
-        hoursRemaining: null,
-        hoursSinceLast: null,
-        hasReceivedMessage: true,
-      };
+      return { isExpired: false, isWithin24Hours: true, timeLeft: null, timeSinceLast: null, hasReceivedMessage: true };
     }
-    if (!lastCustomerMessageTime) {
-      return {
-        isExpired: true,
-        isWithin24Hours: false,
-        hoursRemaining: 0,
-        hoursSinceLast: null,
-        hasReceivedMessage: false,
-      };
+    if (lastCustomerMessageTime === null) {
+      return { isExpired: true, isWithin24Hours: false, timeLeft: null, timeSinceLast: null, hasReceivedMessage: false };
     }
-    const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
+    const HOUR_MS = 60 * 60 * 1000;
+    const WINDOW_24H_MS = 24 * HOUR_MS;
     // The clock can lag a message that just arrived by up to a minute; never let that read as negative time
     const elapsed = Math.max(0, windowClock - lastCustomerMessageTime);
     if (elapsed > WINDOW_24H_MS) {
-      const hoursAgo = Math.floor(elapsed / (1000 * 60 * 60));
-      return {
-        isExpired: true,
-        isWithin24Hours: false,
-        hoursRemaining: 0,
-        hoursSinceLast: hoursAgo,
-        hasReceivedMessage: true,
-      };
+      const timeSinceLast = `${Math.floor(elapsed / HOUR_MS)}h`;
+      return { isExpired: true, isWithin24Hours: false, timeLeft: null, timeSinceLast, hasReceivedMessage: true };
     }
     const remainingMs = WINDOW_24H_MS - elapsed;
-    const hoursRemaining = Math.max(1, Math.ceil(remainingMs / (1000 * 60 * 60)));
-    return {
-      isExpired: false,
-      isWithin24Hours: true,
-      hoursRemaining,
-      hoursSinceLast: null,
-      hasReceivedMessage: true,
-    };
+    const timeLeft =
+      remainingMs >= HOUR_MS ? `${Math.floor(remainingMs / HOUR_MS)}h` : `${Math.max(1, Math.ceil(remainingMs / 60_000))}m`;
+    return { isExpired: false, isWithin24Hours: true, timeLeft, timeSinceLast: null, hasReceivedMessage: true };
   }, [activeChannelType, lastCustomerMessageTime, windowClock]);
 
   const isWindowExpired = window24hStatus.isExpired;
-
-  // -------------------------------------------------------------
-  // WHATSAPP META TEMPLATES
-  // -------------------------------------------------------------
-  const [metaTemplates, setMetaTemplates] = useState<MetaTemplate[]>([]);
-  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState<MetaTemplate | null>(null);
-  const [templateSearch, setTemplateSearch] = useState('');
-  const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({});
-  const [isSendingTemplate, setIsSendingTemplate] = useState(false);
-
-  const fetchMetaTemplates = useCallback(async (phoneId?: string | null) => {
-    try {
-      setIsLoadingTemplates(true);
-      const url = phoneId
-        ? `/api/channels/whatsapp/meta-details?phoneNumberId=${encodeURIComponent(phoneId)}`
-        : '/api/channels/whatsapp/meta-details';
-      const res = await apiClient.get(url);
-      if (res.data?.success && Array.isArray(res.data.templates)) {
-        const approved = res.data.templates.filter(
-          (t: MetaTemplate) => !t.status || t.status.toUpperCase() === 'APPROVED'
-        );
-        setMetaTemplates(approved);
-      }
-    } catch (err) {
-      clientLogger.warn('InboxView.fetchMetaTemplates', 'Could not load WhatsApp templates', err);
-    } finally {
-      setIsLoadingTemplates(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (activeChannelType === 'whatsapp' && (composerMode === 'template' || isWindowExpired)) {
-      if (metaTemplates.length === 0 && !isLoadingTemplates) {
-        fetchMetaTemplates(conversationSendChannel?.metaPhoneNumberId);
-      }
-    }
-  }, [
-    activeChannelType,
-    composerMode,
-    isWindowExpired,
-    metaTemplates.length,
-    isLoadingTemplates,
-    fetchMetaTemplates,
-    conversationSendChannel?.metaPhoneNumberId,
-  ]);
-
-  useEffect(() => {
-    setSelectedTemplate(null);
-    setTemplateVariables({});
-    setTemplateSearch('');
-  }, [activeConv?.id]);
-
-  const handleSelectTemplate = (tpl: MetaTemplate) => {
-    setSelectedTemplate(tpl);
-    const bodyComp = tpl.components?.find((c) => c.type.toUpperCase() === 'BODY');
-    const matches = Array.from(new Set(bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || []));
-    const initVars: Record<string, string> = {};
-    for (const m of matches) {
-      const num = m.replace(/[{}]/g, '');
-      if (num === '1' && activeConv?.customer.name) {
-        initVars[num] = activeConv.customer.name;
-      } else {
-        initVars[num] = '';
-      }
-    }
-    setTemplateVariables(initVars);
-  };
-
-  const handleSendTemplate = async () => {
-    if (!selectedTemplate || !activeConv) return;
-    const customerPhone = activeConv.customer.phone;
-    if (!customerPhone) {
-      gooeyToast.error(`Customer "${activeConv.customer.name}" does not have a phone number.`);
-      return;
-    }
-    const targetChannel = conversationSendChannel;
-    if (!targetChannel) {
-      gooeyToast.error('No connected WhatsApp channel found. Please connect your WhatsApp account first.');
-      return;
-    }
-
-    const bodyComp = selectedTemplate.components?.find((c) => c.type.toUpperCase() === 'BODY');
-    const varMatches = Array.from(new Set(bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || []));
-
-    for (const match of varMatches) {
-      const num = match.replace(/[{}]/g, '');
-      if (!templateVariables[num]?.trim()) {
-        gooeyToast.error(`Please provide a value for variable {{${num}}}`);
-        return;
-      }
-    }
-
-    const components: Array<Record<string, unknown>> = [];
-    if (varMatches.length > 0) {
-      const sorted = [...varMatches].sort((a, b) => {
-        const numA = parseInt(a.replace(/\D/g, ''), 10);
-        const numB = parseInt(b.replace(/\D/g, ''), 10);
-        return numA - numB;
-      });
-      components.push({
-        type: 'body',
-        parameters: sorted.map((m) => {
-          const num = m.replace(/[{}]/g, '');
-          return { type: 'text', text: templateVariables[num].trim() };
-        }),
-      });
-    }
-
-    let renderedText = bodyComp?.text || `[Template: ${selectedTemplate.name}]`;
-    for (const [k, v] of Object.entries(templateVariables)) {
-      renderedText = renderedText.replaceAll(`{{${k}}}`, v.trim());
-    }
-
-    setIsSendingTemplate(true);
-    const convId = convKeyFor(activeConv.customer.id);
-    const tempId = `msg-${Date.now()}`;
-
-    const optimisticMsg: Message = {
-      id: tempId,
-      sender: 'agent',
-      senderId: dbUser?.id ?? null,
-      senderName: dbUser?.name ?? null,
-      channel: 'whatsapp',
-      text: renderedText,
-      timestamp: formatTime(),
-      createdAt: new Date().toISOString(),
-      status: MessageStatus.SENT,
-      type: 'template',
-      mediaType: 'template',
-    };
-
-    setMessagesMap((prev) => ({ ...prev, [convId]: [...(prev[convId] || []), optimisticMsg] }));
-
-    try {
-      const res = await apiClient.post('/api/channels/whatsapp/send', {
-        to: customerPhone,
-        channelId: targetChannel.id,
-        customerId: activeConv.customer.id,
-        type: 'template',
-        templateName: selectedTemplate.name,
-        languageCode: selectedTemplate.language || 'en_US',
-        components: components.length > 0 ? components : undefined,
-        text: renderedText,
-      });
-
-      if (res.data?.success) {
-        if (res.data?.persisted === false) {
-          notifyWarning('Template delivered, but not saved', res.data?.warning);
-        } else {
-          gooeyToast.success(`Template "${selectedTemplate.name}" sent successfully!`);
-        }
-        setSelectedTemplate(null);
-        setTemplateVariables({});
-        setComposerMode('reply');
-        fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
-        refreshConversationsSoon();
-      }
-    } catch (err) {
-      const apiError = notifyError(err, { where: 'InboxView.handleSendTemplate', title: 'Template not sent' });
-      setMessagesMap((prev) => ({
-        ...prev,
-        [convId]: (prev[convId] || []).map((m) =>
-          m.id === tempId ? { ...m, status: MessageStatus.FAILED, errorMessage: apiError.message } : m
-        ),
-      }));
-    } finally {
-      setIsSendingTemplate(false);
-    }
-  };
 
   const lastAiAction = useMemo(() => {
     for (let i = activeMessages.length - 1; i >= 0; i--) {
@@ -1176,10 +986,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   };
 
   const handleSend = async () => {
-    if (!canViewAndReply) {
-      gooeyToast.error('Your role does not have permission to reply to chats.');
-      return;
-    }
     if ((!inputMessage.trim() && !selectedFile) || !activeConv) return;
 
     if (activeChannelType === 'whatsapp' && isWindowExpired) {
@@ -1298,10 +1104,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   };
 
   const handleAddNote = async () => {
-    if (!canViewAndReply) {
-      gooeyToast.error('Your role does not have permission to add notes or reply to chats.');
-      return;
-    }
     const text = inputMessage.trim();
     if (!text || !activeConv) return;
 
@@ -1482,7 +1284,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         notifyWarning('Template delivered, but not saved', res.data?.warning);
       }
       setTemplateDraft(null);
-      setComposerMode('reply');
+      // A template doesn't open the window: with it closed, stay on templates instead of a locked reply box
+      setComposerMode(isWindowExpired ? 'template' : 'reply');
       fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
       refreshConversationsSoon();
     } catch (err) {
@@ -1501,18 +1304,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   };
 
   const handleSubmitComposer = () => {
-    if (!canViewAndReply) {
-      gooeyToast.error('Your role does not have permission to reply to chats.');
-      return;
-    }
     if (composerMode === 'note') handleAddNote();
-    else if (composerMode === 'template') {
-      if (activeChannelType === 'whatsapp' && isWindowExpired && !canSendTemplatesOutside24h) {
-        gooeyToast.error('Your role does not have permission to send templates outside the 24-hour window.');
-        return;
-      }
-      handleSendTemplate();
-    } else handleSend();
+    else if (composerMode === 'template') handleSendTemplate();
+    else handleSend();
   };
 
   const applySuggestion = (text: string) => {
@@ -1826,13 +1620,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     if (isChannelDisconnected) {
       return { text: 'Messaging is paused · This WhatsApp number is disconnected', className: 'text-amber-700 font-medium' };
     }
-    if (!canViewAndReply) {
-      return { text: 'Replying is disabled for your role', className: 'text-slate-500 font-medium' };
-    }
     if (activeChannelType === 'whatsapp' && isWindowExpired) {
-      if (!canSendTemplatesOutside24h) {
-        return { text: '24h window closed · Template sending disabled for your role', className: 'text-slate-500 font-medium' };
-      }
       return { text: '24h window closed · Switch to Template tab to send', className: 'text-amber-700 font-medium' };
     }
     if (!canSendOnChannel) {
@@ -1919,19 +1707,19 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                         {activeChannelType === 'whatsapp' && (
                           window24hStatus.isWithin24Hours ? (
                             <span
-                              title={`24-hour customer window is open (~${window24hStatus.hoursRemaining}h left). Free-form messages allowed.`}
+                              title={`24-hour customer window is open (${window24hStatus.timeLeft} left). Free-form messages allowed.`}
                               className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] leading-4 font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
                             >
                               <Clock className="w-3 h-3 text-emerald-600" />
-                              24h window active · {window24hStatus.hoursRemaining}h left
+                              {window24hStatus.timeLeft} left
                             </span>
                           ) : (
                             <span
-                              title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.hoursSinceLast}h ago. Free-form text blocked.` : 'No incoming customer message. Free-form text blocked.'}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200"
+                              title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.timeSinceLast} ago. Only approved templates can be sent.` : 'This customer hasn’t messaged yet. Only approved templates can be sent.'}
+                              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] leading-4 font-medium bg-amber-50 text-amber-800 border border-amber-200"
                             >
                               <AlertTriangle className="w-3 h-3 text-amber-600" />
-                              24h window closed · Templates only
+                              Templates only
                             </span>
                           )
                         )}
@@ -2037,17 +1825,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                 )}
 
                 {/* Thread */}
-                {!canViewAndReply ? (
-                  <div className="flex-1 flex flex-col items-center justify-center text-center p-8 bg-slate-50/50">
-                    <div className="w-14 h-14 rounded-2xl bg-white border border-slate-200 shadow-2xs flex items-center justify-center mb-3 text-slate-400">
-                      <Lock className="w-6 h-6 stroke-[1.8]" />
-                    </div>
-                    <h3 className="text-sm font-bold text-slate-800 mb-1">Chat Messages Restricted</h3>
-                    <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
-                      Your role does not have permission to view or reply to chats. Messages are not displayed.
-                    </p>
-                  </div>
-                ) : messagesLoadError?.convId === convKeyFor(activeConv.customer.id) && activeMessages.length === 0 ? (
+                {messagesLoadError?.convId === convKeyFor(activeConv.customer.id) && activeMessages.length === 0 ? (
                   <div className="flex-1 flex items-center justify-center">
                     <ErrorState
                       error={messagesLoadError.error}
@@ -2113,16 +1891,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                   />
                 )}
 
-                {/* Composer / Read-only notice */}
-                {!canViewAndReply ? (
-                  <div className="border-t border-slate-200 px-4 py-4 shrink-0 bg-slate-50/70">
-                    <div className="p-3 bg-white rounded-xl border border-slate-200 text-center text-xs text-slate-500 font-medium flex items-center justify-center gap-2 shadow-2xs">
-                      <Lock className="w-3.5 h-3.5 text-slate-400 stroke-[2]" />
-                      <span>Replying disabled: Your role does not have permission to view and reply to chats or send messages.</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="border-t border-slate-200 px-4 pb-3 shrink-0">
+                {/* Composer */}
+                <div className="border-t border-slate-200 px-4 pb-3 shrink-0">
                   {/* WhatsApp 24h Window Warning Banner */}
                   {activeChannelType === 'whatsapp' && isWindowExpired && (
                     <div className="mt-3 mb-2 p-2.5 rounded-lg bg-amber-50/90 border border-amber-200/90 flex items-start justify-between gap-3 text-xs">
@@ -2132,20 +1902,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                           <p className="font-semibold text-amber-900">24-Hour Customer Window Expired</p>
                           <p className="text-amber-800 text-[11.5px] mt-0.5 leading-relaxed">
                             {window24hStatus.hasReceivedMessage
-                              ? `Last customer message received ${window24hStatus.hoursSinceLast}h ago. `
+                              ? `Last customer message received ${window24hStatus.timeSinceLast} ago. `
                               : 'No message received from this contact yet. '}
-                            WhatsApp Business policy requires sending an approved template to start or resume messaging.
-                            {!canSendTemplatesOutside24h ? (
-                              <strong className="block text-amber-950 font-semibold mt-1">
-                                Your role does not have permission to send templates outside the 24-hour window.
-                              </strong>
-                            ) : (
-                              ' Regular text is disabled.'
-                            )}
+                            WhatsApp Business policy requires sending an approved template to start or resume messaging. Regular text is disabled.
                           </p>
                         </div>
                       </div>
-                      {canSendTemplatesOutside24h && composerMode !== 'template' && (
+                      {composerMode !== 'template' && (
                         <button
                           type="button"
                           onClick={() => setComposerMode('template')}
@@ -2164,8 +1927,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                           key={mode}
                           onClick={() => setComposerMode(mode)}
                           className={`py-2.5 border-b-2 capitalize cursor-pointer flex items-center gap-1.5 ${composerMode === mode
-                              ? 'border-[#3440a8] text-[#3440a8] font-semibold'
-                              : 'border-transparent text-slate-600 hover:text-slate-900'
+                            ? 'border-[#3440a8] text-[#3440a8] font-semibold'
+                            : 'border-transparent text-slate-600 hover:text-slate-900'
                             }`}
                         >
                           <span>{mode}</span>
@@ -2217,176 +1980,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                   </div>
 
                   {composerMode === 'template' ? (
-                    activeChannelType === 'whatsapp' ? (
-                      <div className="mt-2 border border-slate-200 rounded-xl p-3 bg-slate-50/50">
-                        {selectedTemplate ? (
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold text-sm text-slate-900">{selectedTemplate.name}</span>
-                                <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
-                                  {selectedTemplate.category}
-                                </span>
-                                <span className="text-xs text-slate-500">({selectedTemplate.language})</span>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => setSelectedTemplate(null)}
-                                className="text-xs font-medium text-[#3440a8] hover:underline cursor-pointer"
-                              >
-                                Change template
-                              </button>
-                            </div>
-
-                            {/* Template Variable Inputs */}
-                            {(() => {
-                              const bodyComp = selectedTemplate.components?.find((c) => c.type.toUpperCase() === 'BODY');
-                              const varMatches = Array.from(new Set(bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || []));
-                              if (varMatches.length === 0) return null;
-
-                              const sorted = [...varMatches].sort((a, b) => {
-                                const numA = parseInt(a.replace(/\D/g, ''), 10);
-                                const numB = parseInt(b.replace(/\D/g, ''), 10);
-                                return numA - numB;
-                              });
-
-                              return (
-                                <div className="space-y-2 bg-white p-2.5 rounded-lg border border-slate-200">
-                                  <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wide">
-                                    Template Variables
-                                  </p>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                    {sorted.map((m) => {
-                                      const num = m.replace(/[{}]/g, '');
-                                      return (
-                                        <div key={num} className="space-y-1">
-                                          <label className="text-[11px] font-medium text-slate-600">
-                                            Variable {m} {num === '1' ? '(Customer name)' : ''}
-                                          </label>
-                                          <input
-                                            type="text"
-                                            value={templateVariables[num] || ''}
-                                            onChange={(e) =>
-                                              setTemplateVariables((prev) => ({ ...prev, [num]: e.target.value }))
-                                            }
-                                            placeholder={`Value for ${m}...`}
-                                            className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-md focus:bg-white focus:outline-none focus:border-[#3440a8] focus:ring-1 focus:ring-[#3440a8]"
-                                          />
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              );
-                            })()}
-
-                            {/* Message Preview */}
-                            <div className="bg-[#e7ffdb]/40 border border-[#b2d8a8] rounded-lg p-3 text-slate-800 text-[13px] leading-relaxed shadow-sm">
-                              <p className="text-[10px] font-semibold text-emerald-800 uppercase tracking-wider mb-1">
-                                WhatsApp Message Preview
-                              </p>
-                              {(() => {
-                                const bodyComp = selectedTemplate.components?.find((c) => c.type.toUpperCase() === 'BODY');
-                                let text = bodyComp?.text || `[Template: ${selectedTemplate.name}]`;
-                                for (const [k, v] of Object.entries(templateVariables)) {
-                                  text = text.replaceAll(`{{${k}}}`, v || `{{${k}}}`);
-                                }
-                                return <p className="whitespace-pre-wrap">{text}</p>;
-                              })()}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="space-y-2.5">
-                            <div className="flex items-center gap-2">
-                              <div className="relative flex-1">
-                                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                                <input
-                                  type="text"
-                                  value={templateSearch}
-                                  onChange={(e) => setTemplateSearch(e.target.value)}
-                                  placeholder="Search approved WhatsApp templates..."
-                                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#3440a8] focus:ring-1 focus:ring-[#3440a8]"
-                                />
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => fetchMetaTemplates(conversationSendChannel?.metaPhoneNumberId)}
-                                disabled={isLoadingTemplates}
-                                title="Refresh templates from Meta"
-                                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 cursor-pointer disabled:opacity-50"
-                              >
-                                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTemplates ? 'animate-spin' : ''}`} />
-                              </button>
-                            </div>
-
-                            {isLoadingTemplates ? (
-                              <div className="py-6 flex items-center justify-center gap-2 text-xs text-slate-500">
-                                <Loader2 className="w-4 h-4 animate-spin text-[#3440a8]" />
-                                Loading templates from Meta…
-                              </div>
-                            ) : (
-                              <div className="max-h-52 overflow-y-auto divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
-                                {metaTemplates
-                                  .filter(
-                                    (t) =>
-                                      !templateSearch.trim() ||
-                                      t.name.toLowerCase().includes(templateSearch.toLowerCase()) ||
-                                      t.components?.some((c) => (c.text || '').toLowerCase().includes(templateSearch.toLowerCase()))
-                                  )
-                                  .map((tpl) => {
-                                    const bodyComp = tpl.components?.find((c) => c.type.toUpperCase() === 'BODY');
-                                    return (
-                                      <button
-                                        key={tpl.id || tpl.name}
-                                        type="button"
-                                        onClick={() => handleSelectTemplate(tpl)}
-                                        className="w-full text-left p-2.5 hover:bg-slate-50 transition-colors cursor-pointer group"
-                                      >
-                                        <div className="flex items-center justify-between gap-2">
-                                          <span className="font-semibold text-xs text-slate-900 group-hover:text-[#3440a8]">
-                                            {tpl.name}
-                                          </span>
-                                          <div className="flex items-center gap-1.5 shrink-0">
-                                            <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                              Approved
-                                            </span>
-                                            <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-100 text-slate-600">
-                                              {tpl.category}
-                                            </span>
-                                          </div>
-                                        </div>
-                                        {bodyComp?.text && (
-                                          <p className="mt-1 text-xs text-slate-500 line-clamp-2 leading-relaxed">
-                                            {bodyComp.text}
-                                          </p>
-                                        )}
-                                      </button>
-                                    );
-                                  })}
-                                {metaTemplates.length === 0 && (
-                                  <div className="py-6 px-4 text-center text-xs text-slate-500">
-                                    No approved templates found for this WhatsApp account. Create templates in Meta Business Suite first.
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="mt-1 border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-48 overflow-y-auto">
-                        {SAVED_REPLIES.map((tpl) => (
-                          <button
-                            key={tpl.title}
-                            onClick={() => applySuggestion(tpl.text)}
-                            className="w-full text-left px-3 py-2 hover:bg-slate-50 cursor-pointer"
-                          >
-                            <span className="block text-[13px] font-medium text-slate-900">{tpl.title}</span>
-                            <span className="block text-xs text-slate-500 truncate">{tpl.text}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )
+                    <TemplateComposer
+                      phoneNumberId={conversationSendChannel?.metaPhoneNumberId}
+                      draft={templateDraft}
+                      onDraftChange={setTemplateDraft}
+                      disabledReason={templateDisabledReason}
+                      revision={templateRevision}
+                    />
                   ) : (
                     <>
                       {selectedFile && composerMode === 'reply' && (
@@ -2544,14 +2144,16 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       type="button"
                       onClick={handleSubmitComposer}
                       disabled={
-                        composerMode === 'template'
-                          ? activeChannelType === 'whatsapp'
-                            ? !selectedTemplate || isSendingTemplate
-                            : true
-                          : isSending ||
-                            (activeChannelType === 'whatsapp' && isWindowExpired && composerMode === 'reply') ||
-                            (composerMode === 'note' ? !inputMessage.trim() : (!inputMessage.trim() && !selectedFile) || !canSendOnChannel)
+                        isSending ||
+                        (composerMode === 'template'
+                          ? !templateReady || Boolean(templateDisabledReason)
+                          : composerMode === 'note'
+                            ? !inputMessage.trim()
+                            : (!inputMessage.trim() && !selectedFile) ||
+                            !canSendOnChannel ||
+                            (activeChannelType === 'whatsapp' && isWindowExpired))
                       }
+                      title={composerMode === 'template' && templateDraft && !templateReady ? 'Fill in every template variable first' : undefined}
                       className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-[#3440a8] hover:bg-[#2b3590] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold cursor-pointer shrink-0"
                     >
                       {isSending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
@@ -2560,9 +2162,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                         : composerMode === 'template'
                           ? 'Send template'
                           : 'Send'}
-                    </button>
-                  </div>
-                </div>
+                    </button >
+                  </div >
+                </div >
               </>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
