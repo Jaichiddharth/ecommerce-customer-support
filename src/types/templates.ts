@@ -59,7 +59,7 @@ export const isTemplateEditable = (tpl: Pick<WhatsAppTemplate, 'id' | 'status'>)
 
 /** Meta's limits for message templates */
 export const TEMPLATE_LIMITS = {
-  name: 512,
+  name: 80,
   headerText: 60,
   /** Body without variables; see `bodyCharLimit` */
   body: 1024,
