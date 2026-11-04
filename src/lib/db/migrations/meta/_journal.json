@@ -57,6 +57,13 @@
       "when": 1793615644728,
       "tag": "0007_automation_listing",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793794606311,
+      "tag": "0008_automation_reliability",
+      "breakpoints": true
     }
   ]
 }

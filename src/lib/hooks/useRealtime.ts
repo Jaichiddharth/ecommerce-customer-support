@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { RealtimeEvent } from '@/lib/realtime';
+import type { RealtimeEvent } from '@/lib/realtime';
 import { clientLogger } from '@/lib/client-logger';
 
 export interface UseRealtimeOptions {

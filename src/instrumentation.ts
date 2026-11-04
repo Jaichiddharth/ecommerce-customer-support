@@ -4,7 +4,15 @@
  * API route errors are already logged by apiHandler, so they don't show up here twice.
  */
 
-export async function register() {}
+export async function register() {
+  // In-process automation scheduler (delays, retries, Flow timeouts, crash recovery). Node runtime only,
+  // never during `next build`; AUTOMATION_SCHEDULER=off disables it (e.g. when an external cron is used).
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  if (process.env.NEXT_PHASE === "phase-production-build") return;
+  if (process.env.AUTOMATION_SCHEDULER === "off" || !process.env.DATABASE_URL) return;
+  const { startAutomationScheduler } = await import("./lib/automation/scheduler");
+  startAutomationScheduler();
+}
 
 export async function onRequestError(
   err: unknown,

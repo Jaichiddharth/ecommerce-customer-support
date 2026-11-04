@@ -1,36 +1,74 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, ArrowLeft, RefreshCw, History, Hourglass, AlertTriangle, CheckCircle2, CircleDot } from 'lucide-react';
-import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
-import { StatusBadge, Pagination, formatDate, formatValue, iconBtn, inputCls } from '../whatsapp/wa-ui';
+import { EmptyState } from '@/components/ui/states';
+import { DataTable, createColumnHelper, useServerTable, type FilterDef } from '@/components/ui/data-table';
+import { StatusBadge, formatDate, formatValue, iconBtn } from '../whatsapp/wa-ui';
 import { automationsApi, NODE_TYPE_LABELS, type AutomationListItem, type AutomationRun } from './automation-api';
 
-const PAGE_SIZE = 20;
+const col = createColumnHelper<AutomationRun>();
+
+const FILTERS: FilterDef[] = [
+  {
+    type: 'select',
+    key: 'status',
+    label: 'Status',
+    allLabel: 'All',
+    options: [
+      { value: 'completed', label: 'Completed' },
+      { value: 'failed', label: 'Failed' },
+      { value: 'waiting', label: 'Waiting' },
+      { value: 'running', label: 'Running' },
+      { value: 'timed_out', label: 'Timed out' },
+      { value: 'cancelled', label: 'Cancelled' },
+    ],
+  },
+  { type: 'dateRange', key: 'startedAt', label: 'Started' },
+];
+
+const COLUMNS = [
+  col.accessor('id', {
+    header: 'Execution',
+    cell: ({ row: { original: r } }) => (
+      <div className="min-w-0 max-w-[200px]">
+        <span className="font-semibold text-slate-700">#{r.id}</span>
+        <p className="text-[10px] text-slate-400 truncate">
+          {r.context.log?.length ?? 0} steps{r.context.trigger?.text ? ` · “${r.context.trigger.text}”` : ''}
+        </p>
+        {r.lastError && <p className="text-[10px] text-red-500 truncate">{r.lastError}</p>}
+      </div>
+    ),
+  }),
+  col.accessor((r) => r.customerName ?? null, {
+    id: 'customer',
+    header: 'Contact',
+    enableSorting: true,
+    cell: ({ row: { original: r } }) => <span className="text-slate-600">{r.customerName ?? `Contact #${r.customerId}`}</span>,
+  }),
+  col.accessor('createdAt', {
+    header: 'Started',
+    enableSorting: true,
+    sortDescFirst: true,
+    meta: { className: 'text-slate-500 whitespace-nowrap' },
+    cell: ({ getValue }) => formatDate(getValue()),
+  }),
+  col.accessor('status', {
+    header: 'Status',
+    enableSorting: true,
+    meta: { align: 'right' },
+    cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+  }),
+];
 
 /** Slide-over with an automation's execution history and the details of one execution. */
 export function AutomationRunsDrawer({ automation, onClose }: { automation: AutomationListItem; onClose: () => void }) {
-  const [status, setStatus] = useState('');
-  const [page, setPage] = useState(1);
-  const [data, setData] = useState<{ items: AutomationRun[]; total: number } | null>(null);
-  const [error, setError] = useState<unknown>(null);
   const [selected, setSelected] = useState<AutomationRun | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const load = useCallback(async () => {
-    setError(null);
-    setRefreshing(true);
-    try {
-      const res = await automationsApi.runs(automation.id, { status: status || undefined, page, pageSize: PAGE_SIZE });
-      setData({ items: res.items, total: res.total });
-    } catch (err) {
-      setError(err);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [automation.id, status, page]);
-
-  useEffect(() => { load(); }, [load]);
+  const table = useServerTable<AutomationRun>({
+    fetcher: (query) => automationsApi.runs(automation.id, query),
+    filters: FILTERS,
+    defaultSort: { sortBy: 'createdAt', sortOrder: 'desc' },
+  });
 
   // Details are re-fetched so a waiting run shows its latest state
   const openRun = async (r: AutomationRun) => {
@@ -49,7 +87,7 @@ export function AutomationRunsDrawer({ automation, onClose }: { automation: Auto
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
       <div className="absolute inset-0 bg-slate-900/20" onClick={onClose} />
-      <aside className="relative w-full max-w-[560px] h-full bg-white shadow-2xl flex flex-col">
+      <aside className="relative w-full max-w-[640px] h-full bg-white shadow-2xl flex flex-col">
         <header className="px-4 py-3 border-b border-slate-100 flex items-center gap-2 shrink-0">
           {selected ? (
             <button className={iconBtn} onClick={() => setSelected(null)} title="Back to history"><ArrowLeft className="w-4 h-4" /></button>
@@ -63,8 +101,8 @@ export function AutomationRunsDrawer({ automation, onClose }: { automation: Auto
             <p className="text-[10px] text-slate-400 truncate">{automation.name}</p>
           </div>
           {!selected && (
-            <button className={iconBtn} onClick={load} title="Refresh" disabled={refreshing}>
-              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            <button className={iconBtn} onClick={table.reload} title="Refresh" disabled={table.loading}>
+              <RefreshCw className={`w-3.5 h-3.5 ${table.loading ? 'animate-spin' : ''}`} />
             </button>
           )}
           <button className={iconBtn} onClick={onClose} title="Close"><X className="w-4 h-4" /></button>
@@ -73,50 +111,23 @@ export function AutomationRunsDrawer({ automation, onClose }: { automation: Auto
         {selected ? (
           <RunDetails run={selected} />
         ) : (
-          <>
-            <div className="px-4 py-2.5 border-b border-slate-100 shrink-0">
-              <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} className={`${inputCls} w-auto`}>
-                <option value="">All executions</option>
-                <option value="completed">Completed</option>
-                <option value="failed">Failed</option>
-                <option value="waiting">Waiting</option>
-                <option value="running">Running</option>
-                <option value="timed_out">Timed out</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              {error ? (
-                <ErrorState error={error} title="Couldn't load executions" onRetry={load} compact />
-              ) : !data ? (
-                <LoadingState label="Loading executions…" />
-              ) : data.items.length === 0 ? (
-                <EmptyState compact title={status ? 'No executions with this status' : 'No executions yet'} description="Executions appear when the trigger matches an incoming message while the automation is active." />
-              ) : (
-                <ul className="divide-y divide-slate-50">
-                  {data.items.map((r) => (
-                    <li key={r.id}>
-                      <button className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-start gap-3" onClick={() => openRun(r)}>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[12px] font-semibold text-slate-700">#{r.id}</span>
-                            <span className="text-[12px] text-slate-600 truncate">{r.customerName ?? `Contact #${r.customerId}`}</span>
-                          </div>
-                          <p className="text-[10px] text-slate-400 truncate">
-                            {formatDate(r.createdAt)} · {r.context.log?.length ?? 0} steps
-                            {r.context.trigger?.text ? ` · “${r.context.trigger.text}”` : ''}
-                          </p>
-                          {r.lastError && <p className="text-[10px] text-red-500 truncate">{r.lastError}</p>}
-                        </div>
-                        <StatusBadge status={r.status} />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+          <div className="flex-1 overflow-y-auto p-4 bg-[#f8fafc]">
+            <DataTable
+              {...table.tableProps}
+              columns={COLUMNS}
+              getRowId={(r) => r.id}
+              onRowClick={openRun}
+              errorTitle="Couldn't load executions"
+              loadingLabel="Loading executions…"
+              emptyState={(filtered) => (
+                <EmptyState
+                  compact
+                  title={filtered ? 'No executions match these filters' : 'No executions yet'}
+                  description="Executions appear when the trigger matches an incoming message while the automation is active."
+                />
               )}
-            </div>
-            {data && <Pagination page={page} pageSize={PAGE_SIZE} total={data.total} onPage={setPage} />}
-          </>
+            />
+          </div>
         )}
       </aside>
     </div>

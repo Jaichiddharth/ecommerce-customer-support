@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, varchar, text, boolean, jsonb, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, varchar, text, boolean, jsonb, timestamp, index, uniqueIndex, primaryKey } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { organizations } from "./organizations";
 import { customers } from "./customers";
@@ -43,6 +43,9 @@ export const automations = pgTable(
     name: varchar("name", { length: 200 }).notNull(),
     description: text("description"),
     graph: jsonb("graph").$type<AutomationGraph>().notNull(),
+    // Bumped whenever the graph changes; every version is kept in automation_graph_versions so a
+    // waiting run always resumes on the graph it started with
+    graphVersion: integer("graph_version").default(1).notNull(),
     isActive: boolean("is_active").default(false).notNull(),
     // First activation: tells a never-run Draft apart from a Paused automation
     activatedAt: timestamp("activated_at", { withTimezone: true, mode: "date" }),
@@ -57,6 +60,20 @@ export const automations = pgTable(
   ]
 );
 
+/** Immutable copy of every graph an automation has had (runs pin the version they started on). */
+export const automationGraphVersions = pgTable(
+  "automation_graph_versions",
+  {
+    automationId: integer("automation_id")
+      .notNull()
+      .references(() => automations.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    graph: jsonb("graph").$type<AutomationGraph>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.automationId, table.version] })]
+);
+
 export const AutomationRunStatus = {
   RUNNING: "running",
   WAITING: "waiting",
@@ -69,7 +86,9 @@ export type AutomationRunStatusValue = (typeof AutomationRunStatus)[keyof typeof
 
 export type AutomationWait =
   | { kind: "flow_submission"; executionId: number; nodeId: string }
-  | { kind: "delay"; nodeId: string };
+  | { kind: "delay"; nodeId: string }
+  /** A step failed with a transient error (Meta throttling, 5xx, timeout); it is executed again at wake_at. */
+  | { kind: "retry"; nodeId: string; attempt: number };
 
 export interface AutomationRunContext {
   trigger: { type: string; messageId?: number | null; wamid?: string | null; text?: string | null };
@@ -100,7 +119,12 @@ export const automationRuns = pgTable(
     status: varchar("status", { length: 20 }).default(AutomationRunStatus.RUNNING).notNull(),
     currentNodeId: varchar("current_node_id", { length: 100 }),
     waitingFor: jsonb("waiting_for").$type<AutomationWait>(),
-    wakeAt: timestamp("wake_at", { withTimezone: true, mode: "date" }), // delay end or wait timeout
+    wakeAt: timestamp("wake_at", { withTimezone: true, mode: "date" }), // delay end, wait timeout or retry time
+    // Lease of a `running` run: the process executing it renews it; once it has passed (crash, deploy,
+    // killed request) the sweep releases the run so it can't block the customer forever
+    lockedUntil: timestamp("locked_until", { withTimezone: true, mode: "date" }),
+    // Graph version this run executes (automation_graph_versions); null = runs created before versioning
+    graphVersion: integer("graph_version"),
     context: jsonb("context").$type<AutomationRunContext>().notNull(),
     stepCount: integer("step_count").default(0).notNull(),
     lastError: text("last_error"),
@@ -113,6 +137,12 @@ export const automationRuns = pgTable(
     index("idx_automation_runs_org_customer").on(table.organizationId, table.customerId, table.status),
     index("idx_automation_runs_automation_created").on(table.automationId, table.createdAt.desc()),
     index("idx_automation_runs_waiting").on(table.status, table.wakeAt).where(sql`${table.status} = 'waiting'`),
+    // At most one unfinished run per (automation, customer), enforced by Postgres instead of a check-then-insert
+    uniqueIndex("uq_automation_runs_open")
+      .on(table.automationId, table.customerId)
+      .where(sql`${table.status} IN ('running', 'waiting')`),
+    index("idx_automation_runs_lease").on(table.lockedUntil).where(sql`${table.status} = 'running'`),
+    index("idx_automation_runs_completed").on(table.completedAt).where(sql`${table.completedAt} IS NOT NULL`),
   ]
 );
 
@@ -128,3 +158,4 @@ export const automationRunsRelations = relations(automationRuns, ({ one }) => ({
 
 export type Automation = typeof automations.$inferSelect;
 export type AutomationRun = typeof automationRuns.$inferSelect;
+export type AutomationGraphVersion = typeof automationGraphVersions.$inferSelect;

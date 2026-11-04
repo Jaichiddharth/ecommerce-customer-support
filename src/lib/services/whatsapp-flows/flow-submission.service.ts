@@ -1,6 +1,8 @@
-import { customerRepository, whatsappFlowRepository } from "../../db/repositories";
+import { customerRepository, whatsappFlowRepository, type SubmissionSortKey } from "../../db/repositories";
+import { toListResult, type ListQuery } from "@/lib/api/list-query";
 import { WaSubmissionStatus, type WhatsAppFlowSubmissionRow } from "../../db/schema";
 import { automationEngine } from "@/lib/automation/engine";
+import { mapLimit } from "@/lib/concurrency";
 import { toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 
@@ -117,20 +119,23 @@ export class WhatsAppFlowSubmissionService {
   /** Recovery for submissions stored but never processed (process stopped mid-way). Called by the sweep. */
   async processStale(olderThan = new Date(Date.now() - 60_000)) {
     const stale = await whatsappFlowRepository.listStaleReceivedSubmissions(olderThan);
-    for (const s of stale) await this.process(s);
+    await mapLimit(stale, 4, (s) => this.process(s));
     return stale.length;
   }
 
-  async list(organizationId: number, params: { flowId?: number; status?: string; page?: number; pageSize?: number }) {
-    const pageSize = Math.min(Math.max(params.pageSize ?? 25, 1), 100);
-    const page = Math.max(params.page ?? 1, 1);
+  /** Submissions listing: filtered (Flow, status, submitted date), sorted, counted and paginated in the database. */
+  async list(organizationId: number, params: ListQuery<SubmissionSortKey> & { flowId?: number; status?: string }) {
     const { rows, total } = await whatsappFlowRepository.listSubmissions(organizationId, {
       flowId: params.flowId,
       status: params.status,
-      limit: pageSize,
-      offset: (page - 1) * pageSize,
+      fromDate: params.fromDate,
+      toDate: params.toDate,
+      sortBy: params.sortBy,
+      sortOrder: params.sortOrder,
+      limit: params.limit,
+      offset: params.offset,
     });
-    return { submissions: rows, total, page, pageSize };
+    return toListResult(rows, total, params);
   }
 }
 

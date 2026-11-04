@@ -323,6 +323,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
   const whatsappChannels = useMemo(() => channels.filter((c) => c.type === 'whatsapp'), [channels]);
 
+  // When the parent controls the selection (e.g. from the URL), follow it, including clearing it
+  useEffect(() => {
+    if (selectedConversationId !== undefined) setInternalSelectedId(selectedConversationId);
+  }, [selectedConversationId]);
   const currentSelectedId = selectedConversationId || internalSelectedId;
   const selectedCustomerId = currentSelectedId.startsWith('cust-') ? Number(currentSelectedId.replace('cust-', '')) : null;
 
