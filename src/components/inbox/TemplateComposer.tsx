@@ -162,7 +162,9 @@ export const TemplateComposer: React.FC<TemplateComposerProps> = ({
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <span className="truncate text-[13px] font-semibold text-slate-900">{template.name}</span>
+          <span className="truncate text-[13px] font-semibold text-slate-900" title={template.name}>
+            {template.name}
+          </span>
           <span className="shrink-0 text-[11px] text-slate-400">
             {template.language} · {template.category.toLowerCase()}
           </span>
@@ -335,7 +337,9 @@ export const TemplateComposer: React.FC<TemplateComposerProps> = ({
               className="block w-full px-3 py-2 text-left hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
             >
               <span className="flex items-center gap-2">
-                <span className="truncate text-[13px] font-medium text-slate-900">{template.name}</span>
+                <span className="truncate text-[13px] font-medium text-slate-900" title={template.name}>
+                  {template.name}
+                </span>
                 <span className="shrink-0 rounded bg-slate-100 px-1.5 py-px text-[10px] font-medium text-slate-500">
                   {template.language}
                 </span>

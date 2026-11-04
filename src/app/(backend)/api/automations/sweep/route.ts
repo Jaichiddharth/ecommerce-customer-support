@@ -2,16 +2,19 @@ import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { apiHandler } from "@/lib/api/handler";
 import { AppError } from "@/lib/errors";
-import { automationEngine } from "@/lib/automation/engine";
-import { whatsappFlowSubmissionService } from "@/lib/services/whatsapp-flows";
+import { runAutomationMaintenance } from "@/lib/automation/scheduler";
 
 /**
- * Scheduled maintenance for automations and Flows — call every minute from a cron
- * (e.g. Vercel Cron, Cloud Scheduler, or a crontab curl) with `Authorization: Bearer $CRON_SECRET`.
- *  - resumes runs whose Delay ended
+ * Scheduled maintenance for automations and Flows. The app already runs it every few seconds in-process
+ * (src/instrumentation.ts); this endpoint is optional — for a cron as a second trigger or for
+ * deployments with AUTOMATION_SCHEDULER=off. Call with `Authorization: Bearer $CRON_SECRET`.
+ *  - resumes runs whose Delay ended and retries steps that failed transiently
  *  - times out runs waiting for a Flow response
- *  - marks unanswered Flow executions expired
+ *  - releases runs interrupted mid-run (expired lease)
+ *  - marks unanswered / interrupted Flow executions expired / failed
  *  - re-processes Flow responses that were stored but not processed (crash recovery)
+ *  - replays automation triggers of inbound messages whose evaluation was lost
+ *  - prunes finished runs older than the retention period
  */
 async function sweep(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -23,9 +26,8 @@ async function sweep(req: NextRequest) {
     throw new AppError("FORBIDDEN", { expected: true });
   }
 
-  const reprocessed = await whatsappFlowSubmissionService.processStale();
-  const result = await automationEngine.sweep();
-  return NextResponse.json({ success: true, ...result, reprocessedSubmissions: reprocessed });
+  const result = await runAutomationMaintenance();
+  return NextResponse.json({ success: true, ...result });
 }
 
 export const GET = apiHandler(sweep);

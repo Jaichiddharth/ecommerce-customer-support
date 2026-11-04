@@ -22,11 +22,10 @@ import {
   Film,
   Music,
   Download,
-  CircleCheck,
-  RotateCcw,
   ShoppingBag,
   Clock,
   AlertTriangle,
+  ShieldOff,
 } from 'lucide-react';
 import { Message, MessageStatus, normalizeMessageStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -48,8 +47,9 @@ import { ErrorState } from '@/components/ui/states';
 import { describeMessageFailure, getMetaErrorInfo } from '@/lib/errors/meta-errors';
 import { validateWhatsAppMedia } from '@/lib/media-limits';
 import { ChannelsPane } from './inbox/ChannelsPane';
-import { ConversationList, Avatar, StatusFilter } from './inbox/ConversationList';
+import { ConversationList, Avatar } from './inbox/ConversationList';
 import { CustomerPanel } from './inbox/CustomerPanel';
+import { ConsentBadge, ConsentEventRow } from './inbox/ConsentStatus';
 import { VirtualMessageList } from './inbox/VirtualMessageList';
 import { InboxTopBar } from './inbox/InboxTopBar';
 import { ProductBrowser, type ShareProductArgs } from './shopify/ProductBrowser';
@@ -64,11 +64,11 @@ import {
 import {
   CHANNEL_LABELS,
   CHANNEL_THREAD_LABELS,
-  ChannelFilter,
   InboxChannel,
   InboxConversation,
   ListTab,
   SENDABLE_CHANNEL_TYPES,
+  channelsInPaneOrder,
   conversationChannelType,
   formatHandle,
   formatPhone,
@@ -197,7 +197,8 @@ const mapApiMessage = (m: any, channel: string): Message => {
     id: String(m.id),
     sender: m.senderType === 'customer' ? 'customer' : m.senderType === 'ai' ? 'bot' : 'agent',
     senderId: m.senderId ?? null,
-    senderName: m.senderName ?? null,
+    // Automatic messages (e.g. opt-out confirmations) are sent by UnoCX itself, not by a teammate
+    senderName: m.senderType === 'system' && !m.isInternalNote ? 'Automatic reply' : m.senderName ?? null,
     channel: channel as Message['channel'],
     text: m.textContent || '',
     timestamp: formatTime(dateObj),
@@ -211,11 +212,15 @@ const mapApiMessage = (m: any, channel: string): Message => {
     metaMessageId: m.metaMessageId || undefined,
     isInternalNote: Boolean(m.isInternalNote),
     aiAction: m.metadata?.aiAction ?? null,
+    consent: m.metadata?.consent ?? null,
     reactions: m.reactions || [],
   };
 };
 
 const convKeyFor = (customerId: number | string) => `cust-${customerId}`;
+
+/** Shown when trying to message a customer who opted out (STOP) */
+const OPTED_OUT_MESSAGE = 'This customer opted out of WhatsApp messages. You can message them again after they reply START.';
 
 /** Messages fetched per batch when opening a thread or scrolling up */
 const MESSAGE_PAGE_SIZE = 10;
@@ -266,10 +271,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
   // Navigation & filtering
   const [isChannelsCollapsed, setIsChannelsCollapsed] = useState(false);
-  const [channelFilter, setChannelFilter] = useState<ChannelFilter>({ kind: 'all' });
+  // The channel (number / account) whose conversations are listed; null until one is picked (the first channel is used)
+  const [pickedChannelId, setPickedChannelId] = useState<number | null>(null);
   const [listTab, setListTab] = useState<ListTab>('all');
   const [listSearch, setListSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('open');
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [internalSelectedId, setInternalSelectedId] = useState<string>('');
 
@@ -318,6 +323,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
   const whatsappChannels = useMemo(() => channels.filter((c) => c.type === 'whatsapp'), [channels]);
 
+  // When the parent controls the selection (e.g. from the URL), follow it, including clearing it
+  useEffect(() => {
+    if (selectedConversationId !== undefined) setInternalSelectedId(selectedConversationId);
+  }, [selectedConversationId]);
   const currentSelectedId = selectedConversationId || internalSelectedId;
   const selectedCustomerId = currentSelectedId.startsWith('cust-') ? Number(currentSelectedId.replace('cust-', '')) : null;
 
@@ -328,7 +337,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const activeChannelType = activeConv ? conversationChannelType(activeConv) : 'whatsapp';
   const activeMessages = activeConv ? messagesMap[convKeyFor(activeConv.customer.id)] || [] : [];
   const isChannelDisconnected = activeConv?.channel?.status === 'disconnected';
-  const canSendOnChannel = SENDABLE_CHANNEL_TYPES.includes(activeChannelType) && !isChannelDisconnected;
+  /** The customer opted out (STOP): nothing can be sent to them, not even templates, until they reply START */
+  const isCustomerOptedOut = activeChannelType === 'whatsapp' && Boolean(activeConv?.customer.isOptedOut);
+  const canSendOnChannel = SENDABLE_CHANNEL_TYPES.includes(activeChannelType) && !isChannelDisconnected && !isCustomerOptedOut;
 
   // -------------------------------------------------------------
   // DATA LOADING
@@ -463,7 +474,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   useEffect(() => {
     if (!onCountsChange) return;
     const unread = conversations.reduce((sum, c) => sum + (c.customer.id === selectedCustomerId ? 0 : c.unreadCount), 0);
-    const ai = conversations.filter((c) => c.handledBy === 'ai' && c.status !== 'RESOLVED' && c.status !== 'CLOSED').length;
+    const ai = conversations.filter((c) => c.handledBy === 'ai').length;
     onCountsChange({ unread, ai });
   }, [conversations, selectedCustomerId, onCountsChange]);
 
@@ -558,8 +569,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
             };
           return [updated, ...prev.slice(0, idx), ...prev.slice(idx + 1)];
         });
-        // Agent replies can change who handles the conversation (human takes over from AI)
-        if (rawMsg.senderType === 'agent') refreshConversationsSoon();
+        // Agent replies can change who handles the conversation (human takes over from AI);
+        // a contact's first message created its ticket, so reload to swap in the real conversation
+        if (rawMsg.senderType === 'agent' || !known.hasConversation) refreshConversationsSoon();
       }
 
       if (isOpen && rawMsg.senderType === 'customer') {
@@ -650,11 +662,22 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     []
   );
 
+  /** Applies a WhatsApp consent change (from realtime or the customer panel) to the conversation list */
+  const setCustomerOptedOut = useCallback((customerId: number, isOptedOut: boolean) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.customer.id === customerId ? { ...c, customer: { ...c.customer, isOptedOut } } : c))
+    );
+  }, []);
+
   const { isConnected: isRealtimeConnected } = useRealtime({
     onMessageNew: handleRealtimeNewMessage,
     onMessageStatus: handleRealtimeStatus,
     onMessageReaction: handleRealtimeReaction,
     onConversationUpdated: refreshConversationsSoon,
+    onCustomerConsent: ({ customerId, isOptedOut }) => {
+      setCustomerOptedOut(customerId, isOptedOut);
+      fetchChannels(); // refresh the channels' opted-out counts
+    },
     onChannelUpdated: () => {
       fetchChannels();
       refreshConversationsSoon();
@@ -669,50 +692,52 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // -------------------------------------------------------------
   // FILTERING
   // -------------------------------------------------------------
-  // A disconnected channel drops out of the Channels pane; don't leave the inbox filtered to it
+  // The inbox always lists one channel: the picked one while it's still listed, else the first connected channel
+  const selectedChannelId = useMemo(() => {
+    const ordered = channelsInPaneOrder(channels);
+    if (pickedChannelId !== null && ordered.some((c) => c.id === pickedChannelId)) return pickedChannelId;
+    return (ordered.find((c) => c.status !== 'disconnected') ?? ordered[0])?.id ?? null;
+  }, [channels, pickedChannelId]);
+  const selectedChannel = channels.find((c) => c.id === selectedChannelId) ?? null;
+
+  const closeConversation = useCallback(() => {
+    setInternalSelectedId('');
+    onSelectConversation?.('');
+  }, [onSelectConversation]);
+
+  // Picking another channel lists its contacts; a chat from a different channel closes
+  const handleSelectChannel = (id: number) => {
+    setPickedChannelId(id);
+    setListTab('all');
+    if (activeConv && activeConv.channel?.id !== id) closeConversation();
+  };
+
+  // A chat opened from elsewhere (Contacts page, top-bar search, new contact) lists its own channel
   useEffect(() => {
-    if (isLoadingChannels) return;
-    const stale =
-      (channelFilter.kind === 'channel' && !channels.some((c) => c.id === channelFilter.id)) ||
-      (channelFilter.kind === 'type' && !channels.some((c) => c.type === channelFilter.type));
-    if (stale) setChannelFilter({ kind: 'all' });
-  }, [channels, channelFilter, isLoadingChannels]);
+    const id = activeConv?.channel?.id;
+    if (id && id !== selectedChannelId && channels.some((c) => c.id === id)) setPickedChannelId(id);
+  }, [activeConv?.channel?.id, selectedChannelId, channels]);
 
-  const channelScoped = useMemo(
-    () =>
-      conversations.filter((conv) => {
-        if (channelFilter.kind === 'all') return true;
-        if (channelFilter.kind === 'type') return conversationChannelType(conv) === channelFilter.type;
-        return conv.channel?.id === channelFilter.id;
-      }),
-    [conversations, channelFilter]
-  );
-
-  const statusScoped = useMemo(
-    () =>
-      channelScoped.filter((conv) => {
-        const resolved = conv.status === 'RESOLVED' || conv.status === 'CLOSED';
-        if (statusFilter === 'open') return !resolved;
-        if (statusFilter === 'resolved') return resolved;
-        return true;
-      }),
-    [channelScoped, statusFilter]
-  );
+  const channelScoped = useMemo(() => {
+    // No channel at all (none connected yet): nothing to scope by
+    if (selectedChannelId === null) return isLoadingChannels ? [] : conversations;
+    return conversations.filter((conv) => conv.channel?.id === selectedChannelId);
+  }, [conversations, selectedChannelId, isLoadingChannels]);
 
   const tabCounts = useMemo<Record<ListTab, number>>(
     () => ({
-      all: statusScoped.length,
-      ai: statusScoped.filter((c) => c.handledBy === 'ai').length,
-      needs_human: statusScoped.filter((c) => c.needsHuman).length,
-      mine: statusScoped.filter((c) => dbUser?.id != null && c.assigneeId === dbUser.id).length,
+      all: channelScoped.length,
+      ai: channelScoped.filter((c) => c.handledBy === 'ai').length,
+      needs_human: channelScoped.filter((c) => c.needsHuman).length,
+      mine: channelScoped.filter((c) => dbUser?.id != null && c.assigneeId === dbUser.id).length,
     }),
-    [statusScoped, dbUser?.id]
+    [channelScoped, dbUser?.id]
   );
 
   const visibleConversations = useMemo(() => {
     const q = listSearch.trim().toLowerCase();
     const digits = q.replace(/\D/g, '');
-    return statusScoped.filter((conv) => {
+    return channelScoped.filter((conv) => {
       if (listTab === 'ai' && conv.handledBy !== 'ai') return false;
       if (listTab === 'needs_human' && !conv.needsHuman) return false;
       if (listTab === 'mine' && (dbUser?.id == null || conv.assigneeId !== dbUser.id)) return false;
@@ -728,36 +753,22 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         conv.ticketNumber.toLowerCase().includes(q)
       );
     });
-  }, [statusScoped, listTab, listSearch, unreadOnly, dbUser?.id]);
+  }, [channelScoped, listTab, listSearch, unreadOnly, dbUser?.id]);
 
-  // Top bar context chip, e.g. "Instagram · @noctylle"
+  // Top bar context chip, e.g. "WhatsApp · Aalmara Support · +15559447164" or "Instagram · @noctylle"
   const scope = useMemo(() => {
-    if (channelFilter.kind === 'all') return { type: null, label: 'All channels' };
-    if (channelFilter.kind === 'channel') {
-      const ch = channels.find((c) => c.id === channelFilter.id);
-      if (!ch) return { type: null, label: 'All channels' };
-      return {
-        type: ch.type,
-        label: `${CHANNEL_LABELS[ch.type] || ch.type} · ${ch.verified_name || formatPhone(ch.phoneNumber) || formatHandle(ch.handle)}`,
-      };
-    }
-    const items = channels.filter((c) => c.type === channelFilter.type);
-    const label = CHANNEL_LABELS[channelFilter.type] || channelFilter.type;
-    if (items.length === 1) {
-      const detail = formatHandle(items[0].handle) || formatPhone(items[0].phoneNumber) || items[0].verified_name;
-      return { type: channelFilter.type, label: detail ? `${label} · ${detail}` : label };
-    }
-    return { type: channelFilter.type, label: items.length > 1 ? `${label} · ${items.length} accounts` : label };
-  }, [channelFilter, channels]);
+    if (!selectedChannel) return { type: null, label: 'No channel connected' };
+    const id = formatPhone(selectedChannel.phoneNumber) || formatHandle(selectedChannel.handle);
+    const detail = [selectedChannel.verified_name, id].filter(Boolean).join(' · ');
+    const label = CHANNEL_LABELS[selectedChannel.type] || selectedChannel.type;
+    return { type: selectedChannel.type, label: detail ? `${label} · ${detail}` : label };
+  }, [selectedChannel]);
 
   // Number shown in the top bar: the selected WhatsApp number, else the first healthy one
   const primaryNumber = useMemo(() => {
-    if (channelFilter.kind === 'channel') {
-      const ch = channels.find((c) => c.id === channelFilter.id);
-      if (ch?.type === 'whatsapp' && ch.phoneNumber) return ch.phoneNumber;
-    }
+    if (selectedChannel?.type === 'whatsapp' && selectedChannel.phoneNumber) return selectedChannel.phoneNumber;
     return (whatsappChannels.find(isChannelHealthy) || whatsappChannels[0])?.phoneNumber ?? null;
-  }, [channelFilter, channels, whatsappChannels]);
+  }, [selectedChannel, whatsappChannels]);
 
   // WhatsApp number used to reply in the open conversation
   const conversationSendChannel = useMemo(() => {
@@ -833,7 +844,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   }, [activeMessages, activeConv]);
 
   // -------------------------------------------------------------
-  // CONVERSATION ACTIONS (AI mode, take over, resolve)
+  // CONVERSATION ACTIONS (AI mode, take over)
   // -------------------------------------------------------------
   const updateConversation = async (
     conv: InboxConversation,
@@ -841,6 +852,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     optimistic: Partial<InboxConversation>,
     successMessage?: string
   ) => {
+    if (!conv.hasConversation) return; // no ticket to update until the first message is sent
     setConversations((prev) => prev.map((c) => (c.id === conv.id ? { ...c, ...optimistic } : c)));
     try {
       await apiClient.patch(`/api/conversations/${conv.id}`, body);
@@ -873,21 +885,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     );
   };
 
-  const handleSetStatus = (status: 'RESOLVED' | 'OPEN') => {
-    if (!activeConv) return;
-    updateConversation(
-      activeConv,
-      { status },
-      { status, resolvedAt: status === 'RESOLVED' ? new Date().toISOString() : null },
-      status === 'RESOLVED' ? 'Conversation resolved' : 'Conversation reopened'
-    );
-  };
-
   // -------------------------------------------------------------
   // REACTIONS
   // -------------------------------------------------------------
   const handleToggleReaction = async (msgId: string, emojiToSet: string) => {
     if (!activeConv) return;
+    if (isCustomerOptedOut) {
+      gooeyToast.error(OPTED_OUT_MESSAGE);
+      return;
+    }
     if (activeChannelType === 'whatsapp' && isWindowExpired) {
       gooeyToast.error('Reactions can only be sent within 24 hours of the customer’s last message.');
       return;
@@ -946,6 +952,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // -------------------------------------------------------------
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
+      if (isCustomerOptedOut) {
+        gooeyToast.error(OPTED_OUT_MESSAGE);
+        e.target.value = '';
+        return;
+      }
       if (activeChannelType === 'whatsapp' && isWindowExpired) {
         gooeyToast.error('24-hour messaging window has expired. Attachments cannot be sent outside the window. Please send an approved template instead.');
         e.target.value = '';
@@ -987,6 +998,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
   const handleSend = async () => {
     if ((!inputMessage.trim() && !selectedFile) || !activeConv) return;
+
+    if (isCustomerOptedOut) {
+      gooeyToast.error(OPTED_OUT_MESSAGE);
+      return;
+    }
 
     if (activeChannelType === 'whatsapp' && isWindowExpired) {
       gooeyToast.error('24-hour messaging window has expired. You can only send pre-approved template messages.');
@@ -1149,6 +1165,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     ? null
     : isChannelDisconnected
       ? 'This WhatsApp number is disconnected. Messaging is paused.'
+      : isCustomerOptedOut
+        ? OPTED_OUT_MESSAGE
       : !canSendOnChannel
         ? `Sending on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet. Use "Insert as text" instead.`
         : activeChannelType === 'whatsapp' && isWindowExpired
@@ -1201,6 +1219,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       ? 'Message templates can only be sent on WhatsApp.'
       : isChannelDisconnected
         ? 'This WhatsApp number is disconnected. Reconnect it in Settings to send templates.'
+        : isCustomerOptedOut
+          ? OPTED_OUT_MESSAGE
         : !activeConv.customer.phone
           ? `${activeConv.customer.name} has no phone number.`
           : !conversationSendChannel
@@ -1326,8 +1346,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
   const openNewContactModal = (prefill = '') => {
     let initialChannelId = whatsappChannels[0]?.id ?? null;
-    if (channelFilter.kind === 'channel' && whatsappChannels.some((c) => c.id === channelFilter.id)) {
-      initialChannelId = channelFilter.id;
+    if (selectedChannelId !== null && whatsappChannels.some((c) => c.id === selectedChannelId)) {
+      initialChannelId = selectedChannelId;
     }
     setNewContactChannelId(initialChannelId);
     const digits = prefill.replace(/\D/g, '');
@@ -1369,10 +1389,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         setNewContactPhone('');
         // A conversation is created with the first message; show the contact right away
         await fetchConversations();
+        fetchChannels(); // the channel's contact count went up
         const id = convKeyFor(res.data.customer.id);
         setInternalSelectedId(id);
         onSelectConversation?.(id);
-        setChannelFilter({ kind: 'all' });
+        setPickedChannelId(targetChannelId ?? null);
         setListTab('all');
       }
     } catch (err) {
@@ -1551,15 +1572,27 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           ? 'rounded-xl px-3.5 py-2.5 bg-amber-50 border border-amber-200 text-slate-800'
           : 'rounded-xl px-3.5 py-2.5 bg-[#eef0fb] text-slate-800';
 
+    const daySeparator = showDaySeparator && (
+      <div className="flex items-center gap-3 py-1">
+        <div className="flex-1 h-px bg-slate-100" />
+        <span className="text-[11px] text-slate-400">{formatDayLabel(msg.createdAt)}</span>
+        <div className="flex-1 h-px bg-slate-100" />
+      </div>
+    );
+
+    // WhatsApp consent change (the consent log): a centered event instead of a bubble
+    if (msg.consent) {
+      return (
+        <React.Fragment key={msg.id}>
+          {daySeparator}
+          <ConsentEventRow change={msg.consent} />
+        </React.Fragment>
+      );
+    }
+
     return (
       <React.Fragment key={msg.id}>
-        {showDaySeparator && (
-          <div className="flex items-center gap-3 py-1">
-            <div className="flex-1 h-px bg-slate-100" />
-            <span className="text-[11px] text-slate-400">{formatDayLabel(msg.createdAt)}</span>
-            <div className="flex-1 h-px bg-slate-100" />
-          </div>
-        )}
+        {daySeparator}
         <div className={`group flex flex-col ${isCustomer ? 'items-start' : 'items-end'}`}>
           <div className={`max-w-[78%] text-[13px] leading-relaxed ${bubbleClass}`}>
             {label && (
@@ -1604,11 +1637,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const headerSubtitle = [threadLabel, channelDetail, languageName(activeConv?.language)].filter(Boolean).join(' · ');
   const suggestions = activeConv?.aiSuggestions ?? [];
   const isAiHandling = activeConv?.handledBy === 'ai';
-  const isResolved = activeConv?.status === 'RESOLVED' || activeConv?.status === 'CLOSED';
 
   const composerStatus = (() => {
     if (!activeConv) return null;
     if (composerMode === 'note') return { text: 'Notes are only visible to your team', className: 'text-amber-700' };
+    if (isCustomerOptedOut) {
+      return { text: 'Customer opted out · Messaging is blocked until they reply START', className: 'text-red-700 font-medium' };
+    }
     if (composerMode === 'template') {
       return {
         text: templateDraft
@@ -1638,11 +1673,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           channels={channels}
           conversations={conversations}
           isLoading={isLoadingChannels}
-          filter={channelFilter}
-          onFilterChange={(f) => {
-            setChannelFilter(f);
-            setListTab('all');
-          }}
+          selectedChannelId={selectedChannelId}
+          onSelectChannel={handleSelectChannel}
           onConnect={handleConnectChannel}
           onCollapse={() => setIsChannelsCollapsed(true)}
         />
@@ -1653,9 +1685,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           scope={scope}
           conversations={conversations}
           onOpenConversation={(conv) => {
-            setChannelFilter({ kind: 'all' });
+            if (conv.channel) setPickedChannelId(conv.channel.id);
             setListTab('all');
-            if (conv.status === 'RESOLVED' || conv.status === 'CLOSED') setStatusFilter('all');
             handleSelectConversation(conv);
           }}
           onNewContact={openNewContactModal}
@@ -1673,8 +1704,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
             onTabChange={setListTab}
             search={listSearch}
             onSearchChange={setListSearch}
-            statusFilter={statusFilter}
-            onStatusFilterChange={setStatusFilter}
             unreadOnly={unreadOnly}
             onUnreadOnlyChange={setUnreadOnly}
             selectedCustomerId={selectedCustomerId}
@@ -1723,11 +1752,14 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                             </span>
                           )
                         )}
+                        {activeChannelType === 'whatsapp' && <ConsentBadge isOptedOut={activeConv.customer.isOptedOut} />}
                       </div>
                       <p className="text-[11.5px] text-slate-500 truncate">{headerSubtitle}</p>
                     </div>
                   </div>
 
+                  {/* AI / human controls need a ticket; a new contact gets one with the first message */}
+                  {activeConv.hasConversation && (
                   <div className="flex items-center gap-1.5 shrink-0">
                     <div className="relative" ref={modeMenuRef}>
                       <button
@@ -1763,37 +1795,20 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                             </span>
                             {!isAiHandling && <Check className="w-4 h-4 text-[#3440a8]" />}
                           </button>
-                          <div className="my-1 border-t border-slate-100" />
-                          <button
-                            onClick={() => {
-                              setShowModeMenu(false);
-                              handleSetStatus(isResolved ? 'OPEN' : 'RESOLVED');
-                            }}
-                            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-slate-50 text-left cursor-pointer text-slate-700"
-                          >
-                            {isResolved ? <RotateCcw className="w-4 h-4" /> : <CircleCheck className="w-4 h-4" />}
-                            {isResolved ? 'Reopen conversation' : 'Mark as resolved'}
-                          </button>
                         </div>
                       )}
                     </div>
 
-                    {isAiHandling || activeConv.needsHuman || activeConv.assigneeId !== dbUser?.id ? (
+                    {(isAiHandling || activeConv.needsHuman || activeConv.assigneeId !== dbUser?.id) && (
                       <button
                         onClick={handleTakeOver}
                         className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-[13px] font-medium text-slate-900 hover:bg-slate-50 cursor-pointer whitespace-nowrap"
                       >
                         Take over
                       </button>
-                    ) : (
-                      <button
-                        onClick={() => handleSetStatus(isResolved ? 'OPEN' : 'RESOLVED')}
-                        className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-[13px] font-medium text-slate-900 hover:bg-slate-50 cursor-pointer whitespace-nowrap"
-                      >
-                        {isResolved ? 'Reopen' : 'Resolve'}
-                      </button>
                     )}
                   </div>
+                  )}
                 </div>
 
                 {isChannelDisconnected && (
@@ -1893,8 +1908,22 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
                 {/* Composer */}
                 <div className="border-t border-slate-200 px-4 pb-3 shrink-0">
+                  {/* Opted out: nothing can be sent until the customer replies START */}
+                  {isCustomerOptedOut && (
+                    <div className="mt-3 mb-2 p-2.5 rounded-lg bg-red-50/90 border border-red-200/90 flex items-start gap-2 text-xs">
+                      <ShieldOff className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-semibold text-red-900">Customer opted out of WhatsApp messages</p>
+                        <p className="text-red-800 text-[11.5px] mt-0.5 leading-relaxed">
+                          Replies, attachments, reactions and templates are blocked. Messaging unlocks automatically when the
+                          customer replies START. Internal notes still work.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   {/* WhatsApp 24h Window Warning Banner */}
-                  {activeChannelType === 'whatsapp' && isWindowExpired && (
+                  {activeChannelType === 'whatsapp' && isWindowExpired && !isCustomerOptedOut && (
                     <div className="mt-3 mb-2 p-2.5 rounded-lg bg-amber-50/90 border border-amber-200/90 flex items-start justify-between gap-3 text-xs">
                       <div className="flex items-start gap-2 min-w-0">
                         <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
@@ -1932,12 +1961,17 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                             }`}
                         >
                           <span>{mode}</span>
-                          {mode === 'template' && activeChannelType === 'whatsapp' && isWindowExpired && (
+                          {mode === 'template' && activeChannelType === 'whatsapp' && isWindowExpired && !isCustomerOptedOut && (
                             <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
                               Required
                             </span>
                           )}
-                          {mode === 'reply' && activeChannelType === 'whatsapp' && isWindowExpired && (
+                          {(mode === 'reply' || mode === 'template') && isCustomerOptedOut && (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-red-50 text-red-600">
+                              Opted out
+                            </span>
+                          )}
+                          {mode === 'reply' && activeChannelType === 'whatsapp' && isWindowExpired && !isCustomerOptedOut && (
                             <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-100 text-slate-500">
                               Locked
                             </span>
@@ -2052,6 +2086,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                               ? 'Add an internal note — only your team sees this…'
                               : isChannelDisconnected
                                 ? 'Messaging is paused because this number is disconnected. Reconnect in Settings to send messages.'
+                                : isCustomerOptedOut
+                                  ? 'This customer opted out. You can message them again after they reply START.'
                                 : activeChannelType === 'whatsapp' && isWindowExpired
                                   ? '24-hour window expired. Free-form text is disabled. Click the Template tab to send an approved template.'
                                   : selectedFile
@@ -2060,6 +2096,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                           }
                           disabled={
                             (isChannelDisconnected && composerMode === 'reply') ||
+                            (isCustomerOptedOut && composerMode === 'reply') ||
                             (activeChannelType === 'whatsapp' && isWindowExpired && composerMode === 'reply')
                           }
                           className="flex-1 resize-none bg-transparent text-[13px] leading-5 text-slate-800 placeholder-slate-400 focus:outline-none py-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -2113,7 +2150,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                         onClick={() => fileInputRef.current?.click()}
                         disabled={composerMode !== 'reply' || !canSendOnChannel || (activeChannelType === 'whatsapp' && isWindowExpired)}
                         title={
-                          activeChannelType === 'whatsapp' && isWindowExpired
+                          isCustomerOptedOut
+                            ? OPTED_OUT_MESSAGE
+                            : activeChannelType === 'whatsapp' && isWindowExpired
                             ? 'Attachments cannot be sent outside the 24-hour window'
                             : 'Attach file'
                         }
@@ -2125,9 +2164,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       <button
                         type="button"
                         onClick={() => setShowProductPicker(true)}
-                        disabled={composerMode !== 'reply' || !shopifyStore.isConnected || (activeChannelType === 'whatsapp' && isWindowExpired)}
+                        disabled={composerMode !== 'reply' || !shopifyStore.isConnected || isCustomerOptedOut || (activeChannelType === 'whatsapp' && isWindowExpired)}
                         title={
-                          activeChannelType === 'whatsapp' && isWindowExpired
+                          isCustomerOptedOut
+                            ? OPTED_OUT_MESSAGE
+                            : activeChannelType === 'whatsapp' && isWindowExpired
                             ? 'Products cannot be sent outside the 24-hour window'
                             : shopifyStore.isConnected ? 'Share a Shopify product' : 'Connect your Shopify store to share products'
                         }
@@ -2186,6 +2227,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
             onShareProduct={handleShareProduct}
             onInsertProductText={handleInsertProductText}
             shareDisabledReason={shareDisabledReason}
+            onConsentChange={setCustomerOptedOut}
           />
         </div >
       </div >

@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, varchar, text, boolean, timestamp, jsonb, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, varchar, text, boolean, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { and, eq, relations, sql } from "drizzle-orm";
 import { organizations } from "./organizations";
 import { customers } from "./customers";
@@ -6,6 +6,7 @@ import { channels } from "./channels";
 import { tickets } from "./tickets";
 import { users } from "./users";
 import { messageReactions } from "./message_reactions";
+import type { ConsentChange, ConsentStatus } from "../../../types/consent";
 
 export type SenderType = "customer" | "agent" | "ai" | "system";
 
@@ -31,6 +32,10 @@ export interface MessageMetadata {
   shopifyProduct?: SharedShopifyProduct; // Set when an agent shares a Shopify product
   /** Set on template messages; `headerFormat` tells the UI how to show the header media in `mediaUrl` */
   template?: { name: string; language: string; headerFormat?: "image" | "video" | "document" };
+  /** Set on the team-only system note that records a WhatsApp consent change (the consent log) */
+  consent?: ConsentChange;
+  /** Set on the automatic reply confirming an opt-out / opt-in to the customer */
+  consentConfirmation?: ConsentStatus;
   [key: string]: unknown;
 }
 
@@ -101,6 +106,9 @@ export const messages = pgTable(
     metaMessageId: varchar("meta_message_id", { length: 255 }), // e.g. "wamid.HBg..."
     repliedToId: integer("replied_to_id").references((): any => messages.id, { onDelete: "set null" }),
     metadata: jsonb("metadata").$type<MessageMetadata>(), // e.g. { aiAction: 'catalog lookup' }
+    // Set on an inbound message whose automation triggers haven't been evaluated yet; cleared once they have.
+    // The sweep replays messages left pending (process restarted before the deferred work ran).
+    automationPendingSince: timestamp("automation_pending_since", { withTimezone: true, mode: "date" }),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
   },
@@ -111,6 +119,13 @@ export const messages = pgTable(
     index("idx_messages_status").on(table.status),
     index("idx_messages_error_code").on(table.errorCode),
     index("idx_messages_meta_message_id").on(table.metaMessageId),
+    // Webhook dedupe enforced by the database: Meta retries / concurrent deliveries can't store a wamid twice
+    uniqueIndex("uq_messages_org_meta_id")
+      .on(table.organizationId, table.metaMessageId)
+      .where(sql`${table.metaMessageId} IS NOT NULL`),
+    index("idx_messages_automation_pending")
+      .on(table.automationPendingSince)
+      .where(sql`${table.automationPendingSince} IS NOT NULL`),
     index("idx_messages_channel_id").on(table.channelId),
     index("idx_messages_ticket_id").on(table.ticketId),
     index("idx_messages_replied_to_id").on(table.repliedToId),

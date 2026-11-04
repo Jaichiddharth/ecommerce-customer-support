@@ -10,11 +10,12 @@ import type {
   UpdateTemplatePayload,
 } from "../../meta/whatsapp/template.service";
 import { encryptToken, decryptToken } from "../../security/crypto";
-import { Channel, ChannelStatus, Message, MessageStatus, type MessageMetadata } from "../../db/schema";
+import { Channel, ChannelStatus, Message, MessageStatus, type Customer, type MessageMetadata } from "../../db/schema";
 import { publish } from "@/lib/realtime";
 import { AppError, toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { validateWhatsAppMedia } from "@/lib/media-limits";
+import { KeyedRateLimiter } from "@/lib/concurrency";
 import { TEMPLATE_MEDIA_RULES, isMediaHeader } from "@/types/templates";
 import {
   WHATSAPP_BUSINESS_VERTICALS,
@@ -27,8 +28,17 @@ const log = createLogger("WhatsAppService");
 /** WhatsApp's customer service window: free-form messages are allowed for 24h after the customer's last message */
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Outbound throughput per business phone number. Meta allows ~80 msg/s per number by default; staying
+ * below it makes a burst wait a few hundred ms here instead of failing with 130429 at Meta.
+ */
+const SEND_RATE_PER_SECOND = Math.max(1, Number(process.env.WHATSAPP_SEND_RATE_PER_SECOND) || 60);
+const SEND_RATE_MAX_WAIT_MS = 20_000;
+const sendLimiter: KeyedRateLimiter = ((globalThis as any).__waSendLimiter ??= new KeyedRateLimiter(SEND_RATE_PER_SECOND));
+
 // Channel id → WABA id confirmed to contain the channel's number (checked once per server process)
 const verifiedWabaIds = new Map<number, string>();
+
 
 export interface ConnectWhatsAppDTO {
   code: string;
@@ -670,6 +680,16 @@ export class WhatsAppService {
   }
 
   /**
+   * A customer who opted out (STOP) receives nothing from us: no replies, media, reactions or templates of any
+   * category, until they opt back in (START). The only exception is the automatic opt-out confirmation.
+   */
+  private assertNotOptedOut(recipient: { id: number; isOptedOut: boolean | null } | null, channelId: number) {
+    if (!recipient?.isOptedOut) return;
+    log.info("Blocked a message to an opted-out contact", { customerId: recipient.id, channelId });
+    throw new AppError("CONTACT_OPTED_OUT", { details: { customerId: recipient.id }, expected: true });
+  }
+
+  /**
    * Send WhatsApp message (Text, Template, or Media with Caption) to a recipient using Meta Cloud API
    */
   async sendMessage(params: {
@@ -678,6 +698,10 @@ export class WhatsAppService {
     phoneNumberId?: string;
     senderId?: number | null;
     senderName?: string | null;
+    /** 'system' for automatic messages (e.g. opt-out confirmations): they don't hand the conversation to a human */
+    senderType?: "agent" | "system";
+    /** Only for the automatic opt-out confirmation: lets that one message reach a customer who just opted out */
+    allowOptedOut?: boolean;
     customerId?: number;
     repliedToId?: number | null;
     to: string;
@@ -704,9 +728,14 @@ export class WhatsAppService {
     languageCode?: string;
     components?: Array<Record<string, unknown>>;
     metadata?: MessageMetadata | null;
+    /**
+     * Already-loaded rows the caller holds (automation engine, Flow sends), so the send path doesn't
+     * read them again. `contact` must be the row for `customerId` in this organization.
+     */
+    preloaded?: { contact?: Customer; connections?: Channel[] };
   }) {
     const orgId = params.organizationId;
-    const connections = await this.getConnections(orgId);
+    const connections = params.preloaded?.connections ?? (await this.getConnections(orgId));
 
     if (!connections || connections.length === 0) {
       throw new AppError("WHATSAPP_NOT_CONNECTED", { expected: true });
@@ -714,7 +743,11 @@ export class WhatsAppService {
 
     // A contact belongs to its channel: hidden once that channel is disconnected, and always
     // replied to from its own number rather than whichever channel happens to be first
-    const contact = params.customerId ? await customerService.requireVisible(params.customerId, orgId) : null;
+    const preloadedContact =
+      params.preloaded?.contact && params.preloaded.contact.id === params.customerId && params.preloaded.contact.organizationId === orgId
+        ? params.preloaded.contact
+        : null;
+    const contact = params.customerId ? preloadedContact ?? (await customerService.requireVisible(params.customerId, orgId)) : null;
 
     // Select channel (by channelId, phoneNumberId, the contact's own channel, or first active)
     let targetChannel = null;
@@ -778,13 +811,14 @@ export class WhatsAppService {
       throw AppError.validation("A template can't be sent with an attachment; its header media is part of the template.", "type");
     }
     const isTemplate = params.type === "template" && Boolean(params.templateName);
+    // The 24h window and consent are per customer AND per business number: judge them on the number we're sending from
+    const recipient =
+      contact && (!contact.channelId || contact.channelId === targetChannel.id)
+        ? contact
+        : await customerRepository.findByPhone(orgId, cleanTo, targetChannel.id);
+    if (!params.allowOptedOut) this.assertNotOptedOut(recipient, targetChannel.id);
     if (!isTemplate) {
-      // The window is per customer AND per business number: judge it on the number we're sending from
-      const windowCustomer =
-        contact && (!contact.channelId || contact.channelId === targetChannel.id)
-          ? contact
-          : await customerRepository.findByPhone(orgId, cleanTo, targetChannel.id);
-      await this.assertServiceWindowOpen(windowCustomer?.id ?? null, orgId, cleanTo);
+      await this.assertServiceWindowOpen(recipient?.id ?? null, orgId, cleanTo);
     }
 
     // Resolve media type from mimeType or explicit type
@@ -829,6 +863,14 @@ export class WhatsAppService {
       ...(params.templateName ? { templateName: params.templateName } : {}),
       ...(isMediaMessage ? { filename: params.filename, mimeType: params.mimeType } : {}),
     });
+
+    if (!(await sendLimiter.acquire(targetChannel.metaPhoneNumberId, SEND_RATE_MAX_WAIT_MS))) {
+      throw new AppError("RATE_LIMITED", {
+        message: "Too many WhatsApp messages are being sent from this number right now. Please try again shortly.",
+        details: sendContext,
+        expected: true,
+      });
+    }
 
     let metaRes: any = null;
     let storedMediaUrl: string | null = null;
@@ -995,7 +1037,7 @@ export class WhatsAppService {
           organizationId: orgId,
           customerId: targetCustomer.id,
           channelId: targetChannel.id,
-          senderType: 'agent',
+          senderType: params.senderType ?? 'agent',
           senderId: params.senderId ?? null,
           receiverId: targetCustomer.id,
           textContent: finalContent,
@@ -1074,7 +1116,9 @@ export class WhatsAppService {
     if (!targetMessage) {
       throw AppError.notFound("Message not found.");
     }
-    await customerService.requireVisible(targetMessage.customerId, orgId);
+    const reactionCustomer = await customerService.requireVisible(targetMessage.customerId, orgId);
+    // A reaction is a message too: none reach a customer who opted out
+    this.assertNotOptedOut(reactionCustomer, targetMessage.channelId ?? 0);
     const connections = await this.getConnections(orgId);
     const targetMetaId = params.targetMetaMessageId || targetMessage.metaMessageId;
     const resolvedCustomerId = targetMessage.customerId;

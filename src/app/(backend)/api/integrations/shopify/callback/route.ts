@@ -20,9 +20,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   } catch {
     // Not configured: completeInstall reports it below
   }
-  const target = new URL("/", origin);
-  target.searchParams.set("tab", "integrations");
-  target.searchParams.set("integration", "shopify");
+  const target = new URL("/integrations/shopify", origin);
 
   try {
     const store = await shopifyService.completeInstall(req.nextUrl.searchParams, req.cookies.get(OAUTH_NONCE_COOKIE)?.value);

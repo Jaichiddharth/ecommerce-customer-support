@@ -1,8 +1,12 @@
 import type { ChannelType } from '@/types';
 
-/** Row returned by GET /api/conversations */
+/**
+ * Row returned by GET /api/conversations. Contacts without a ticket are listed too: `hasConversation` is false,
+ * `id` is -customerId (not a ticket, so it can't be updated) and the first message sent creates the ticket.
+ */
 export interface InboxConversation {
   id: number;
+  hasConversation: boolean;
   ticketNumber: string;
   status: string | null;
   handledBy: 'ai' | 'human' | string;
@@ -39,6 +43,8 @@ export interface InboxConversation {
     language: string | null;
     tags: string[] | null;
     channelId: number | null;
+    /** WhatsApp marketing consent for this contact on its number (opted out = no marketing templates) */
+    isOptedOut?: boolean;
     createdAt: string;
   };
   channel: {
@@ -63,16 +69,21 @@ export interface InboxChannel {
   tokenExpiresAt?: string | null;
   lastError?: string | null;
   isActive?: boolean;
+  /** Contacts on this channel, with or without a conversation */
+  contactCount?: number;
+  /** Contacts on this channel who opted out (STOP) */
+  optedOutCount?: number;
 }
 
 export type ListTab = 'all' | 'ai' | 'needs_human' | 'mine';
 
-/** Channel folder selected in the Channels pane: 'all', a channel type, or a single channel */
-export type ChannelFilter = { kind: 'all' } | { kind: 'type'; type: string } | { kind: 'channel'; id: number };
-
 /** Channel types the inbox knows how to show; only WhatsApp can send today */
 export const CHANNEL_TYPES: ChannelType[] = ['whatsapp', 'instagram', 'messenger', 'email'];
 export const SENDABLE_CHANNEL_TYPES = ['whatsapp'];
+
+/** Channels in the order the Channels pane lists them: by type, then as the API returned them */
+export const channelsInPaneOrder = <T extends { type: string }>(channels: T[]): T[] =>
+  CHANNEL_TYPES.flatMap((type) => channels.filter((c) => c.type === type));
 
 export const CHANNEL_LABELS: Record<string, string> = {
   whatsapp: 'WhatsApp',
@@ -159,14 +170,6 @@ export function formatListTime(iso?: string | null): string {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-export function formatDuration(ms: number): string {
-  const minutes = Math.max(1, Math.round(ms / 60000));
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
-  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
-}
-
 export function confidenceLabel(value?: number | null): string {
   if (value === null || value === undefined) return '—';
   const level = value >= 0.75 ? 'High' : value >= 0.5 ? 'Medium' : 'Low';
@@ -175,6 +178,7 @@ export function confidenceLabel(value?: number | null): string {
 
 /** Preview line for the conversation list */
 export function lastMessagePreview(conv: InboxConversation): string {
+  if (!conv.hasConversation && !conv.lastMessage && !conv.lastMessageText) return 'No conversation yet';
   const text = conv.lastMessageText?.trim();
   if (text && !/^\[(Image|Video|Audio|Document|Voice|Sticker)\](\s*(No caption|attachment)?)?$/i.test(text)) {
     return text;
