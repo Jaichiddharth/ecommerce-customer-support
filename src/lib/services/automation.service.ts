@@ -1,41 +1,30 @@
-import { automationRepository, whatsappFlowRepository, type AutomationRunStats } from "../db/repositories";
-import { SENDABLE_VERSION_STATUSES, type Automation, type AutomationGraph, type WaFlowVersionStatusValue } from "../db/schema";
+import {
+  automationRepository,
+  whatsappFlowRepository,
+  type AutomationListingRow,
+  type AutomationSortKey,
+  type RunSortKey,
+} from "../db/repositories";
+import { toListResult, type ListQuery } from "@/lib/api/list-query";
+import type { ListResult } from "@/lib/listing";
+import { SENDABLE_VERSION_STATUSES, type AutomationGraph, type WaFlowVersionStatusValue } from "../db/schema";
 import { AppError } from "@/lib/errors";
 import { SEND_FLOW_NODE, WAIT_FLOW_NODE } from "@/lib/automation/engine";
 import { SENDABLE_TEMPLATE_STATUS } from "./whatsapp-flows/template.service";
 
 const TRIGGER_TYPES = new Set(["trigger_incoming_message", "trigger_keyword"]);
 
-/** Listing status. Failed = switched on, but its most recent run failed. */
-export type AutomationListStatus = "draft" | "active" | "paused" | "failed" | "archived";
-export type AutomationTriggerType = "incoming_message" | "keyword" | "conversation_event" | "none";
+/** Listing status (derived in SQL). Failed = switched on, but its most recent run failed. */
+export const AUTOMATION_LIST_STATUSES = ["draft", "active", "paused", "failed", "archived"] as const;
+export const AUTOMATION_TRIGGER_TYPES = ["incoming_message", "keyword", "conversation_event", "none"] as const;
+/** Execution Status filter: status of the most recent run, or "never" (no runs yet). */
+export const AUTOMATION_EXECUTION_FILTERS = ["completed", "failed", "waiting", "running", "timed_out", "cancelled", "never"] as const;
 
-export interface AutomationListParams {
+export interface AutomationListParams extends ListQuery<AutomationSortKey> {
   q?: string;
   status?: string;
   trigger?: string;
-  /** Last modified: 24h | 7d | 30d | older */
-  modified?: string;
-  /** Last execution status, or "never" */
   execution?: string;
-  page?: number;
-  pageSize?: number;
-}
-
-const MODIFIED_WINDOWS: Record<string, number> = { "24h": 864e5, "7d": 7 * 864e5, "30d": 30 * 864e5 };
-
-export function triggerTypeOf(graph: AutomationGraph): AutomationTriggerType {
-  const t = graph?.nodes?.find((n) => String(n.data?.type ?? "").startsWith("trigger_"))?.data.type;
-  if (t === "trigger_incoming_message") return "incoming_message";
-  if (t === "trigger_keyword") return "keyword";
-  if (t === "trigger_conversation_event") return "conversation_event";
-  return "none";
-}
-
-export function listStatusOf(a: Automation, stats?: AutomationRunStats): AutomationListStatus {
-  if (a.archivedAt) return "archived";
-  if (a.isActive) return stats?.lastRunStatus === "failed" ? "failed" : "active";
-  return a.activatedAt ? "paused" : "draft";
 }
 
 const cleanDescription = (d: unknown) => (typeof d === "string" && d.trim() ? d.trim().slice(0, 500) : null);
@@ -71,62 +60,38 @@ export class AutomationService {
   }
 
   /**
-   * Listing with derived status, trigger, node count and run statistics, filtered and paginated.
-   * Filters on derived values run in memory over the organization's automations (a workspace has
-   * tens to hundreds of them); run statistics come from one aggregate query.
+   * Listing with derived status, trigger, node count and run statistics. Filtering (incl. the
+   * last-modified date range), sorting, counting and pagination all run in the database.
    */
-  async listing(organizationId: number, params: AutomationListParams) {
-    const pageSize = Math.min(Math.max(params.pageSize ?? 20, 1), 100);
-    const page = Math.max(params.page ?? 1, 1);
-    const [all, stats] = await Promise.all([automationRepository.list(organizationId), automationRepository.runStats(organizationId)]);
-
-    const q = params.q?.trim().toLowerCase();
-    const window = params.modified ? MODIFIED_WINDOWS[params.modified] : undefined;
-    const now = Date.now();
-
-    const items = all
-      .map((a) => {
-        const s = stats.get(a.id);
-        return {
-          id: a.id,
-          name: a.name,
-          description: a.description,
-          status: listStatusOf(a, s),
-          isActive: a.isActive,
-          triggerType: triggerTypeOf(a.graph),
-          nodeCount: a.graph?.nodes?.length ?? 0,
-          totalRuns: s?.totalRuns ?? 0,
-          lastRunStatus: s?.lastRunStatus ?? null,
-          lastRunAt: s?.lastRunAt ?? null,
-          activatedAt: a.activatedAt,
-          archivedAt: a.archivedAt,
-          createdAt: a.createdAt,
-          updatedAt: a.updatedAt,
-        };
-      })
-      .filter((a) => {
-        if (q && !a.name.toLowerCase().includes(q)) return false;
-        if (params.status ? a.status !== params.status : a.status === "archived") return false;
-        if (params.trigger && a.triggerType !== params.trigger) return false;
-        if (params.modified === "older" && now - a.updatedAt.getTime() <= MODIFIED_WINDOWS["30d"]) return false;
-        if (window !== undefined && now - a.updatedAt.getTime() > window) return false;
-        if (params.execution === "never" ? a.totalRuns > 0 : params.execution && a.lastRunStatus !== params.execution) return false;
-        return true;
-      });
-
-    return { automations: items.slice((page - 1) * pageSize, page * pageSize), total: items.length, page, pageSize };
+  async listing(organizationId: number, params: AutomationListParams): Promise<ListResult<AutomationListingRow>> {
+    const { rows, total } = await automationRepository.listingPage(organizationId, {
+      q: params.q?.trim() || undefined,
+      status: params.status,
+      trigger: params.trigger,
+      execution: params.execution,
+      fromDate: params.fromDate,
+      toDate: params.toDate,
+      sortBy: params.sortBy,
+      sortOrder: params.sortOrder,
+      limit: params.limit,
+      offset: params.offset,
+    });
+    return toListResult(rows, total, params);
   }
 
-  async runs(organizationId: number, id: number, params: { status?: string; page?: number; pageSize?: number }) {
+  /** Execution history: filtered (status, started date), sorted, counted and paginated in the database. */
+  async runs(organizationId: number, id: number, params: ListQuery<RunSortKey> & { status?: string }) {
     await this.require(organizationId, id);
-    const pageSize = Math.min(Math.max(params.pageSize ?? 20, 1), 100);
-    const page = Math.max(params.page ?? 1, 1);
     const { rows, total } = await automationRepository.listRuns(organizationId, id, {
-      status: params.status || undefined,
-      limit: pageSize,
-      offset: (page - 1) * pageSize,
+      status: params.status,
+      fromDate: params.fromDate,
+      toDate: params.toDate,
+      sortBy: params.sortBy,
+      sortOrder: params.sortOrder,
+      limit: params.limit,
+      offset: params.offset,
     });
-    return { runs: rows, total, page, pageSize };
+    return toListResult(rows, total, params);
   }
 
   async run(organizationId: number, automationId: number, runId: number) {

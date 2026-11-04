@@ -1,5 +1,8 @@
 import { db } from "..";
-import { and, count, desc, eq, ilike, inArray, isNull, lte, max, ne, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, isNull, lte, max, ne, or, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import type { SortOrder } from "@/lib/listing";
+import { containsPattern, dateRangeConditions, orderBySql } from "./list-helpers";
 import {
   customers,
   whatsappFlows,
@@ -29,9 +32,76 @@ export interface FlowListFilter {
   offset: number;
 }
 
+export const FLOW_SORT_KEYS = ["name", "status", "screens", "templates", "createdAt", "updatedAt"] as const;
+export type FlowSortKey = (typeof FLOW_SORT_KEYS)[number];
+
+export interface FlowListingFilter {
+  q?: string;
+  /** Empty = every status except archived. */
+  status?: string;
+  /** Created-at range. */
+  fromDate?: Date;
+  toDate?: Date;
+  sortBy: FlowSortKey;
+  sortOrder: SortOrder;
+  limit: number;
+  offset: number;
+}
+
+export interface FlowListingRow {
+  id: number;
+  name: string;
+  categories: string[];
+  jsonVersion: string;
+  status: string;
+  channelId: number | null;
+  screensCount: number;
+  hasUnpublishedChanges: boolean;
+  publishedVersionId: number | null;
+  archivedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  metaFlowId: string | null;
+  publishedVersionNumber: number | null;
+  latestVersionNumber: number | null;
+  templatesCount: number;
+  submissionsCount: number;
+}
+
+export const TEMPLATE_SORT_KEYS = ["name", "status", "flow", "button", "createdAt", "updatedAt"] as const;
+export type TemplateSortKey = (typeof TEMPLATE_SORT_KEYS)[number];
+
+export interface TemplateListingFilter {
+  flowId?: number;
+  status?: string;
+  /** Created-at range. */
+  fromDate?: Date;
+  toDate?: Date;
+  sortBy: TemplateSortKey;
+  sortOrder: SortOrder;
+  limit: number;
+  offset: number;
+}
+
+/** Template listing row: the template's own fields (without the Meta components payload) and its Flow / version. */
+export type TemplateListingRow = Omit<WhatsAppTemplateRow, "components" | "flowButtonIndex" | "organizationId" | "createdById"> & {
+  flowName: string | null;
+  versionNumber: number | null;
+  versionStatus: string | null;
+  metaFlowId: string | null;
+};
+
+export const SUBMISSION_SORT_KEYS = ["submittedAt", "customer", "flow", "status"] as const;
+export type SubmissionSortKey = (typeof SUBMISSION_SORT_KEYS)[number];
+
 export interface SubmissionListFilter {
   flowId?: number;
   status?: string;
+  /** Submitted-at range. */
+  fromDate?: Date;
+  toDate?: Date;
+  sortBy?: SubmissionSortKey;
+  sortOrder?: SortOrder;
   limit: number;
   offset: number;
 }
@@ -62,6 +132,87 @@ export class WhatsAppFlowRepository {
       db.select({ total: count() }).from(whatsappFlows).where(where),
     ]);
     return { rows, total };
+  }
+
+  /**
+   * Flow listing page: only the columns the listing shows, with screen count, version numbers,
+   * Meta Flow ID and template / submission counts computed in the same query. Filter, sort, count and
+   * pagination run in the database.
+   */
+  async listFlowsPage(organizationId: number, f: FlowListingFilter): Promise<{ rows: FlowListingRow[]; total: number }> {
+    const pv = alias(whatsappFlowVersions, "pv");
+    const screens = sql<number>`coalesce(jsonb_array_length(case when jsonb_typeof(${whatsappFlows.draft}->'screens') = 'array' then ${whatsappFlows.draft}->'screens' end), 0)`;
+    const templatesCount = sql<number>`(select count(*)::int from ${whatsappTemplates} t where t.flow_id = ${whatsappFlows.id} and t.organization_id = ${organizationId})`;
+    const submissionsCount = sql<number>`(select count(*)::int from ${whatsappFlowSubmissions} s where s.flow_id = ${whatsappFlows.id} and s.organization_id = ${organizationId})`;
+    const latestVersionNumber = sql<number | null>`(select v.version_number from ${whatsappFlowVersions} v where v.flow_id = ${whatsappFlows.id} order by v.version_number desc limit 1)`;
+    const latestMetaFlowId = sql<string | null>`(select v.meta_flow_id from ${whatsappFlowVersions} v where v.flow_id = ${whatsappFlows.id} order by v.version_number desc limit 1)`;
+
+    const sortColumns: Record<FlowSortKey, SQL> = {
+      name: sql`lower(${whatsappFlows.name})`,
+      status: sql`${whatsappFlows.status}`,
+      screens,
+      templates: templatesCount,
+      createdAt: sql`${whatsappFlows.createdAt}`,
+      updatedAt: sql`${whatsappFlows.updatedAt}`,
+    };
+
+    const conditions = [eq(whatsappFlows.organizationId, organizationId), ...dateRangeConditions(whatsappFlows.createdAt, f.fromDate, f.toDate)];
+    if (f.q) conditions.push(ilike(whatsappFlows.name, containsPattern(f.q)));
+    conditions.push(f.status ? eq(whatsappFlows.status, f.status) : isNull(whatsappFlows.archivedAt));
+    const where = and(...conditions);
+
+    const [rows, [{ total }]] = await Promise.all([
+      db
+        .select({
+          id: whatsappFlows.id,
+          name: whatsappFlows.name,
+          categories: whatsappFlows.categories,
+          jsonVersion: whatsappFlows.jsonVersion,
+          status: whatsappFlows.status,
+          channelId: whatsappFlows.channelId,
+          screensCount: screens,
+          hasUnpublishedChanges: whatsappFlows.hasUnpublishedChanges,
+          publishedVersionId: whatsappFlows.publishedVersionId,
+          archivedAt: whatsappFlows.archivedAt,
+          createdAt: whatsappFlows.createdAt,
+          updatedAt: whatsappFlows.updatedAt,
+          publishedMetaFlowId: pv.metaFlowId,
+          publishedVersionNumber: pv.versionNumber,
+          latestMetaFlowId,
+          latestVersionNumber,
+          templatesCount,
+          submissionsCount,
+        })
+        .from(whatsappFlows)
+        .leftJoin(pv, and(eq(pv.id, whatsappFlows.publishedVersionId), eq(pv.organizationId, organizationId)))
+        .where(where)
+        .orderBy(...orderBySql(sortColumns, f.sortBy, f.sortOrder, whatsappFlows.id))
+        .limit(f.limit)
+        .offset(f.offset),
+      db.select({ total: count() }).from(whatsappFlows).where(where),
+    ]);
+
+    return {
+      rows: rows.map(({ publishedMetaFlowId, latestMetaFlowId: latestMeta, ...r }) => ({
+        ...r,
+        screensCount: Number(r.screensCount),
+        templatesCount: Number(r.templatesCount),
+        submissionsCount: Number(r.submissionsCount),
+        latestVersionNumber: r.latestVersionNumber === null ? null : Number(r.latestVersionNumber),
+        metaFlowId: publishedMetaFlowId ?? latestMeta ?? null,
+      })),
+      total,
+    };
+  }
+
+  /** Every Flow of the organization (incl. archived) as id / name / status, for filter pickers. */
+  async listFlowOptions(organizationId: number, limit = 500): Promise<{ id: number; name: string; status: string }[]> {
+    return db
+      .select({ id: whatsappFlows.id, name: whatsappFlows.name, status: whatsappFlows.status })
+      .from(whatsappFlows)
+      .where(eq(whatsappFlows.organizationId, organizationId))
+      .orderBy(sql`lower(${whatsappFlows.name})`, whatsappFlows.id)
+      .limit(limit);
   }
 
   async findFlow(id: number, organizationId: number): Promise<WhatsAppFlowRow | null> {
@@ -162,6 +313,63 @@ export class WhatsAppFlowRepository {
     if (filter.flowId) conditions.push(eq(whatsappTemplates.flowId, filter.flowId));
     if (filter.status) conditions.push(eq(whatsappTemplates.status, filter.status));
     return db.select().from(whatsappTemplates).where(and(...conditions)).orderBy(desc(whatsappTemplates.updatedAt));
+  }
+
+  /** Template listing page with its Flow name and version, filtered / sorted / counted / paginated in the database. */
+  async listTemplatesPage(organizationId: number, f: TemplateListingFilter): Promise<{ rows: TemplateListingRow[]; total: number }> {
+    const sortColumns: Record<TemplateSortKey, SQL> = {
+      name: sql`lower(${whatsappTemplates.name})`,
+      status: sql`${whatsappTemplates.status}`,
+      flow: sql`lower(${whatsappFlows.name})`,
+      button: sql`lower(${whatsappTemplates.flowButton}->>'text')`,
+      createdAt: sql`${whatsappTemplates.createdAt}`,
+      updatedAt: sql`${whatsappTemplates.updatedAt}`,
+    };
+    const conditions = [eq(whatsappTemplates.organizationId, organizationId), ...dateRangeConditions(whatsappTemplates.createdAt, f.fromDate, f.toDate)];
+    if (f.flowId) conditions.push(eq(whatsappTemplates.flowId, f.flowId));
+    if (f.status) conditions.push(eq(whatsappTemplates.status, f.status));
+    const where = and(...conditions);
+
+    const [rows, [{ total }]] = await Promise.all([
+      db
+        .select({
+          id: whatsappTemplates.id,
+          channelId: whatsappTemplates.channelId,
+          wabaId: whatsappTemplates.wabaId,
+          metaTemplateId: whatsappTemplates.metaTemplateId,
+          name: whatsappTemplates.name,
+          language: whatsappTemplates.language,
+          category: whatsappTemplates.category,
+          status: whatsappTemplates.status,
+          rejectionReason: whatsappTemplates.rejectionReason,
+          bodyText: whatsappTemplates.bodyText,
+          headerText: whatsappTemplates.headerText,
+          footerText: whatsappTemplates.footerText,
+          flowId: whatsappTemplates.flowId,
+          flowVersionId: whatsappTemplates.flowVersionId,
+          flowButton: whatsappTemplates.flowButton,
+          lastError: whatsappTemplates.lastError,
+          lastSyncedAt: whatsappTemplates.lastSyncedAt,
+          createdAt: whatsappTemplates.createdAt,
+          updatedAt: whatsappTemplates.updatedAt,
+          flowName: whatsappFlows.name,
+          versionNumber: whatsappFlowVersions.versionNumber,
+          versionStatus: whatsappFlowVersions.status,
+          metaFlowId: whatsappFlowVersions.metaFlowId,
+        })
+        .from(whatsappTemplates)
+        .leftJoin(whatsappFlows, and(eq(whatsappFlows.id, whatsappTemplates.flowId), eq(whatsappFlows.organizationId, organizationId)))
+        .leftJoin(
+          whatsappFlowVersions,
+          and(eq(whatsappFlowVersions.id, whatsappTemplates.flowVersionId), eq(whatsappFlowVersions.organizationId, organizationId))
+        )
+        .where(where)
+        .orderBy(...orderBySql(sortColumns, f.sortBy, f.sortOrder, whatsappTemplates.id))
+        .limit(f.limit)
+        .offset(f.offset),
+      db.select({ total: count() }).from(whatsappTemplates).where(where),
+    ]);
+    return { rows, total };
   }
 
   async countTemplatesByFlow(organizationId: number, flowIds: number[]): Promise<Map<number, number>> {
@@ -319,10 +527,19 @@ export class WhatsAppFlowRepository {
   }
 
   async listSubmissions(organizationId: number, filter: SubmissionListFilter): Promise<{ rows: SubmissionWithRefs[]; total: number }> {
-    const conditions = [eq(whatsappFlowSubmissions.organizationId, organizationId)];
+    const conditions = [
+      eq(whatsappFlowSubmissions.organizationId, organizationId),
+      ...dateRangeConditions(whatsappFlowSubmissions.submittedAt, filter.fromDate, filter.toDate),
+    ];
     if (filter.flowId) conditions.push(eq(whatsappFlowSubmissions.flowId, filter.flowId));
     if (filter.status) conditions.push(eq(whatsappFlowSubmissions.processingStatus, filter.status));
     const where = and(...conditions);
+    const sortColumns: Record<SubmissionSortKey, SQL> = {
+      submittedAt: sql`${whatsappFlowSubmissions.submittedAt}`,
+      customer: sql`lower(${customers.name})`,
+      flow: sql`lower(${whatsappFlows.name})`,
+      status: sql`${whatsappFlowSubmissions.processingStatus}`,
+    };
 
     const [rows, [{ total }]] = await Promise.all([
       db
@@ -343,7 +560,7 @@ export class WhatsAppFlowRepository {
         .leftJoin(whatsappFlowExecutions, eq(whatsappFlowExecutions.id, whatsappFlowSubmissions.executionId))
         .leftJoin(whatsappTemplates, eq(whatsappTemplates.id, whatsappFlowExecutions.templateId))
         .where(where)
-        .orderBy(desc(whatsappFlowSubmissions.submittedAt))
+        .orderBy(...orderBySql(sortColumns, filter.sortBy ?? "submittedAt", filter.sortOrder ?? "desc", whatsappFlowSubmissions.id))
         .limit(filter.limit)
         .offset(filter.offset),
       db.select({ total: count() }).from(whatsappFlowSubmissions).where(where),

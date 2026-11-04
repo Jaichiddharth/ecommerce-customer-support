@@ -1,5 +1,6 @@
 import apiClient from '@/lib/api/client';
 import type { WaFlow } from '@/lib/whatsapp-flows/wa-flow-types';
+import { readListResult, type ListResult } from '@/lib/listing';
 
 // ─── Response shapes (mirror lib/services/whatsapp-flows) ────────────────────
 
@@ -124,19 +125,26 @@ export interface Recipient {
   channelName: string | null;
 }
 
-export interface Paged<T> {
-  total: number;
-  page: number;
-  pageSize: number;
-  items: T[];
+export interface FlowOption {
+  id: number;
+  name: string;
+  status: FlowStatus;
 }
+
+/** Listing query sent to the server-side listing endpoints (page, limit, sortBy, sortOrder and filters). */
+export type ListQuery = Record<string, string | number>;
 
 // ─── Calls ───────────────────────────────────────────────────────────────────
 
 export const flowsApi = {
-  async list(params: { q?: string; status?: string; page?: number; pageSize?: number }): Promise<Paged<FlowListItem>> {
+  /** Listing: q, status, fromDate / toDate (created at). */
+  async list(params: ListQuery): Promise<ListResult<FlowListItem>> {
     const { data } = await apiClient.get('/api/whatsapp-flows', { params });
-    return { total: data.total, page: data.page, pageSize: data.pageSize, items: data.flows };
+    return readListResult<FlowListItem>(data, 'flows');
+  },
+  /** Every Flow (incl. archived) as id / name / status, for filter pickers. */
+  async options(): Promise<FlowOption[]> {
+    return (await apiClient.get('/api/whatsapp-flows', { params: { options: 1 } })).data.flows;
   },
   async published(): Promise<PublishedFlowOption[]> {
     const { data } = await apiClient.get('/api/whatsapp-flows', { params: { published: 1 } });
@@ -174,15 +182,22 @@ export const flowsApi = {
   async recipients(q: string): Promise<Recipient[]> {
     return (await apiClient.get('/api/whatsapp-flows/recipients', { params: { q } })).data.recipients;
   },
-  async submissions(params: { flowId?: number; status?: string; page?: number; pageSize?: number }): Promise<Paged<FlowSubmission>> {
+  /** Listing: flowId, status, fromDate / toDate (submitted at). */
+  async submissions(params: ListQuery): Promise<ListResult<FlowSubmission>> {
     const { data } = await apiClient.get('/api/whatsapp-flows/submissions', { params });
-    return { total: data.total, page: data.page, pageSize: data.pageSize, items: data.submissions };
+    return readListResult<FlowSubmission>(data, 'submissions');
   },
 };
 
 export const templatesApi = {
+  /** Every matching template, unpaginated (pickers). */
   async list(params: { flowId?: number; status?: string } = {}): Promise<WaTemplate[]> {
     return (await apiClient.get('/api/whatsapp-templates', { params })).data.templates;
+  },
+  /** Paginated listing: flowId, status, fromDate / toDate (created at). */
+  async listing(params: ListQuery): Promise<ListResult<WaTemplate>> {
+    const { data } = await apiClient.get('/api/whatsapp-templates', { params });
+    return readListResult<WaTemplate>(data, 'templates');
   },
   async create(body: {
     name: string;

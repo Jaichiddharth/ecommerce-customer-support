@@ -1,4 +1,5 @@
-import { whatsappFlowRepository } from "../../db/repositories";
+import { whatsappFlowRepository, type TemplateSortKey } from "../../db/repositories";
+import { toListResult, type ListQuery } from "@/lib/api/list-query";
 import {
   SENDABLE_VERSION_STATUSES,
   type WaFlowVersionStatusValue,
@@ -75,6 +76,22 @@ function text(value: unknown, field: string, label: string, max: number, require
 }
 
 export class WhatsAppTemplateService {
+  /** Paginated listing (Flow templates page): filtered, sorted, counted and paginated in the database. */
+  async listing(organizationId: number, params: ListQuery<TemplateSortKey> & { flowId?: number; status?: string }) {
+    const { rows, total } = await whatsappFlowRepository.listTemplatesPage(organizationId, {
+      flowId: params.flowId,
+      status: params.status,
+      fromDate: params.fromDate,
+      toDate: params.toDate,
+      sortBy: params.sortBy,
+      sortOrder: params.sortOrder,
+      limit: params.limit,
+      offset: params.offset,
+    });
+    return toListResult(rows, total, params);
+  }
+
+  /** Every matching template, unpaginated (pickers: automation "Send WhatsApp Flow", Test Flow). */
   async list(organizationId: number, filter: { flowId?: number; status?: string } = {}) {
     const rows = await whatsappFlowRepository.listTemplates(organizationId, filter);
     const flowIds = [...new Set(rows.map((r) => r.flowId).filter((id): id is number => !!id))];
