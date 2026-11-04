@@ -59,7 +59,7 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
   }
   if (!/^[a-z0-9_]+$/.test(name) || name.length > TEMPLATE_LIMITS.name) {
     throw AppError.validation(
-      "Template name can only contain lowercase letters, numbers and underscores.",
+      `Template name can only contain lowercase letters, numbers and underscores, up to ${TEMPLATE_LIMITS.name} characters.`,
       "name"
     );
   }

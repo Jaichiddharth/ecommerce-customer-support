@@ -9,6 +9,7 @@ import { InboxView, InboxCounts } from '../components/InboxView';
 import { IntegrationsView, IntegrationKey } from '../components/integrations/IntegrationsView';
 import { SettingsView } from '../components/SettingsView';
 import { TemplatesView } from '../components/templates/TemplatesView';
+import { ContactsView } from '../components/contacts/ContactsView';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 
 const FlowsWorkspace = dynamic(() => import('../components/flows/FlowsWorkspace'), { ssr: false });
@@ -19,10 +20,12 @@ export default function Home() {
   const [inboxCounts, setInboxCounts] = useState<InboxCounts>({ unread: 0, ai: 0 });
   const [openIntegration, setOpenIntegration] = useState<IntegrationKey | null>(null);
 
-  // Picking a sidebar item always lands on its main page (e.g. Integrations shows the grid again)
+  // Picking a sidebar item always lands on its main page (e.g. Integrations shows the grid again,
+  // the Inbox opens with no conversation selected)
   const selectTab = (tab: TabType) => {
     setActiveTab(tab);
     setOpenIntegration(null);
+    if (tab === 'inbox') setSelectedConversationId('');
   };
 
   // Shopify's OAuth callback redirects to /?tab=integrations&integration=shopify&shopify=connected|error
@@ -82,6 +85,15 @@ export default function Home() {
             )}
 
             {activeTab === 'templates' && <TemplatesView />}
+
+            {activeTab === 'contacts' && (
+              <ContactsView
+                onOpenConversation={(customerId) => {
+                  setSelectedConversationId(`cust-${customerId}`);
+                  setActiveTab('inbox');
+                }}
+              />
+            )}
 
             {activeTab === 'settings' && (
               <SettingsView

@@ -5,13 +5,13 @@ import { CreditCard, RefreshCw, Truck, User, X } from 'lucide-react';
 import { ProductBrowser, type ShareProductArgs } from '../shopify/ProductBrowser';
 import { ShopifyOrdersSection } from '../shopify/ShopifyOrdersSection';
 import { ContactIdentities } from './ContactIdentities';
+import { ConsentSection } from './ConsentStatus';
 import {
   CHANNEL_LABELS,
   InboxConversation,
   confidenceLabel,
   contactIdentifier,
   conversationChannelType,
-  formatDuration,
 } from './inbox-types';
 
 const CHANNEL_DOT: Record<string, string> = {
@@ -49,6 +49,8 @@ interface CustomerPanelProps {
   onShareProduct: (args: ShareProductArgs) => Promise<boolean>;
   onInsertProductText: (text: string) => void;
   shareDisabledReason?: string | null;
+  /** A teammate changed the contact's WhatsApp consent */
+  onConsentChange?: (customerId: number, isOptedOut: boolean) => void;
 }
 
 type PanelView = 'details' | 'products';
@@ -60,6 +62,7 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
   onShareProduct,
   onInsertProductText,
   shareDisabledReason,
+  onConsentChange,
 }) => {
   const [view, setView] = useState<PanelView>('details');
   // Bumped when channels are linked or unlinked, so the orders reload for the (possibly different) Shopify customer
@@ -92,10 +95,6 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
     conversation.aiActionsCount > 0
       ? `${conversation.aiActionsCount}${lastAiAction ? ` · ${lastAiAction}` : ''}`
       : '—';
-
-  const timeToResolve = conversation.resolvedAt
-    ? formatDuration(new Date(conversation.resolvedAt).getTime() - new Date(conversation.createdAt).getTime())
-    : 'In progress';
 
   const viewTabs = (
     <div className="flex border-b border-slate-200 shrink-0" role="tablist">
@@ -166,6 +165,19 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
         )}
       </section>
 
+      {/* WhatsApp consent (per contact, i.e. per store and per WhatsApp number) */}
+      {type === 'whatsapp' && (
+        <section className="p-4 border-b border-slate-100 select-text">
+          <SectionLabel>WHATSAPP CONSENT</SectionLabel>
+          <ConsentSection
+            key={conversation.customer.id}
+            customerId={conversation.customer.id}
+            isOptedOut={conversation.customer.isOptedOut}
+            onChanged={(isOptedOut) => onConsentChange?.(conversation.customer.id, isOptedOut)}
+          />
+        </section>
+      )}
+
       {/* AI agent */}
       <section className="p-4 border-b border-slate-100 space-y-2.5">
         <div className="flex items-center justify-between">
@@ -176,7 +188,6 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
         <Row label="Confidence" value={confidenceLabel(conversation.aiConfidence)} />
         <Row label="Actions" value={actionsValue} />
         <Row label="Model" value={conversation.aiModel || '—'} />
-        <Row label="Time to resolve" value={timeToResolve} />
       </section>
 
       {/* Shopify orders of the linked customer */}

@@ -15,8 +15,6 @@ import {
   lastMessagePreview,
 } from './inbox-types';
 
-export type StatusFilter = 'open' | 'resolved' | 'all';
-
 interface ConversationListProps {
   conversations: InboxConversation[];
   counts: Record<ListTab, number>;
@@ -24,8 +22,6 @@ interface ConversationListProps {
   onTabChange: (tab: ListTab) => void;
   search: string;
   onSearchChange: (value: string) => void;
-  statusFilter: StatusFilter;
-  onStatusFilterChange: (value: StatusFilter) => void;
   unreadOnly: boolean;
   onUnreadOnlyChange: (value: boolean) => void;
   selectedCustomerId: number | null;
@@ -62,8 +58,6 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   onTabChange,
   search,
   onSearchChange,
-  statusFilter,
-  onStatusFilterChange,
   unreadOnly,
   onUnreadOnlyChange,
   selectedCustomerId,
@@ -75,7 +69,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
 }) => {
   const [showFilters, setShowFilters] = useState(false);
   const filtersRef = useRef<HTMLDivElement>(null);
-  const filtersActive = statusFilter !== 'open' || unreadOnly;
+  const filtersActive = unreadOnly;
 
   useEffect(() => {
     if (!showFilters) return;
@@ -130,18 +124,6 @@ export const ConversationList: React.FC<ConversationListProps> = ({
           </button>
           {showFilters && (
             <div className="absolute right-0 top-full mt-1.5 w-52 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 z-30 text-[13px]">
-              <p className="px-2 pt-1 pb-1.5 text-[11px] font-semibold text-slate-500 tracking-wider">STATUS</p>
-              {(['open', 'resolved', 'all'] as StatusFilter[]).map((value) => (
-                <button
-                  key={value}
-                  onClick={() => onStatusFilterChange(value)}
-                  className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer capitalize text-slate-700"
-                >
-                  {value}
-                  {statusFilter === value && <Check className="w-4 h-4 text-[#3440a8]" />}
-                </button>
-              ))}
-              <div className="my-1 border-t border-slate-100" />
               <button
                 onClick={() => onUnreadOnlyChange(!unreadOnly)}
                 className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-slate-700"
@@ -209,7 +191,11 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                     <span className="text-[11px] text-slate-600 font-medium shrink-0">{formatListTime(conv.lastMessageAt)}</span>
                   </span>
                   <span className="mt-0.5 flex items-center justify-between gap-2">
-                    <span className={`text-[12.5px] truncate ${unread ? 'font-bold text-black' : 'text-slate-700'}`}>
+                    <span
+                      className={`text-[12.5px] truncate ${
+                        unread ? 'font-bold text-black' : conv.hasConversation || conv.lastMessage ? 'text-slate-700' : 'italic text-slate-400'
+                      }`}
+                    >
                       {lastMessagePreview(conv)}
                     </span>
                     {unread && (
@@ -228,6 +214,16 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                   {conv.channel?.status === 'disconnected' && (
                     <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-medium">
                       Disconnected
+                    </span>
+                  )}
+                  {!conv.hasConversation && (
+                    <span className="px-1.5 py-0.5 rounded bg-slate-50 text-slate-500 border border-slate-200 text-[10px] font-medium">
+                      New contact
+                    </span>
+                  )}
+                  {conv.customer.isOptedOut && type === 'whatsapp' && (
+                    <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200 text-[10px] font-medium">
+                      Opted out
                     </span>
                   )}
                   {conv.handledBy === 'ai' && (

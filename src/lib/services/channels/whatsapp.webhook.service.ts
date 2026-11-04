@@ -8,8 +8,12 @@ import { automationEngine } from '@/lib/automation/engine';
 import { whatsappFlowService } from '../whatsapp-flows/flow.service';
 import { whatsappTemplateService } from '../whatsapp-flows/template.service';
 import { whatsappFlowSubmissionService, parseFlowReply, summarizeFlowReply } from '../whatsapp-flows/flow-submission.service';
+import { consentService, consentKeywordCandidates, matchConsentKeyword } from '../consent.service';
 
 const log = createLogger('WhatsAppWebhook');
+
+/** Meta error code: the recipient has stopped marketing messages from this business */
+const META_MARKETING_OPTED_OUT = 131050;
 
 export interface WebhookVerificationParams {
   mode: string | null;
@@ -183,7 +187,9 @@ export class WhatsAppWebhookService {
           continue;
         }
 
-        if (field !== 'messages' || !value) {
+        // `messages`: inbound messages and delivery statuses. `user_preferences`: the customer stopped or resumed
+        // marketing messages inside WhatsApp (the app must be subscribed to this field in the Meta App dashboard).
+        if ((field !== 'messages' && field !== 'user_preferences') || !value) {
           log.info('Ignoring webhook change', { field, wabaId });
           continue;
         }
@@ -266,6 +272,24 @@ export class WhatsAppWebhookService {
               err,
               wamid: st?.id,
               status: st?.status,
+              orgId: ctx.orgId,
+              channelId: ctx.channelId,
+            });
+          }
+        }
+
+        /* C. Marketing preference changes (user_preferences field) */
+        for (const pref of value.user_preferences || []) {
+          try {
+            await this.processUserPreference(pref, ctx);
+            result.processedStatuses++;
+          } catch (err) {
+            result.failed++;
+            log.error('Failed to process WhatsApp user preference update', {
+              err,
+              waId: pref?.wa_id,
+              category: pref?.category,
+              value: pref?.value,
               orgId: ctx.orgId,
               channelId: ctx.channelId,
             });
@@ -505,6 +529,24 @@ export class WhatsAppWebhookService {
     msgDate: Date
   ): Promise<void> {
     try {
+      // STOP / UNSUBSCRIBE / START: update consent and confirm. These messages never trigger automations,
+      // so a customer who just opted out can't get an automated promotional reply.
+      const consentMatch = matchConsentKeyword(consentKeywordCandidates(msg));
+      if (consentMatch) {
+        const { customer, changed } = await consentService.changeStatus({
+          organizationId: ctx.orgId,
+          customerId,
+          status: consentMatch.status,
+          source: 'keyword',
+          reason: `Customer sent "${consentMatch.text}"`,
+          keyword: consentMatch.keyword,
+          metaMessageId: msg.id,
+          occurredAt: msgDate,
+        });
+        if (changed) ctx.defer(() => consentService.sendConfirmation(ctx.orgId, customer, consentMatch.status, 'keyword'));
+        return;
+      }
+
       if (parseFlowReply(msg)) {
         // Stored inside the request so a crash can't lose it; resuming the automation is deferred
         const submission = await whatsappFlowSubmissionService.record({
@@ -591,6 +633,57 @@ export class WhatsAppWebhookService {
     if (!updatedMsg) {
       log.debug('Status update for a message that is not in the database', { wamid: messageId, status });
     }
+
+    // Meta refused a marketing message because the customer stopped marketing messages: record the opt-out
+    if (mappedStatus === MessageStatus.FAILED && errorCode === META_MARKETING_OPTED_OUT && updatedMsg) {
+      try {
+        await consentService.changeStatus({
+          organizationId: orgId,
+          customerId: updatedMsg.customerId,
+          status: 'opted_out',
+          source: 'meta_delivery_error',
+          reason: 'WhatsApp refused a marketing message: the customer has stopped marketing messages from this business (error 131050)',
+          metaMessageId: messageId,
+          occurredAt: st.timestamp ? new Date(Number(st.timestamp) * 1000) : new Date(),
+        });
+      } catch (err) {
+        log.error('Could not record opt-out from a 131050 delivery failure', { err, wamid: messageId, customerId: updatedMsg.customerId });
+      }
+    }
+  }
+
+  /**
+   * `user_preferences` webhook: the customer stopped ("stop") or resumed ("resume") marketing messages from this
+   * number inside WhatsApp. Creates the contact when it doesn't exist yet, so the opt-out is never lost.
+   */
+  private async processUserPreference(pref: any, ctx: ChangeContext): Promise<void> {
+    const waId = String(pref?.wa_id ?? '').replace(/\D/g, '');
+    const value = typeof pref?.value === 'string' ? pref.value.toLowerCase() : '';
+    if (!waId || pref?.category !== 'marketing_messages' || (value !== 'stop' && value !== 'resume')) {
+      log.info('Ignoring user preference update', { waId, category: pref?.category, value: pref?.value });
+      return;
+    }
+
+    const customer =
+      (await customerRepository.findByPhone(ctx.orgId, waId, ctx.channelId)) ??
+      (await customerRepository.createCustomer(ctx.orgId, {
+        name: ctx.contactMap.get(waId) || 'WhatsApp Customer',
+        phone: waId,
+        channelId: ctx.channelId,
+      }));
+    if (!customer) throw new Error('Could not resolve the contact for a user preference update');
+
+    const status = value === 'stop' ? 'opted_out' : 'opted_in';
+    const detail = typeof pref.detail === 'string' && pref.detail.trim() ? pref.detail.trim() : null;
+    const result = await consentService.changeStatus({
+      organizationId: ctx.orgId,
+      customerId: customer.id,
+      status,
+      source: 'meta_preferences',
+      reason: detail ?? (status === 'opted_out' ? 'Customer stopped marketing messages in WhatsApp' : 'Customer resumed marketing messages in WhatsApp'),
+      occurredAt: pref.timestamp ? new Date(Number(pref.timestamp) * 1000) : new Date(),
+    });
+    if (result.changed) ctx.defer(() => consentService.sendConfirmation(ctx.orgId, result.customer, status, 'meta_preferences'));
   }
 
   /**
