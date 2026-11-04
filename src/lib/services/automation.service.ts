@@ -9,7 +9,7 @@ import { toListResult, type ListQuery } from "@/lib/api/list-query";
 import type { ListResult } from "@/lib/listing";
 import { SENDABLE_VERSION_STATUSES, type AutomationGraph, type WaFlowVersionStatusValue } from "../db/schema";
 import { AppError } from "@/lib/errors";
-import { SEND_FLOW_NODE, WAIT_FLOW_NODE } from "@/lib/automation/engine";
+import { SEND_FLOW_NODE, WAIT_FLOW_NODE, invalidateActiveAutomations } from "@/lib/automation/engine";
 import { SENDABLE_TEMPLATE_STATUS } from "./whatsapp-flows/template.service";
 
 const TRIGGER_TYPES = new Set(["trigger_incoming_message", "trigger_keyword"]);
@@ -110,7 +110,7 @@ export class AutomationService {
     const name = String(body.name ?? "").trim() || "Untitled automation";
     const graph = sanitizeGraph(body.graph);
     if (body.isActive) await this.assertActivatable(organizationId, graph);
-    return automationRepository.create({
+    const created = await automationRepository.create({
       organizationId,
       name: name.slice(0, 200),
       description: cleanDescription(body.description),
@@ -119,6 +119,8 @@ export class AutomationService {
       activatedAt: body.isActive ? new Date() : null,
       createdById: userId,
     });
+    invalidateActiveAutomations(organizationId);
+    return created;
   }
 
   async update(organizationId: number, id: number, body: { name?: string; description?: string | null; graph?: unknown; isActive?: boolean }) {
@@ -127,13 +129,15 @@ export class AutomationService {
     const graph = body.graph !== undefined ? sanitizeGraph(body.graph) : current.graph;
     const isActive = body.isActive ?? current.isActive;
     if (isActive) await this.assertActivatable(organizationId, graph);
-    return automationRepository.update(id, organizationId, {
+    const updated = await automationRepository.update(id, organizationId, {
       ...(body.name !== undefined ? { name: String(body.name).trim().slice(0, 200) || current.name } : {}),
       ...(body.description !== undefined ? { description: cleanDescription(body.description) } : {}),
       graph,
       isActive,
       ...(isActive && !current.activatedAt ? { activatedAt: new Date() } : {}),
     });
+    invalidateActiveAutomations(organizationId);
+    return updated;
   }
 
   /** Copies the graph as a Draft (never active), so the copy can't start running unexpectedly. */
@@ -157,9 +161,11 @@ export class AutomationService {
     await this.require(organizationId, id);
     if ((await automationRepository.countRuns(id)) === 0) {
       await automationRepository.remove(id, organizationId);
+      invalidateActiveAutomations(organizationId);
       return { deleted: true, archived: false };
     }
     await automationRepository.update(id, organizationId, { isActive: false, archivedAt: new Date() });
+    invalidateActiveAutomations(organizationId);
     await automationRepository.cancelOpenRuns(id, "Automation archived.");
     return { deleted: false, archived: true };
   }
@@ -167,7 +173,9 @@ export class AutomationService {
   /** Back to the listing, switched off (it must be re-activated explicitly). */
   async restore(organizationId: number, id: number) {
     await this.require(organizationId, id);
-    return automationRepository.update(id, organizationId, { archivedAt: null });
+    const restored = await automationRepository.update(id, organizationId, { archivedAt: null });
+    invalidateActiveAutomations(organizationId);
+    return restored;
   }
 
   /**

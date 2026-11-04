@@ -99,6 +99,41 @@ export class CustomerRepository {
     }
 
     /**
+     * The contact for this phone on this channel, created if missing, race-free: concurrent webhooks for
+     * the same new number serialize on a transaction-scoped advisory lock, so only one contact is created.
+     * Lookup and insert run on the transaction's own connection (no second pool connection is held).
+     */
+    async findOrCreateForChannel(
+        orgId: number,
+        channelId: number,
+        phone: string,
+        name: string
+    ): Promise<{ customer: Customer; created: boolean } | null> {
+        const cleanPhone = normalizePhone(phone);
+        if (!cleanPhone) return null;
+        return db.transaction(async (tx) => {
+            await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`customer:${orgId}:${channelId}:${cleanPhone}`}, 0))`);
+            const [existing] = await tx
+                .select()
+                .from(customers)
+                .where(
+                    and(
+                        eq(customers.organizationId, orgId),
+                        eq(customers.channelId, channelId),
+                        or(eq(customers.phone, cleanPhone), eq(customers.phone, `+${cleanPhone}`))
+                    )
+                )
+                .limit(1);
+            if (existing) return { customer: existing, created: false };
+            const [created] = await tx
+                .insert(customers)
+                .values({ organizationId: orgId, channelId, name, phone: cleanPhone, tags: [], isOptedOut: false })
+                .returning();
+            return { customer: created, created: true };
+        });
+    }
+
+    /**
      * Find a customer by ID within an organization
      */
     async findById(id: number, organizationId: number): Promise<Customer | null> {

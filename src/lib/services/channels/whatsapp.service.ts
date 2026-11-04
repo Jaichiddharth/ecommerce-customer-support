@@ -10,11 +10,12 @@ import type {
   UpdateTemplatePayload,
 } from "../../meta/whatsapp/template.service";
 import { encryptToken, decryptToken } from "../../security/crypto";
-import { Channel, ChannelStatus, Message, MessageStatus, type MessageMetadata } from "../../db/schema";
+import { Channel, ChannelStatus, Message, MessageStatus, type Customer, type MessageMetadata } from "../../db/schema";
 import { publish } from "@/lib/realtime";
 import { AppError, toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { validateWhatsAppMedia } from "@/lib/media-limits";
+import { KeyedRateLimiter } from "@/lib/concurrency";
 import { TEMPLATE_MEDIA_RULES, isMediaHeader } from "@/types/templates";
 import {
   WHATSAPP_BUSINESS_VERTICALS,
@@ -26,6 +27,14 @@ const log = createLogger("WhatsAppService");
 
 /** WhatsApp's customer service window: free-form messages are allowed for 24h after the customer's last message */
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Outbound throughput per business phone number. Meta allows ~80 msg/s per number by default; staying
+ * below it makes a burst wait a few hundred ms here instead of failing with 130429 at Meta.
+ */
+const SEND_RATE_PER_SECOND = Math.max(1, Number(process.env.WHATSAPP_SEND_RATE_PER_SECOND) || 60);
+const SEND_RATE_MAX_WAIT_MS = 20_000;
+const sendLimiter: KeyedRateLimiter = ((globalThis as any).__waSendLimiter ??= new KeyedRateLimiter(SEND_RATE_PER_SECOND));
 
 // Channel id → WABA id confirmed to contain the channel's number (checked once per server process)
 const verifiedWabaIds = new Map<number, string>();
@@ -704,9 +713,14 @@ export class WhatsAppService {
     languageCode?: string;
     components?: Array<Record<string, unknown>>;
     metadata?: MessageMetadata | null;
+    /**
+     * Already-loaded rows the caller holds (automation engine, Flow sends), so the send path doesn't
+     * read them again. `contact` must be the row for `customerId` in this organization.
+     */
+    preloaded?: { contact?: Customer; connections?: Channel[] };
   }) {
     const orgId = params.organizationId;
-    const connections = await this.getConnections(orgId);
+    const connections = params.preloaded?.connections ?? (await this.getConnections(orgId));
 
     if (!connections || connections.length === 0) {
       throw new AppError("WHATSAPP_NOT_CONNECTED", { expected: true });
@@ -714,7 +728,11 @@ export class WhatsAppService {
 
     // A contact belongs to its channel: hidden once that channel is disconnected, and always
     // replied to from its own number rather than whichever channel happens to be first
-    const contact = params.customerId ? await customerService.requireVisible(params.customerId, orgId) : null;
+    const preloadedContact =
+      params.preloaded?.contact && params.preloaded.contact.id === params.customerId && params.preloaded.contact.organizationId === orgId
+        ? params.preloaded.contact
+        : null;
+    const contact = params.customerId ? preloadedContact ?? (await customerService.requireVisible(params.customerId, orgId)) : null;
 
     // Select channel (by channelId, phoneNumberId, the contact's own channel, or first active)
     let targetChannel = null;
@@ -829,6 +847,14 @@ export class WhatsAppService {
       ...(params.templateName ? { templateName: params.templateName } : {}),
       ...(isMediaMessage ? { filename: params.filename, mimeType: params.mimeType } : {}),
     });
+
+    if (!(await sendLimiter.acquire(targetChannel.metaPhoneNumberId, SEND_RATE_MAX_WAIT_MS))) {
+      throw new AppError("RATE_LIMITED", {
+        message: "Too many WhatsApp messages are being sent from this number right now. Please try again shortly.",
+        details: sendContext,
+        expected: true,
+      });
+    }
 
     let metaRes: any = null;
     let storedMediaUrl: string | null = null;

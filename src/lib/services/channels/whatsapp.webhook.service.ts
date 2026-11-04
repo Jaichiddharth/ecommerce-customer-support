@@ -356,16 +356,13 @@ export class WhatsAppWebhookService {
     // Extract content and summary based on message type
     const parsedContent = this.extractMessageContent(msg);
 
-    // Resolve or Create Customer in DB strictly for THIS Channel
-    let customer = await customerRepository.findByPhone(orgId, cleanFromPhone, channelId);
-    if (!customer) {
-      customer = await customerRepository.createCustomer(orgId, {
-        name: contactName,
-        phone: cleanFromPhone, // Stored strictly without '+'
-        channelId: channelId,
-      });
+    // Resolve or Create Customer in DB strictly for THIS Channel. Race-free: two webhooks for the same
+    // new number (or a Meta retry racing the original) serialize on an advisory lock and share one contact.
+    const resolved = await customerRepository.findOrCreateForChannel(orgId, channelId, cleanFromPhone, contactName);
+    let customer = resolved?.customer ?? null;
+    if (resolved?.created) {
       log.info('New customer created from inbound message', { customerId: customer?.id, phone: cleanFromPhone, channelId });
-    } else {
+    } else if (customer) {
       // Customer for this channel exists - only update profile name or normalize phone
       const updates: any = {};
       if (customer.phone !== cleanFromPhone) {
@@ -444,6 +441,12 @@ export class WhatsAppWebhookService {
           ? `whatsapp-media:${parsedContent.details.id}`
           : null;
 
+      // Durable marker for the automation start that runs after the response: if the process stops first,
+      // the sweep replays it. Only set when the org has message-triggered automations (cached lookup).
+      const isFlowReply = Boolean(parseFlowReply(msg));
+      const automationPending =
+        !isFlowReply && Boolean(messageId) && (await automationEngine.hasMessageTriggers(orgId).catch(() => true));
+
       const savedMessage = await messageRepository.createMessage({
         organizationId: orgId,
         customerId: customer.id,
@@ -459,7 +462,14 @@ export class WhatsAppWebhookService {
         metaMessageId: messageId,
         repliedToId: repliedToId,
         createdAt: msgDate,
+        automationPendingSince: automationPending ? new Date() : null,
       });
+
+      // The unique (organization, wamid) index refused it: a concurrent delivery of the same message won
+      if (!savedMessage && messageId) {
+        log.debug('Duplicate inbound message ignored (concurrent delivery)', { wamid: messageId });
+        return 'duplicate';
+      }
 
       if (savedMessage) {
         publish(orgId, {
@@ -485,7 +495,7 @@ export class WhatsAppWebhookService {
         ...(repliedToId ? { repliedToId } : {}),
       });
 
-      await this.afterInboundMessage(msg, ctx, customer.id, savedMessage?.id ?? null, textBody, msgDate);
+      await this.afterInboundMessage(msg, ctx, customer.id, savedMessage?.id ?? null, textBody, msgDate, automationPending);
     }
 
     return 'saved';
@@ -502,7 +512,8 @@ export class WhatsAppWebhookService {
     customerId: number,
     messageId: number | null,
     text: string | null,
-    msgDate: Date
+    msgDate: Date,
+    automationPending: boolean
   ): Promise<void> {
     try {
       if (parseFlowReply(msg)) {
@@ -518,16 +529,19 @@ export class WhatsAppWebhookService {
         if (submission) ctx.defer(() => whatsappFlowSubmissionService.process(submission));
         return;
       }
-      ctx.defer(() =>
-        automationEngine.handleInboundMessage({
+      // No message-triggered automation in this org: nothing to start
+      if (!automationPending) return;
+      ctx.defer(async () => {
+        await automationEngine.handleInboundMessage({
           organizationId: ctx.orgId,
           channelId: ctx.channelId,
           customerId,
           messageId,
           wamid: msg.id,
           text: msg.type === 'text' ? text : null,
-        })
-      );
+          pending: true,
+        });
+      });
     } catch (err) {
       log.error('Post-processing of inbound message failed (message itself was saved)', { err, wamid: msg?.id, customerId });
     }

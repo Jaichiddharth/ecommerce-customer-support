@@ -2,6 +2,7 @@ import { customerRepository, whatsappFlowRepository, type SubmissionSortKey } fr
 import { toListResult, type ListQuery } from "@/lib/api/list-query";
 import { WaSubmissionStatus, type WhatsAppFlowSubmissionRow } from "../../db/schema";
 import { automationEngine } from "@/lib/automation/engine";
+import { mapLimit } from "@/lib/concurrency";
 import { toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 
@@ -118,7 +119,7 @@ export class WhatsAppFlowSubmissionService {
   /** Recovery for submissions stored but never processed (process stopped mid-way). Called by the sweep. */
   async processStale(olderThan = new Date(Date.now() - 60_000)) {
     const stale = await whatsappFlowRepository.listStaleReceivedSubmissions(olderThan);
-    for (const s of stale) await this.process(s);
+    await mapLimit(stale, 4, (s) => this.process(s));
     return stale.length;
   }
 

@@ -492,6 +492,28 @@ export class WhatsAppFlowRepository {
       .returning();
   }
 
+  /**
+   * Executions still `pending` long after creation: the process stopped between storing the execution
+   * and recording Meta's answer. They are marked failed so nothing waits on them forever.
+   */
+  async failStalePendingExecutions(olderThan: Date, limit = 200): Promise<number> {
+    const rows = await db
+      .update(whatsappFlowExecutions)
+      .set({ status: WaFlowExecutionStatus.FAILED, lastError: "Sending was interrupted before WhatsApp confirmed it.", updatedAt: new Date() })
+      .where(
+        inArray(
+          whatsappFlowExecutions.id,
+          db
+            .select({ id: whatsappFlowExecutions.id })
+            .from(whatsappFlowExecutions)
+            .where(and(eq(whatsappFlowExecutions.status, WaFlowExecutionStatus.PENDING), lte(whatsappFlowExecutions.createdAt, olderThan)))
+            .limit(limit)
+        )
+      )
+      .returning({ id: whatsappFlowExecutions.id });
+    return rows.length;
+  }
+
   // ── Submissions ─────────────────────────────────────────────────────────
 
   /** Insert once per (org, wamid). Returns null when this webhook message was already stored (retry). */
@@ -523,6 +545,7 @@ export class WhatsAppFlowRepository {
       .select()
       .from(whatsappFlowSubmissions)
       .where(and(eq(whatsappFlowSubmissions.processingStatus, "received"), lte(whatsappFlowSubmissions.createdAt, olderThan)))
+      .orderBy(whatsappFlowSubmissions.createdAt)
       .limit(limit);
   }
 

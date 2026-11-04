@@ -5,12 +5,22 @@ Automation Builder uses them. Static Flows only: no data-exchange endpoint.
 
 ## Deploying
 
-1. **Migration**: `npm run db:migrate` applies `0006_whatsapp_flows_automations` (new tables) and `0007_automation_listing` (new columns on `automations`). Both are additive.
-2. **Env**: set `CRON_SECRET`. Existing vars (`META_APP_SECRET`, `TOKEN_ENCRYPTION_KEY`,
-   `WHATSAPP_WEBHOOK_VERIFY_TOKEN`) are reused.
-3. **Cron**: call `POST /api/automations/sweep` every minute with `Authorization: Bearer $CRON_SECRET`.
-   It resumes Delay steps, times out Flow waits, expires unanswered Flows and re-processes
-   stored responses whose processing was interrupted. Without it, waits never time out and Delays never end.
+1. **Migration**: `npm run db:migrate` applies `0006_whatsapp_flows_automations` (new tables), `0007_automation_listing` (new columns on `automations`) and `0008_automation_reliability` (run leases, graph versions, unique keys for open runs and webhook wamids). 0008 closes duplicate open runs (keeps the oldest) and clears the wamid on duplicate message rows before creating the unique indexes; no rows are deleted.
+2. **Env**: existing vars (`META_APP_SECRET`, `TOKEN_ENCRYPTION_KEY`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`) are reused. Optional:
+   | Var | Default | Purpose |
+   | --- | --- | --- |
+   | `AUTOMATION_SCHEDULER` | on | `off` disables the in-process scheduler (then a cron must call the sweep) |
+   | `AUTOMATION_SWEEP_INTERVAL_MS` | 10000 | how often the scheduler runs a maintenance pass |
+   | `AUTOMATION_RUN_RETENTION_DAYS` | 90 | finished runs older than this are deleted |
+   | `WHATSAPP_SEND_RATE_PER_SECOND` | 60 | outbound messages per second per business number (Meta default limit ~80) |
+   | `DB_POOL_MAX` / `DB_IDLE_TIMEOUT_SECONDS` / `DB_CONNECT_TIMEOUT_SECONDS` | 20 / 20 / 10 | postgres-js pool |
+   | `REALTIME_BUS` | local | `postgres` delivers live events across several app instances via LISTEN/NOTIFY |
+   | `CRON_SECRET` | — | only needed if the sweep endpoint is called by a cron |
+3. **Scheduler**: runs inside the app (started from `src/instrumentation.ts`), every 10 s. Each pass resumes Delay
+   steps, retries steps that failed transiently, times out Flow waits, releases runs interrupted by a restart,
+   expires unanswered / interrupted Flow sends, re-processes stored responses, replays automation triggers lost
+   in a restart, and prunes old runs. `POST /api/automations/sweep` (`Authorization: Bearer $CRON_SECRET`) runs
+   the same pass and can be added as a second trigger; passes are safe to run concurrently and on several instances.
 4. **Meta App webhooks**: besides `messages`, subscribe the app to the WABA fields
    `flows` and `message_template_status_update`. They arrive on the existing
    `/api/webhooks/whatsapp` endpoint with the same signature check.
@@ -104,7 +114,7 @@ storage is offered once as an import.
 | `GET /api/whatsapp-flows/submissions`, `GET /api/whatsapp-flows/recipients?q=` | |
 | `GET/POST /api/whatsapp-templates`, `GET/DELETE …/:id`, `POST …/:id/{sync,retry}` | |
 | `GET/POST /api/automations` (listing: `q`, `status`, `trigger`, `modified`, `execution`, `page`), `GET/PUT/DELETE …/:id`, `POST …/:id/{duplicate,restore}`, `GET …/:id/runs`, `GET …/:id/runs/:runId` | |
-| `GET/POST /api/automations/sweep` | cron only (`CRON_SECRET`) |
+| `GET/POST /api/automations/sweep` | optional cron (`CRON_SECRET`); the app runs it in-process |
 
 Every route except the sweep uses `withAuth` and is scoped to the caller's organization. Webhook updates
 resolve the tenant from the stored row and are ignored if the WABA doesn't match.

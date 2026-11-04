@@ -263,6 +263,8 @@ export const whatsappFlowSubmissions = pgTable(
     uniqueIndex("uq_wa_flow_sub_execution").on(table.executionId).where(sql`${table.executionId} IS NOT NULL`),
     index("idx_wa_flow_sub_org_flow").on(table.organizationId, table.flowId, table.submittedAt.desc()),
     index("idx_wa_flow_sub_org_submitted").on(table.organizationId, table.submittedAt.desc()),
+    // Crash recovery scan (stored but not processed yet) stays an index range scan, not a full table scan
+    index("idx_wa_flow_sub_received").on(table.createdAt).where(sql`${table.processingStatus} = 'received'`),
   ]
 );
 
