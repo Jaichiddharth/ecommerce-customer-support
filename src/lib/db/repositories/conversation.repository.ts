@@ -13,11 +13,17 @@ import {
   opensServiceWindow,
   type Ticket,
   type Message,
+  type Customer,
+  type Channel,
 } from "../schema";
 
-/** One row in the inbox conversation list */
+/**
+ * One row in the inbox conversation list. A contact without a ticket is listed too, with
+ * `hasConversation: false` and `id` = -customerId (never a real ticket id); its first message creates the ticket.
+ */
 export interface ConversationListItem {
   id: number;
+  hasConversation: boolean;
   ticketNumber: string;
   status: string | null;
   handledBy: string;
@@ -54,6 +60,8 @@ export interface ConversationListItem {
     language: string | null;
     tags: string[] | null;
     channelId: number | null;
+    /** WhatsApp marketing consent for this contact on its number */
+    isOptedOut: boolean;
     createdAt: Date;
   };
   channel: {
@@ -170,9 +178,61 @@ export class ConversationRepository {
 
   /**
    * Inbox list: the latest conversation of every customer, newest activity first,
-   * with unread counts and the last message's sender/status.
+   * with unread counts and the last message's sender/status. Then contacts on live channels
+   * that have no conversation yet, newest first.
    */
   async listForInbox(organizationId: number): Promise<ConversationListItem[]> {
+    const [withConversation, withoutConversation] = await Promise.all([
+      this.listConversations(organizationId),
+      this.listContactsWithoutConversation(organizationId),
+    ]);
+    return [...withConversation, ...withoutConversation];
+  }
+
+  /** Contacts on live channels that never had a ticket, as placeholder inbox rows */
+  private async listContactsWithoutConversation(organizationId: number): Promise<ConversationListItem[]> {
+    const rows = await db
+      .select({ customer: customers, channel: channels })
+      .from(customers)
+      .innerJoin(channels, and(eq(customers.channelId, channels.id), ne(channels.status, ChannelStatus.DISCONNECTED)))
+      .where(
+        and(
+          eq(customers.organizationId, organizationId),
+          sql`not exists (select 1 from ${tickets} where ${tickets.customerId} = ${customers.id})`
+        )
+      )
+      .orderBy(desc(customers.createdAt));
+
+    return rows.map(({ customer, channel }) => ({
+      id: -customer.id,
+      hasConversation: false,
+      ticketNumber: "",
+      status: null,
+      handledBy: ConversationHandler.HUMAN,
+      needsHuman: false,
+      assigneeId: null,
+      assigneeName: null,
+      tags: [],
+      aiSummary: null,
+      aiIntent: null,
+      aiConfidence: null,
+      aiActionsCount: 0,
+      aiModel: null,
+      aiSuggestions: [],
+      language: customer.language,
+      lastMessageText: null,
+      lastMessageAt: null,
+      createdAt: customer.createdAt,
+      resolvedAt: null,
+      unreadCount: 0,
+      lastReceivedMessageAt: null,
+      lastMessage: null,
+      customer: toListCustomer(customer),
+      channel: toListChannel(channel),
+    }));
+  }
+
+  private async listConversations(organizationId: number): Promise<ConversationListItem[]> {
     const latestPerCustomer = db
       .selectDistinctOn([tickets.customerId], { id: tickets.id })
       .from(tickets)
@@ -254,6 +314,7 @@ export class ConversationRepository {
       const last = lastMap.get(customer.id);
       return {
         id: ticket.id,
+        hasConversation: true,
         ticketNumber: ticket.ticketNumber,
         status: ticket.status,
         handledBy: ticket.handledBy,
@@ -277,31 +338,34 @@ export class ConversationRepository {
         lastMessage: last
           ? { senderType: last.senderType, mediaType: last.mediaType, status: last.status, metadata: last.metadata }
           : null,
-        customer: {
-          id: customer.id,
-          name: customer.name,
-          phone: customer.phone,
-          email: customer.email,
-          handle: customer.handle,
-          avatarUrl: customer.avatarUrl,
-          language: customer.language,
-          tags: customer.tags,
-          channelId: customer.channelId,
-          createdAt: customer.createdAt,
-        },
-        channel: channel
-          ? {
-              id: channel.id,
-              type: channel.type,
-              name: channel.name,
-              handle: channel.handle,
-              phoneNumber: channel.phoneNumber,
-              status: channel.status,
-            }
-          : null,
+        customer: toListCustomer(customer),
+        channel: channel ? toListChannel(channel) : null,
       };
     });
   }
 }
+
+const toListCustomer = (customer: Customer): ConversationListItem["customer"] => ({
+  id: customer.id,
+  name: customer.name,
+  phone: customer.phone,
+  email: customer.email,
+  handle: customer.handle,
+  avatarUrl: customer.avatarUrl,
+  language: customer.language,
+  tags: customer.tags,
+  channelId: customer.channelId,
+  isOptedOut: Boolean(customer.isOptedOut),
+  createdAt: customer.createdAt,
+});
+
+const toListChannel = (channel: Channel): NonNullable<ConversationListItem["channel"]> => ({
+  id: channel.id,
+  type: channel.type,
+  name: channel.name,
+  handle: channel.handle,
+  phoneNumber: channel.phoneNumber,
+  status: channel.status,
+});
 
 export const conversationRepository = new ConversationRepository();

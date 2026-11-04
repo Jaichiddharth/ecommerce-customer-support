@@ -53,7 +53,7 @@ interface NavItem {
 const WORKSPACE_ITEMS: NavItem[] = [
   { key: 'home', label: 'Home', icon: LayoutGrid, tab: 'dashboard' },
   { key: 'inbox', label: 'Inbox', icon: Inbox, tab: 'inbox', badge: 'unread' },
-  { key: 'contacts', label: 'Contacts', icon: Users },
+  { key: 'contacts', label: 'Contacts', icon: Users, tab: 'contacts' },
   { key: 'ai', label: 'AI agent', icon: Sparkles, badge: 'ai' },
   { key: 'flows', label: 'Flows', icon: Bot, tab: 'automations' },
   { key: 'broadcasts', label: 'Broadcasts', icon: Megaphone },

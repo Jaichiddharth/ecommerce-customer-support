@@ -477,6 +477,7 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
         });
         gooeyToast.success('Changes submitted to Meta', {
           description: `${form.name} goes back to review. Meta's review can take some time; the status updates here when it's done.`,
+          classNames: { description: 'wrap-anywhere' },
         });
       } else {
         const res = await apiClient.post('/api/channels/whatsapp/templates', {
@@ -489,6 +490,7 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
         if (mode === 'create') clearDraft();
         gooeyToast.success('Template submitted to Meta', {
           description: `${form.name} · ${res.data?.data?.status ?? 'PENDING'}`,
+          classNames: { description: 'wrap-anywhere' },
         });
       }
       onSuccess();

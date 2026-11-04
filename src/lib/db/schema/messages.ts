@@ -6,6 +6,7 @@ import { channels } from "./channels";
 import { tickets } from "./tickets";
 import { users } from "./users";
 import { messageReactions } from "./message_reactions";
+import type { ConsentChange, ConsentStatus } from "../../../types/consent";
 
 export type SenderType = "customer" | "agent" | "ai" | "system";
 
@@ -31,6 +32,10 @@ export interface MessageMetadata {
   shopifyProduct?: SharedShopifyProduct; // Set when an agent shares a Shopify product
   /** Set on template messages; `headerFormat` tells the UI how to show the header media in `mediaUrl` */
   template?: { name: string; language: string; headerFormat?: "image" | "video" | "document" };
+  /** Set on the team-only system note that records a WhatsApp consent change (the consent log) */
+  consent?: ConsentChange;
+  /** Set on the automatic reply confirming an opt-out / opt-in to the customer */
+  consentConfirmation?: ConsentStatus;
   [key: string]: unknown;
 }
 

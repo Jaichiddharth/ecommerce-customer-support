@@ -62,6 +62,7 @@ export const ERROR_DEFINITIONS = {
   MESSAGE_WINDOW_EXPIRED: { status: 422, source: "whatsapp", message: "More than 24 hours have passed since the customer last replied. Send an approved template to restart the conversation." },
   MESSAGE_RECIPIENT_INVALID: { status: 422, source: "whatsapp", message: "This phone number can't receive WhatsApp messages. Check the number and try again." },
   MESSAGE_TEMPLATE_INVALID: { status: 422, source: "whatsapp", message: "The WhatsApp template is invalid, paused or not approved." },
+  CONTACT_OPTED_OUT: { status: 422, source: "whatsapp", message: "This customer opted out of WhatsApp messages. You can message them again after they reply START." },
 
   // File upload / media
   FILE_TOO_LARGE: { status: 413, source: "upload", message: "This file is too large to send on WhatsApp." },

@@ -1,12 +1,11 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import { ChevronLeft, Inbox, Plus } from 'lucide-react';
+import { ChevronLeft, Plus, Users } from 'lucide-react';
 import { ChannelIcon } from './ChannelIcon';
 import {
   CHANNEL_LABELS,
   CHANNEL_TYPES,
-  ChannelFilter,
   InboxChannel,
   InboxConversation,
   channelNeedsReconnect,
@@ -19,14 +18,17 @@ interface ChannelsPaneProps {
   channels: InboxChannel[];
   conversations: InboxConversation[];
   isLoading: boolean;
-  filter: ChannelFilter;
-  onFilterChange: (filter: ChannelFilter) => void;
+  /** The channel (number / account) the inbox lists */
+  selectedChannelId: number | null;
+  onSelectChannel: (id: number) => void;
   onConnect: (type: string) => void;
   onCollapse: () => void;
 }
 
+/** Rows listed in the inbox for the folder: conversations plus contacts without one yet */
 const CountPill: React.FC<{ count: number; active?: boolean }> = ({ count, active }) => (
   <span
+    title={`${count} in the inbox`}
     className={`min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 ${
       active ? 'bg-[#3440a8] text-white' : 'bg-slate-200 text-slate-900'
     }`}
@@ -35,12 +37,27 @@ const CountPill: React.FC<{ count: number; active?: boolean }> = ({ count, activ
   </span>
 );
 
+const nf = new Intl.NumberFormat('en-IN');
+
+/** "12 contacts · 2 opted out": every contact on the channel, with or without a conversation */
+const ContactsLine: React.FC<{ total: number; optedOut: number }> = ({ total, optedOut }) => (
+  <span className="flex items-center gap-1 text-[11px] text-slate-600 whitespace-nowrap" title="Contacts on this channel, with or without a conversation">
+    <Users className="w-3 h-3 shrink-0 text-slate-400" />
+    <span className="font-semibold text-slate-700">{nf.format(total)}</span> contact{total === 1 ? '' : 's'}
+    {optedOut > 0 && (
+      <span className="text-red-600 font-medium" title="Opted out of WhatsApp messages: nothing can be sent to them">
+        · {nf.format(optedOut)} opted out
+      </span>
+    )}
+  </span>
+);
+
 export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
   channels,
   conversations,
   isLoading,
-  filter,
-  onFilterChange,
+  selectedChannelId,
+  onSelectChannel,
   onConnect,
   onCollapse,
 }) => {
@@ -68,8 +85,7 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
   const liveCount = groups.filter((g) => g.items.every(isChannelHealthy)).length;
   const attentionCount = groups.length - liveCount;
 
-  const isTypeActive = (type: string) => filter.kind === 'type' && filter.type === type;
-  const isChannelActive = (id: number) => filter.kind === 'channel' && filter.id === id;
+  const isChannelActive = (id: number) => selectedChannelId === id;
 
   return (
     <aside className="w-[232px] bg-white border-r border-slate-200 flex flex-col shrink-0 h-full select-none">
@@ -86,20 +102,8 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 py-3 text-[13px]">
-        {/* All conversations */}
-        <button
-          onClick={() => onFilterChange({ kind: 'all' })}
-          className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left cursor-pointer transition-colors ${
-            filter.kind === 'all' ? 'bg-[#eef0fb] text-slate-950 font-bold' : 'text-slate-800 font-medium hover:bg-slate-100/70'
-          }`}
-        >
-          <Inbox className="w-4 h-4 text-slate-700" />
-          <span className="flex-1">All conversations</span>
-          <CountPill count={conversations.length} active={filter.kind === 'all'} />
-        </button>
-
         {/* Connected */}
-        <div className="mt-5 mb-1.5 px-2.5 flex items-center justify-between text-[11px] font-bold text-slate-700 tracking-wider">
+        <div className="mb-1.5 px-2.5 flex items-center justify-between text-[11px] font-bold text-slate-700 tracking-wider">
           <span>CONNECTED · {groups.length}</span>
           <button
             onClick={() => onConnect('')}
@@ -133,16 +137,16 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                   : single?.handle
                     ? `${formatHandle(single.handle)}${type === 'instagram' ? ' · DMs' : ''}`
                     : single?.verified_name || '';
-              const active = isTypeActive(type);
+              // With one account the row picks it; with several it only summarises them and each account is picked below
+              const active = single ? isChannelActive(single.id) : false;
+              const contactTotal = items.reduce((sum, c) => sum + (c.contactCount ?? 0), 0);
+              const optedOutTotal = items.reduce((sum, c) => sum + (c.optedOutCount ?? 0), 0);
+              const rowClass = `w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${
+                single ? `cursor-pointer ${active ? 'bg-[#eef0fb]' : 'hover:bg-slate-50'}` : 'cursor-default'
+              }`;
 
-              return (
-                <div key={type}>
-                  <button
-                    onClick={() => onFilterChange({ kind: 'type', type })}
-                    className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left cursor-pointer transition-colors ${
-                      active ? 'bg-[#eef0fb]' : 'hover:bg-slate-50'
-                    }`}
-                  >
+              const rowBody = (
+                <>
                     <ChannelIcon type={type} size="md" />
                     <span className="flex-1 min-w-0">
                       <span className={`block truncate text-slate-900 ${active ? 'font-semibold' : 'font-medium'}`}>
@@ -179,9 +183,21 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                       ) : (
                         subtitle && <span className="block truncate text-[11px] text-slate-500">{subtitle}</span>
                       )}
+                      {!isDisconnected && <ContactsLine total={contactTotal} optedOut={optedOutTotal} />}
                     </span>
                     <CountPill count={byType.get(type) ?? 0} active={active} />
-                  </button>
+                </>
+              );
+
+              return (
+                <div key={type}>
+                  {single ? (
+                    <button type="button" onClick={() => onSelectChannel(single.id)} aria-pressed={active} className={rowClass}>
+                      {rowBody}
+                    </button>
+                  ) : (
+                    <div className={rowClass}>{rowBody}</div>
+                  )}
 
                   {/* Individual numbers when a channel type has several accounts */}
                   {items.length > 1 && (
@@ -191,7 +207,9 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                         return (
                           <button
                             key={channel.id}
-                            onClick={() => onFilterChange({ kind: 'channel', id: channel.id })}
+                            type="button"
+                            onClick={() => onSelectChannel(channel.id)}
+                            aria-pressed={channelActive}
                             title={channel.lastError || (channel.status === 'disconnected' ? 'Channel is disconnected' : undefined)}
                             className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left cursor-pointer transition-colors ${
                               channelActive ? 'bg-[#eef0fb]' : 'hover:bg-slate-50'
@@ -214,6 +232,9 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                                 {formatPhone(channel.phoneNumber) || formatHandle(channel.handle)}
                                 {channel.status === 'disconnected' ? ' · Disconnected' : ''}
                               </span>
+                              {channel.status !== 'disconnected' && (
+                                <ContactsLine total={channel.contactCount ?? 0} optedOut={channel.optedOutCount ?? 0} />
+                              )}
                             </span>
                             <CountPill count={byChannel.get(channel.id) ?? 0} active={channelActive} />
                           </button>
