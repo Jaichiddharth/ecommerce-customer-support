@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { channels } from "@/lib/services";
-import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, assertPagePermission, hasPermission } from "@/lib/security/auth";
+import { organizationRepository } from "@/lib/db/repositories";
 import { AppError } from "@/lib/errors";
 import { readFormData, readJson } from "@/lib/api/handler";
 
 export const POST = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, "inbox", "update");
   const orgId = req.user.organizationId;
+
   const contentType = req.headers.get("content-type") || "";
 
   let to: string = "";
@@ -67,6 +70,16 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
 
   if (!text && !templateName && !mediaFile) {
     throw AppError.validation("Type a message, choose a template, or attach a file.", "text");
+  }
+
+  if (templateName) {
+    const org = await organizationRepository.findById(orgId);
+    if (!hasPermission(req.user.role, "send_templates_outside_24h", org?.rolePermissions as any)) {
+      throw new AppError("FORBIDDEN", {
+        message: "Your role does not have permission to send templates outside the 24-hour window.",
+        expected: true,
+      });
+    }
   }
 
   const result = await channels.whatsapp.sendMessage({

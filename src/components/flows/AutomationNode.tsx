@@ -5,7 +5,7 @@ import { Handle, Position, NodeProps, useReactFlow } from '@xyflow/react';
 import {
   MessageCircle, Hash, Bell, GitBranch, Search, UserCheck,
   Send, FileText, UserPlus, PenLine, Clock, Shuffle, StopCircle,
-  Settings2, Trash2, MessageSquareText, Hourglass,
+  Settings2, Trash2, MessageSquareText, Hourglass, AlertTriangle,
 } from 'lucide-react';
 import type { AutomationNodeData } from './flow-types';
 
@@ -110,6 +110,8 @@ interface GenericNodeProps extends NodeProps {
 function GenericNode({ id, data, selected, onConfigure }: GenericNodeProps) {
   const theme = NODE_THEMES[data.type] ?? DEFAULT_THEME;
   const Icon = TYPE_ICON[data.type] ?? MessageCircle;
+  const issues = (data as { _issues?: string[] })._issues ?? [];
+  const borderColor = issues.length ? '#f87171' : selected ? theme.icon : theme.border;
 
   return (
     <div
@@ -133,7 +135,7 @@ function GenericNode({ id, data, selected, onConfigure }: GenericNodeProps) {
         className="rounded-2xl border-2 shadow-sm transition-all duration-150"
         style={{
           backgroundColor: theme.bg,
-          borderColor: selected ? theme.icon : theme.border,
+          borderColor,
           boxShadow: selected
             ? `0 0 0 3px ${theme.icon}25, 0 4px 12px ${theme.icon}20`
             : '0 2px 8px rgba(0,0,0,0.07)',
@@ -159,9 +161,17 @@ function GenericNode({ id, data, selected, onConfigure }: GenericNodeProps) {
               {theme.categoryLabel}
             </span>
           </div>
-          {data.configured && (
+          {issues.length > 0 ? (
+            <span
+              className="flex items-center gap-0.5 text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 rounded-full px-1.5 py-0.5 shrink-0"
+              title={issues.join('\n')}
+            >
+              <AlertTriangle className="w-3 h-3" />
+              {issues.length}
+            </span>
+          ) : data.configured ? (
             <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" title="Configured" />
-          )}
+          ) : null}
         </div>
 
         {/* Body preview */}

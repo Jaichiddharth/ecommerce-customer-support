@@ -209,7 +209,7 @@ export class MessageRepository {
       .orderBy(asc(messages.createdAt));
 
     const messageList = limit ? await query.limit(limit) : await query;
-    return this.attachReactions(messageList);
+    return this.attachReactions(messageList, organizationId);
   }
 
   /**
@@ -245,13 +245,20 @@ export class MessageRepository {
 
     const hasMore = rows.length > options.limit;
     const page = rows.slice(0, options.limit).reverse();
-    return { messages: await this.attachReactions(page), hasMore };
+    return { messages: await this.attachReactions(page, organizationId), hasMore };
   }
 
-  private async attachReactions<T extends Message>(messageList: T[]): Promise<(T & { reactions: MessageReaction[] })[]> {
+  private async attachReactions<T extends Message>(
+    messageList: T[],
+    organizationId?: number
+  ): Promise<(T & { reactions: MessageReaction[] })[]> {
     if (messageList.length === 0) return [];
 
-    const allReactions = await messageReactionRepository.listByMessageIds(messageList.map((m) => m.id));
+    const orgId = organizationId ?? messageList[0]?.organizationId;
+    const allReactions = await messageReactionRepository.listByMessageIds(
+      messageList.map((m) => m.id),
+      orgId
+    );
 
     const reactionsMap = new Map<number, MessageReaction[]>();
     for (const rx of allReactions) {

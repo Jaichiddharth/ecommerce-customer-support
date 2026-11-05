@@ -1131,6 +1131,7 @@ export class WhatsAppService {
 
     // 2. Upsert or delete reaction in DB
     const reactionRecord = await messageReactionRepository.upsertReaction({
+      organizationId: orgId,
       messageId: params.messageId,
       userId: params.userId ?? null,
       customerId: resolvedCustomerId,

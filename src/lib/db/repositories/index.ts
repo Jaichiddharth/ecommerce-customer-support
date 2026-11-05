@@ -6,5 +6,6 @@ export * from "./message.repository";
 export * from "./message-reaction.repository";
 export * from "./conversation.repository";
 export * from "./shopify.repository";
+export * from "./invitation.repository";
 export * from "./whatsapp-flow.repository";
 export * from "./automation.repository";

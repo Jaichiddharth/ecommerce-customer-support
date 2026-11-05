@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, hasPermission, assertPagePermission } from "@/lib/security/auth";
 import { shopifyService } from "@/lib/services";
+import { organizationRepository } from "@/lib/db/repositories";
 import { AppError } from "@/lib/errors";
 import { readJson } from "@/lib/api/handler";
 import { normalizeShopDomain, SHOPIFY_CALLBACK_PATH } from "@/lib/shopify/config";
@@ -8,11 +9,15 @@ import { OAUTH_NONCE_COOKIE, OAUTH_STATE_TTL_SECONDS } from "@/lib/shopify/oauth
 
 /**
  * POST /api/integrations/shopify/install  { shop: "my-store" | "my-store.myshopify.com" }
- * Returns the Shopify authorization URL; the browser navigates to it. Admins only.
+ * Returns the Shopify authorization URL; the browser navigates to it. Requires manage_billing_and_integrations.
  */
 export const POST = withAuth(async (req: AuthenticatedRequest) => {
-  if (req.user.role !== "ADMIN") {
-    throw new AppError("FORBIDDEN", { message: "Only workspace admins can connect a Shopify store.", expected: true });
+  assertPagePermission(req.user, 'integrations', 'create');
+
+  const org = await organizationRepository.findById(req.user.organizationId);
+  const canManage = hasPermission(req.user.role, "manage_billing_and_integrations", org?.rolePermissions as any);
+  if (!canManage) {
+    throw new AppError("FORBIDDEN", { message: "You do not have permission to manage billing and integrations.", expected: true });
   }
 
   const body = (await readJson(req)) ?? {};

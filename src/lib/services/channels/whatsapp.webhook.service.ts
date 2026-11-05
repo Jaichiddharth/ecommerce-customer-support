@@ -422,12 +422,14 @@ export class WhatsAppWebhookService {
         if (targetMessage) {
           if (emoji) {
             await messageReactionRepository.upsertReaction({
+              organizationId: orgId,
               messageId: targetMessage.id,
               customerId: customer ? customer.id : null,
               emoji: emoji,
             });
           } else {
             await messageReactionRepository.deleteReaction({
+              organizationId: orgId,
               messageId: targetMessage.id,
               customerId: customer ? customer.id : null,
             });

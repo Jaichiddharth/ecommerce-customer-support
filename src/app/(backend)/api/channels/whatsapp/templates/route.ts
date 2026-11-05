@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { channels } from "@/lib/services";
-import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, assertPagePermission } from "@/lib/security/auth";
 import { AppError } from "@/lib/errors";
 import { readJson } from "@/lib/api/handler";
 import { validateTemplateComponents } from "@/lib/whatsapp-templates";
@@ -28,6 +28,7 @@ function assertValidComponents(components: unknown) {
  * Fetches templates from Meta Graph API for the active WhatsApp channel with optional filters & pagination
  */
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, "templates", "read");
   const { searchParams } = new URL(req.url);
   const param = (key: string) => searchParams.get(key) || undefined;
   const limit = param("limit") ? parseInt(param("limit")!, 10) : undefined;
@@ -51,6 +52,7 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
  * Submits a new template to Meta for review. `components` are in Meta's format, including `example` blocks.
  */
 export const POST = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, "templates", "create");
   const body = await readJson(req);
   const { name, category, language, components, phoneNumberId } = body ?? {};
 
@@ -90,6 +92,7 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
  * Name and language can't change; the whole component set is replaced.
  */
 export const PUT = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, "templates", "update");
   const body = await readJson(req);
   const { templateId, components, category, phoneNumberId } = body ?? {};
 
@@ -120,6 +123,7 @@ export const PUT = withAuth(async (req: AuthenticatedRequest) => {
  * Deletes one language version (with hsm_id) or all versions of a template from Meta
  */
 export const DELETE = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, "templates", "delete");
   const { searchParams } = new URL(req.url);
   const name = searchParams.get("name");
   const hsmId = searchParams.get("hsm_id") || undefined;

@@ -9,10 +9,9 @@ import { toListResult, type ListQuery } from "@/lib/api/list-query";
 import type { ListResult } from "@/lib/listing";
 import { SENDABLE_VERSION_STATUSES, type AutomationGraph, type WaFlowVersionStatusValue } from "../db/schema";
 import { AppError } from "@/lib/errors";
-import { SEND_FLOW_NODE, WAIT_FLOW_NODE, invalidateActiveAutomations } from "@/lib/automation/engine";
+import { SEND_FLOW_NODE, invalidateActiveAutomations } from "@/lib/automation/engine";
+import { summarizeIssues, validateAutomation, type AutomationIssue } from "@/lib/automation/validate";
 import { SENDABLE_TEMPLATE_STATUS } from "./whatsapp-flows/template.service";
-
-const TRIGGER_TYPES = new Set(["trigger_incoming_message", "trigger_keyword"]);
 
 /** Listing status (derived in SQL). Failed = switched on, but its most recent run failed. */
 export const AUTOMATION_LIST_STATUSES = ["draft", "active", "paused", "failed", "archived"] as const;
@@ -37,7 +36,7 @@ function sanitizeGraph(raw: unknown): AutomationGraph {
   const nodes = g.nodes
     .filter((n): n is Record<string, any> => !!n && typeof (n as any).id === "string" && typeof (n as any).data?.type === "string")
     .map((n) => {
-      const { _onConfigure, ...data } = n.data ?? {};
+      const { _onConfigure, _issues, ...data } = n.data ?? {};
       return { id: String(n.id), type: String(n.type ?? data.type), position: n.position, data };
     });
   const ids = new Set(nodes.map((n) => n.id));
@@ -179,61 +178,45 @@ export class AutomationService {
   }
 
   /**
-   * Validation before an automation may run: a supported trigger, and every Send WhatsApp Flow
-   * step pointing at a published Flow (and, for template delivery, an approved template of that Flow).
+   * Validation before an automation may run: every check the builder runs (validateAutomation:
+   * trigger, step configuration, connections, loops), plus what needs the database — every Send
+   * WhatsApp Flow step pointing at a published Flow and, for template delivery, an approved template
+   * of that Flow. All issues are returned in `details.issues` so the builder can list them.
    */
   async assertActivatable(organizationId: number, graph: AutomationGraph) {
-    const problems: string[] = [];
-    if (!graph.nodes.some((n) => TRIGGER_TYPES.has(String(n.data.type)))) {
-      problems.push("Add an Incoming Message or Keyword trigger.");
-    }
+    const issues: AutomationIssue[] = validateAutomation(graph);
+    const misconfigured = new Set(issues.map((i) => i.nodeId));
 
     for (const node of graph.nodes) {
       const d = node.data;
-      const label = d.label || node.id;
-      if (d.type === SEND_FLOW_NODE) {
-        const flowId = Number(d.flowId);
-        const flow = flowId ? await whatsappFlowRepository.findFlow(flowId, organizationId) : null;
-        if (!flow || flow.archivedAt) {
-          problems.push(`"${label}": choose a WhatsApp Flow.`);
-          continue;
-        }
-        if (!flow.publishedVersionId) problems.push(`"${label}": "${flow.name}" has no published version.`);
-        if (d.sendMethod === "interactive") {
-          if (!String(d.flowCta ?? "").trim() || !String(d.flowBody ?? "").trim()) {
-            problems.push(`"${label}": interactive delivery needs button text and message text.`);
-          }
-        } else {
-          const template = d.templateId ? await whatsappFlowRepository.findTemplate(Number(d.templateId), organizationId) : null;
-          if (!template) problems.push(`"${label}": choose an approved template for this Flow.`);
-          else if (template.flowId !== flow.id) problems.push(`"${label}": template "${template.name}" opens a different Flow.`);
-          else if (template.status !== SENDABLE_TEMPLATE_STATUS) problems.push(`"${label}": template "${template.name}" is ${template.status}.`);
-          else {
-            const version = template.flowVersionId ? await whatsappFlowRepository.findVersion(template.flowVersionId, organizationId) : null;
-            if (!version || !SENDABLE_VERSION_STATUSES.includes(version.status as WaFlowVersionStatusValue)) {
-              problems.push(`"${label}": the Flow version used by template "${template.name}" is no longer published.`);
-            }
-          }
-        }
+      // Steps already reported (e.g. no Flow chosen) aren't looked up
+      if (d.type !== SEND_FLOW_NODE || misconfigured.has(node.id)) continue;
+      const add = (message: string) => issues.push({ nodeId: node.id, nodeLabel: String(d.label || node.id), message });
+
+      const flow = await whatsappFlowRepository.findFlow(Number(d.flowId), organizationId);
+      if (!flow || flow.archivedAt) {
+        add("The selected WhatsApp Flow no longer exists. Choose another one.");
+        continue;
       }
-      if (d.type === WAIT_FLOW_NODE) {
-        // Must be reachable from a Send WhatsApp Flow step
-        const upstream = new Set<string>();
-        const stack = [node.id];
-        while (stack.length) {
-          const cur = stack.pop()!;
-          for (const e of graph.edges) if (e.target === cur && !upstream.has(e.source)) { upstream.add(e.source); stack.push(e.source); }
-        }
-        if (!graph.nodes.some((n) => upstream.has(n.id) && n.data.type === SEND_FLOW_NODE)) {
-          problems.push(`"${label}": place it after a Send WhatsApp Flow step.`);
+      if (!flow.publishedVersionId) add(`"${flow.name}" has no published version. Publish the Flow first.`);
+      if (d.sendMethod === "interactive") continue;
+
+      const template = await whatsappFlowRepository.findTemplate(Number(d.templateId), organizationId);
+      if (!template) add("The selected template no longer exists. Choose another one.");
+      else if (template.flowId !== flow.id) add(`Template "${template.name}" opens a different Flow.`);
+      else if (template.status !== SENDABLE_TEMPLATE_STATUS) add(`Template "${template.name}" is ${template.status.toLowerCase()}, not approved.`);
+      else {
+        const version = template.flowVersionId ? await whatsappFlowRepository.findVersion(template.flowVersionId, organizationId) : null;
+        if (!version || !SENDABLE_VERSION_STATUSES.includes(version.status as WaFlowVersionStatusValue)) {
+          add(`The Flow version used by template "${template.name}" is no longer published.`);
         }
       }
     }
 
-    if (problems.length) {
+    if (issues.length) {
       throw new AppError("VALIDATION_ERROR", {
-        message: `This automation can't be activated: ${problems[0]}`,
-        details: { issues: problems },
+        message: `This automation can't be activated: ${summarizeIssues(issues)}`,
+        details: { issues },
         expected: true,
       });
     }

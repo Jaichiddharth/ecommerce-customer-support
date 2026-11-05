@@ -20,6 +20,7 @@ import { gooeyToast } from '@/components/ui/goey-toaster';
 import { notifyError, errorDescription } from '@/lib/api/notify';
 import { toApiError } from '@/lib/api/api-error';
 import { clientLogger } from '@/lib/client-logger';
+import { canUser, CrudAction } from '@/lib/security/permissions';
 
 export const NO_WORKSPACE_MESSAGE =
   'No workspace is linked to this email. Create an account to set up your company, or ask your admin to invite you.';
@@ -70,9 +71,14 @@ export interface DbUser {
   id: number;
   organizationId: number;
   organizationName?: string | null;
+  organizationSlug?: string | null;
+  organizationPlan?: string | null;
+  organizationSeats?: number | null;
   name: string;
   email: string;
   role: string;
+  permissions?: Record<string, boolean>;
+  customPermissions?: Record<string, any> | null;
   avatarUrl: string | null;
   isOnline: boolean;
   createdAt: string;
@@ -81,6 +87,11 @@ export interface DbUser {
 interface AuthContextType {
   user: User | null;
   dbUser: DbUser | null;
+  permissions: Record<string, boolean> | null;
+  hasPermission: (key: string) => boolean;
+  hasPagePermission: (page: string, action: 'create' | 'read' | 'update' | 'delete') => boolean;
+  can: (page: string, action: 'create' | 'read' | 'update' | 'delete') => boolean;
+  refreshDbUser: () => Promise<void>;
   loading: boolean;
   error: string | null;
   loginWithEmail: (email: string, password: string, rememberMe?: boolean) => Promise<UserCredential>;
@@ -242,6 +253,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => clearInterval(id);
   }, [user]);
 
+  const refreshDbUser = useCallback(async () => {
+    try {
+      if (!auth.currentUser) return;
+      const idToken = await auth.currentUser.getIdToken();
+      const res = await axios.get('/api/auth/me', {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (res.data?.success && res.data.user) {
+        setDbUser(res.data.user);
+      }
+    } catch {
+      // silent
+    }
+  }, []);
+
+  const hasPagePermission = useCallback((page: string, action: 'create' | 'read' | 'update' | 'delete'): boolean => canUser(dbUser, page, action), [dbUser]);
+  const can = hasPagePermission;
+
+  const hasPermission = useCallback(
+    (permissionKey: string): boolean => {
+      if (!dbUser) return false;
+      const role = (dbUser.role || '').toUpperCase();
+      if (role === 'OWNER') return true;
+      if (dbUser.permissions && dbUser.permissions[permissionKey] !== undefined) {
+        return Boolean(dbUser.permissions[permissionKey]);
+      }
+      return false;
+    },
+    [dbUser]
+  );
+
+  // Auto-refresh permissions and role when window regains focus or every 20s
+  useEffect(() => {
+    if (!user) return;
+    const handleFocus = () => {
+      refreshDbUser();
+    };
+    window.addEventListener('focus', handleFocus);
+    const id = setInterval(refreshDbUser, 20000);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(id);
+    };
+  }, [user, refreshDbUser]);
+
   const clearError = () => setError(null);
 
   const loginWithEmail = async (email: string, password: string, rememberMe = false) => {
@@ -386,6 +442,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         dbUser,
+        permissions: dbUser?.permissions ?? null,
+        hasPermission,
+        hasPagePermission,
+        can,
+        refreshDbUser,
         loading,
         error,
         loginWithEmail,
