@@ -181,10 +181,11 @@ export class ConversationRepository {
    * with unread counts and the last message's sender/status. Then contacts on live channels
    * that have no conversation yet, newest first.
    */
-  async listForInbox(organizationId: number): Promise<ConversationListItem[]> {
+
+  async listForInbox(organizationId: number, onlyAssigneeId?: number): Promise<ConversationListItem[]> {
     const [withConversation, withoutConversation] = await Promise.all([
-      this.listConversations(organizationId),
-      this.listContactsWithoutConversation(organizationId),
+      this.listConversations(organizationId, onlyAssigneeId),
+      onlyAssigneeId ? [] : this.listContactsWithoutConversation(organizationId),
     ]);
     return [...withConversation, ...withoutConversation];
   }
@@ -232,35 +233,64 @@ export class ConversationRepository {
     }));
   }
 
-  private async listConversations(organizationId: number): Promise<ConversationListItem[]> {
+  private async listConversations(organizationId: number, onlyAssigneeId?: number): Promise<ConversationListItem[]> {
     const latestPerCustomer = db
       .selectDistinctOn([tickets.customerId], { id: tickets.id })
       .from(tickets)
       .where(eq(tickets.organizationId, organizationId))
       .orderBy(tickets.customerId, desc(tickets.createdAt));
 
-    const rows = await db
+    const allCustomers = await db
       .select({
-        ticket: tickets,
         customer: customers,
         channel: channels,
+      })
+      .from(customers)
+      .leftJoin(channels, eq(customers.channelId, channels.id))
+      .where(
+        and(
+          eq(customers.organizationId, organizationId),
+          sql`(${customers.primaryCustomerId} IS NULL OR ${customers.primaryCustomerId} = ${customers.id})`
+        )
+      )
+      .orderBy(desc(customers.updatedAt), desc(customers.createdAt));
+
+    if (allCustomers.length === 0) return [];
+
+    const customerIds = allCustomers.map((r) => r.customer.id);
+
+    // 2. Fetch the latest ticket for each customer (if any exist)
+    const allCustomerTickets = await db
+      .select({
+        ticket: tickets,
         assigneeName: users.name,
       })
       .from(tickets)
-      .innerJoin(customers, eq(tickets.customerId, customers.id))
-      // Left join channels: conversations from disconnected channels remain visible for history
-      .leftJoin(
-        channels,
-        eq(sql`coalesce(${tickets.channelId}, ${customers.channelId})`, channels.id)
-      )
       .leftJoin(users, eq(tickets.assigneeId, users.id))
-      .where(and(eq(tickets.organizationId, organizationId), inArray(tickets.id, latestPerCustomer)))
-      .orderBy(sql`${tickets.lastMessageAt} desc nulls last`);
+      .where(
+        and(
+          eq(tickets.organizationId, organizationId),
+          inArray(tickets.customerId, customerIds)
+        )
+      )
+      .orderBy(desc(tickets.createdAt));
 
-    if (rows.length === 0) return [];
+    const ticketMap = new Map<number, { ticket: Ticket; assigneeName: string | null }>();
+    for (const row of allCustomerTickets) {
+      if (!ticketMap.has(row.ticket.customerId)) {
+        ticketMap.set(row.ticket.customerId, row);
+      }
+    }
 
-    const customerIds = rows.map((r) => r.customer.id);
+    // 3. For any customer that does NOT have a ticket yet, ensure a ticket is created
+    for (const { customer } of allCustomers) {
+      if (!ticketMap.has(customer.id)) {
+        const newTicket = await this.ensureForCustomer(organizationId, customer.id, customer.channelId);
+        ticketMap.set(customer.id, { ticket: newTicket, assigneeName: null });
+      }
+    }
 
+    // 4. Fetch unread counts, latest messages, and last received times
     const unreadRows = await db
       .select({ customerId: messages.customerId, count: sql<number>`count(*)::int` })
       .from(messages)
@@ -278,10 +308,12 @@ export class ConversationRepository {
     const lastRows = await db
       .selectDistinctOn([messages.customerId], {
         customerId: messages.customerId,
+        textContent: messages.textContent,
         senderType: messages.senderType,
         mediaType: messages.mediaType,
         status: messages.status,
         metadata: messages.metadata,
+        createdAt: messages.createdAt,
       })
       .from(messages)
       .where(
@@ -310,8 +342,14 @@ export class ConversationRepository {
       .orderBy(messages.customerId, desc(messages.createdAt));
     const lastReceivedMap = new Map(lastReceivedRows.map((r) => [r.customerId, r.createdAt]));
 
-    return rows.map(({ ticket, customer, channel, assigneeName }) => {
+    const items: ConversationListItem[] = allCustomers.map(({ customer, channel }) => {
+      const ticketEntry = ticketMap.get(customer.id)!;
+      const ticket = ticketEntry.ticket;
+      const assigneeName = ticketEntry.assigneeName;
       const last = lastMap.get(customer.id);
+      const lastMsgText = ticket.lastMessageText || last?.textContent || null;
+      const lastMsgAt = ticket.lastMessageAt || last?.createdAt || lastReceivedMap.get(customer.id) || customer.updatedAt || customer.createdAt;
+
       return {
         id: ticket.id,
         hasConversation: true,
@@ -321,7 +359,7 @@ export class ConversationRepository {
         needsHuman: ticket.needsHuman,
         assigneeId: ticket.assigneeId,
         assigneeName: assigneeName ?? null,
-        tags: ticket.tags ?? [],
+        tags: (ticket.tags && ticket.tags.length > 0) ? ticket.tags : (customer.tags ?? []),
         aiSummary: ticket.aiSummary,
         aiIntent: ticket.aiIntent,
         aiConfidence: ticket.aiConfidence,
@@ -329,8 +367,8 @@ export class ConversationRepository {
         aiModel: ticket.aiModel,
         aiSuggestions: ticket.aiSuggestions ?? [],
         language: ticket.language ?? customer.language,
-        lastMessageText: ticket.lastMessageText,
-        lastMessageAt: ticket.lastMessageAt,
+        lastMessageText: lastMsgText,
+        lastMessageAt: lastMsgAt,
         createdAt: ticket.createdAt,
         resolvedAt: ticket.resolvedAt,
         unreadCount: unreadMap.get(customer.id) ?? 0,
@@ -342,6 +380,19 @@ export class ConversationRepository {
         channel: channel ? toListChannel(channel) : null,
       };
     });
+
+    // Sort by latest message / activity descending
+    items.sort((a, b) => {
+      const timeA = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : new Date(a.createdAt).getTime();
+      const timeB = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : new Date(b.createdAt).getTime();
+      return timeB - timeA;
+    });
+
+    if (onlyAssigneeId !== undefined) {
+      return items.filter((item) => item.assigneeId === onlyAssigneeId);
+    }
+
+    return items;
   }
 }
 

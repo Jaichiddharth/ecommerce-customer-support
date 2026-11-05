@@ -28,11 +28,14 @@ import { FlowPalette } from './FlowPalette';
 import { ConfigPanel } from './ConfigPanel';
 import { PALETTE_ITEMS } from './palette-config';
 import type { AutomationNodeData, WorkflowGraph } from './flow-types';
-import { Save, RotateCcw, Download, Upload, Maximize2, Zap, Power, Loader2, ArrowLeft } from 'lucide-react';
+import { Save, RotateCcw, Download, Upload, Maximize2, Zap, Power, Loader2, ArrowLeft, AlertTriangle } from 'lucide-react';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
 import apiClient from '@/lib/api/client';
 import { notifyError } from '@/lib/api/notify';
+import { toApiError } from '@/lib/api/api-error';
 import { gooeyToast } from '@/components/ui/goey-toaster';
+import { validateAutomation, type AutomationIssue } from '@/lib/automation/validate';
+import { AutomationIssuesPanel, type IssuesIntent } from './AutomationIssuesPanel';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -185,6 +188,19 @@ export function forgetLegacyBrowserAutomation() {
 
 export { toServerGraph };
 
+/** Issues the server returned with a VALIDATION_ERROR (activation checks that need the database). */
+function readServerIssues(raw: unknown): AutomationIssue[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((i): AutomationIssue[] => {
+    if (typeof i === 'string') return [{ nodeId: null, message: i }];
+    if (i && typeof i === 'object' && typeof (i as AutomationIssue).message === 'string') {
+      const { nodeId, nodeLabel, message } = i as AutomationIssue;
+      return [{ nodeId: typeof nodeId === 'string' ? nodeId : null, nodeLabel, message }];
+    }
+    return [];
+  });
+}
+
 interface LoadedAutomation {
   id: number | null;
   name: string;
@@ -221,17 +237,50 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
   const [isActive, setIsActive] = useState(initial.isActive);
   const [syncing, setSyncing] = useState(false);
 
-  /** Saves the graph to the server; `activate` also switches it on/off (validated by the server). */
+  // ── Validation: checked live, enforced on Save / Activate ──────────────
+  const clientIssues = useMemo(() => validateAutomation({ name, nodes, edges }), [name, nodes, edges]);
+  /** Issues only the server can detect (Flow not published, template not approved), from the last attempt. */
+  const [serverIssues, setServerIssues] = useState<AutomationIssue[]>([]);
+  const [issuesOpen, setIssuesOpen] = useState(false);
+  const [issuesIntent, setIssuesIntent] = useState<IssuesIntent>(null);
+  /** After the first blocked attempt, steps with issues stay marked on the canvas. */
+  const [markIssues, setMarkIssues] = useState(false);
+
+  const issues = useMemo(() => {
+    const seen = new Set(clientIssues.map((i) => `${i.nodeId}|${i.message}`));
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const extra = serverIssues.filter(
+      (i) => (i.nodeId === null || nodeIds.has(i.nodeId)) && !seen.has(`${i.nodeId}|${i.message}`),
+    );
+    return [...clientIssues, ...extra];
+  }, [clientIssues, serverIssues, nodes]);
+
+  const showIssues = useCallback((intent: IssuesIntent) => {
+    setIssuesIntent(intent);
+    setIssuesOpen(true);
+    setMarkIssues(true);
+  }, []);
+
+  /**
+   * Saves the graph to the server. 'activate' also switches it on (the server re-validates and adds
+   * its own checks); 'pause' switches it off. Returns false when it was blocked or failed.
+   */
   const syncToServer = useCallback(
-    async (activate?: boolean) => {
+    async (mode: 'save' | 'activate' | 'pause') => {
+      // Pausing must always work: with unfixed issues only the switch is sent, edits stay unsaved
+      const saveGraph = mode !== 'pause' || clientIssues.length === 0;
+      if (!saveGraph && !serverId) return false;
       setSyncing(true);
+      setServerIssues([]);
       try {
-        const body = {
-          name: name.trim() || 'Untitled automation',
-          description: description.trim() || null,
-          graph: toServerGraph(nodes, edges),
-          ...(activate !== undefined ? { isActive: activate } : {}),
-        };
+        const body = saveGraph
+          ? {
+              name: name.trim(),
+              description: description.trim() || null,
+              graph: toServerGraph(nodes, edges),
+              ...(mode === 'save' ? {} : { isActive: mode === 'activate' }),
+            }
+          : { isActive: false };
         const res = serverId
           ? await apiClient.put(`/api/automations/${serverId}`, body)
           : await apiClient.post('/api/automations', body);
@@ -241,19 +290,30 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
           onCreated?.(saved.id);
         }
         setIsActive(!!saved?.isActive);
-        lastSaved.current = { nodes, edges };
+        if (saveGraph) {
+          lastSaved.current = { nodes, edges };
+          setIsDirty(false);
+          setIssuesOpen(false);
+        }
         return true;
       } catch (err) {
+        const apiError = toApiError(err);
+        const fromServer = apiError.code === 'VALIDATION_ERROR' ? readServerIssues(apiError.details?.issues) : [];
+        if (fromServer.length) {
+          setServerIssues(fromServer);
+          showIssues(mode === 'activate' ? 'activate' : 'save');
+          return false;
+        }
         notifyError(err, {
           where: 'FlowView.syncToServer',
-          title: activate ? "Automation can't be activated" : "Automation wasn't saved",
+          title: mode === 'activate' ? "Automation can't be activated" : mode === 'pause' ? "Automation wasn't paused" : "Automation wasn't saved",
         });
         return false;
       } finally {
         setSyncing(false);
       }
     },
-    [nodes, edges, serverId, name, description, onCreated],
+    [nodes, edges, serverId, name, description, onCreated, clientIssues.length, showIssues],
   );
 
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -406,6 +466,9 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
           n.id === id ? { ...n, data: { ...n.data, ...updatedData } } : n,
         ),
       );
+      setIsDirty(true);
+      // The server re-checks this step on the next attempt
+      setServerIssues((prev) => prev.filter((i) => i.nodeId !== id));
     },
     [setNodes],
   );
@@ -421,21 +484,37 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
 
   // ── Save ───────────────────────────────────────────────────────────────
   const onSave = useCallback(async () => {
-    if (await syncToServer()) {
-      setIsDirty(false);
-      showToast('Automation saved');
-    }
-  }, [showToast, syncToServer]);
+    if (syncing) return;
+    if (clientIssues.length) return showIssues('save');
+    if (await syncToServer('save')) showToast('Automation saved');
+  }, [syncing, clientIssues.length, showIssues, showToast, syncToServer]);
 
-  const onToggleActive = useCallback(async () => {
-    const next = !isActive;
-    if (await syncToServer(next)) {
-      setIsDirty(false);
-      gooeyToast.success(next ? 'Automation activated' : 'Automation paused', {
-        description: next ? 'It now runs on matching incoming messages.' : undefined,
+  const onActivate = useCallback(async () => {
+    if (syncing) return;
+    if (clientIssues.length) return showIssues('activate');
+    if (await syncToServer('activate')) {
+      gooeyToast.success('Automation activated', { description: 'It now runs on matching incoming messages.' });
+    }
+  }, [syncing, clientIssues.length, showIssues, syncToServer]);
+
+  const onPause = useCallback(async () => {
+    if (syncing) return;
+    const keptEdits = clientIssues.length > 0 && isDirty;
+    if (await syncToServer('pause')) {
+      gooeyToast.success('Automation paused', {
+        description: keptEdits ? 'Your edits have issues, so they were not saved. Fix them and save when ready.' : undefined,
       });
     }
-  }, [isActive, syncToServer]);
+  }, [syncing, clientIssues.length, isDirty, syncToServer]);
+
+  // ── Jump to a step from the issues list ────────────────────────────────
+  const focusNode = useCallback(
+    (id: string) => {
+      setSelectedNodeId(id);
+      fitView({ nodes: [{ id }], duration: 400, padding: 0.8, maxZoom: 1.2 });
+    },
+    [fitView],
+  );
 
   // ── Reset (back to the last saved version) ─────────────────────────────
   const onReset = useCallback(() => {
@@ -443,6 +522,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
     setEdges(lastSaved.current.edges);
     setSelectedNodeId(null);
     setIsDirty(false);
+    setServerIssues([]);
   }, [setNodes, setEdges]);
 
   // ── Keyboard save ──────────────────────────────────────────────────────
@@ -458,14 +538,20 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
   }, [onSave]);
 
   // ── Enrich nodes with _onConfigure callback ────────────────────────────
+  const issuesByNode = useMemo(() => {
+    const map = new Map<string, string[]>();
+    if (!markIssues) return map;
+    for (const i of issues) if (i.nodeId) map.set(i.nodeId, [...(map.get(i.nodeId) ?? []), i.message]);
+    return map;
+  }, [issues, markIssues]);
+
   const enrichedNodes = useMemo(
     () =>
       nodes.map((n) => ({
         ...n,
-        data: { ...n.data, _onConfigure: setSelectedNodeId },
+        data: { ...n.data, _onConfigure: setSelectedNodeId, _issues: issuesByNode.get(n.id) },
       })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [nodes],
+    [nodes, issuesByNode],
   );
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
@@ -521,8 +607,18 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
           </div>
           <div className="flex-1" />
           <div className="flex items-center gap-1.5">
+            {issues.length > 0 && (
+              <button
+                onClick={() => (issuesOpen ? setIssuesOpen(false) : showIssues(null))}
+                className="flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-lg border text-red-600 bg-red-50 border-red-200 hover:bg-red-100 transition-colors"
+                title="Show what needs to be fixed before saving or activating"
+              >
+                <AlertTriangle className="w-3.5 h-3.5" />
+                {issues.length} {issues.length === 1 ? 'issue' : 'issues'}
+              </button>
+            )}
             <button
-              onClick={onToggleActive}
+              onClick={isActive ? onPause : onActivate}
               disabled={syncing}
               className={`flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-60 ${
                 isActive
@@ -536,7 +632,8 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
             </button>
             <button
               onClick={onSave}
-              className="flex items-center gap-1.5 text-[11px] font-semibold text-white bg-[#3440a8] hover:bg-[#2a3490] px-3 py-1.5 rounded-lg transition-colors"
+              disabled={syncing}
+              className="flex items-center gap-1.5 text-[11px] font-semibold text-white bg-[#3440a8] hover:bg-[#2a3490] disabled:opacity-60 px-3 py-1.5 rounded-lg transition-colors"
             >
               <Save className="w-3.5 h-3.5" />
               Save
@@ -595,6 +692,16 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
             onDrop={onDrop}
             onDragOver={onDragOver}
           >
+            {issuesOpen && (
+              <AutomationIssuesPanel
+                issues={issues}
+                intent={issuesIntent}
+                onSelectNode={focusNode}
+                onClose={() => setIssuesOpen(false)}
+                onProceed={issuesIntent === 'activate' ? onActivate : onSave}
+                busy={syncing}
+              />
+            )}
             <ReactFlow
               nodes={enrichedNodes}
               edges={edges}

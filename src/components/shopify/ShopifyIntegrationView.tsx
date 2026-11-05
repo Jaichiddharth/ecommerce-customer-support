@@ -11,6 +11,7 @@ import {
   Loader2,
   Lock,
   Plus,
+  ShieldAlert,
   Unplug,
 } from 'lucide-react';
 import apiClient from '@/lib/api/client';
@@ -55,7 +56,16 @@ interface ShopifyIntegrationViewProps {
 }
 
 export const ShopifyIntegrationView: React.FC<ShopifyIntegrationViewProps> = ({ onBack }) => {
-  const { dbUser } = useAuth();
+  const { dbUser, hasPermission, can } = useAuth();
+  const canManage = hasPermission('manage_billing_and_integrations');
+  const canRead = can('integrations', 'read');
+  const canCreate = can('integrations', 'create');
+  const canUpdate = can('integrations', 'update');
+  const canDelete = can('integrations', 'delete');
+  const isAdmin = canManage;
+  const canConnect = canCreate && canManage;
+  const canDisconnect = canDelete && canManage;
+  const canReconnect = canUpdate && canManage;
   const { store: primaryStore, stores, configured, isLoading, error, refresh } = useShopifyStore();
   const [showConnect, setShowConnect] = useState(false);
   const [connectingShop, setConnectingShop] = useState<string | null>(null);
@@ -63,7 +73,28 @@ export const ShopifyIntegrationView: React.FC<ShopifyIntegrationViewProps> = ({ 
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const storeCount = useRef(stores.length);
 
-  const isAdmin = dbUser?.role === 'ADMIN';
+  if (!canRead || !canManage) {
+    return (
+      <div className="h-full overflow-y-auto bg-slate-50/60 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200/90 shadow-xs p-8 text-center flex flex-col items-center">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 mb-4 shadow-2xs">
+            <Lock className="w-6 h-6 stroke-[2]" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900">Shopify Integration Restricted</h2>
+          <p className="mt-2 text-xs text-slate-500 leading-relaxed max-w-sm">
+            Your role does not have permission to manage billing and integrations. Contact your workspace administrator to connect or manage stores.
+          </p>
+          <button
+            type="button"
+            onClick={onBack}
+            className="mt-5 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-[#3440a8] hover:bg-[#2b358c] transition-colors cursor-pointer"
+          >
+            Back to Integrations
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Shopify's approval page opens in a new tab: pick up the new connection when the user comes back
   useEffect(() => {
@@ -157,8 +188,8 @@ export const ShopifyIntegrationView: React.FC<ShopifyIntegrationViewProps> = ({ 
                 <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2.5">
                   The Shopify integration isn&apos;t set up on this server yet. Ask your administrator to add the Shopify app credentials.
                 </p>
-              ) : !isAdmin ? (
-                <p className="text-xs text-slate-600 bg-slate-100 rounded-lg px-3 py-2.5">Ask a workspace admin to connect your Shopify store.</p>
+              ) : !canConnect ? (
+                <p className="text-xs text-slate-600 bg-slate-100 rounded-lg px-3 py-2.5 flex items-center gap-2"><Lock className="w-3.5 h-3.5 text-slate-400" /> Ask a workspace admin to connect your Shopify store or request create permissions.</p>
               ) : (
                 <ShopAddressForm isConnecting={connectingShop !== null} onSubmit={startConnect} />
               )}
@@ -243,13 +274,15 @@ export const ShopifyIntegrationView: React.FC<ShopifyIntegrationViewProps> = ({ 
               store={store}
               isPrimary={stores.length > 1 && store.id === primaryStore?.id}
               isAdmin={isAdmin}
+              canReconnect={canReconnect}
+              canDisconnect={canDisconnect}
               isReconnecting={connectingShop === store.shopDomain}
               onReconnect={() => startConnect(store.shopDomain)}
               onDisconnect={() => setStoreToDisconnect(store)}
             />
           ))}
 
-          {isAdmin && configured && (
+          {canConnect && configured && (
             <button
               type="button"
               onClick={() => setShowConnect(true)}
@@ -337,12 +370,14 @@ interface StoreCardProps {
   /** The store the inbox uses for products, customers and orders */
   isPrimary: boolean;
   isAdmin: boolean;
+  canReconnect: boolean;
+  canDisconnect: boolean;
   isReconnecting: boolean;
   onReconnect: () => void;
   onDisconnect: () => void;
 }
 
-const StoreCard: React.FC<StoreCardProps> = ({ store, isPrimary, isAdmin, isReconnecting, onReconnect, onDisconnect }) => {
+const StoreCard: React.FC<StoreCardProps> = ({ store, isPrimary, isAdmin, canReconnect, canDisconnect, isReconnecting, onReconnect, onDisconnect }) => {
   const badge = STATUS_BADGE[store.status] ?? STATUS_BADGE.connected;
   const reconnectReason =
     store.status === 'reauth_required'
@@ -371,7 +406,7 @@ const StoreCard: React.FC<StoreCardProps> = ({ store, isPrimary, isAdmin, isReco
       {reconnectReason && (
         <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 text-xs text-amber-800 space-y-2">
           <p>{reconnectReason}</p>
-          {isAdmin && (
+          {canReconnect && (
             <button
               type="button"
               onClick={onReconnect}
@@ -411,7 +446,7 @@ const StoreCard: React.FC<StoreCardProps> = ({ store, isPrimary, isAdmin, isReco
         >
           Open Shopify admin <ExternalLink className="w-3 h-3" />
         </a>
-        {isAdmin && (
+        {canDisconnect && (
           <button
             type="button"
             onClick={onDisconnect}
@@ -426,3 +461,4 @@ const StoreCard: React.FC<StoreCardProps> = ({ store, isPrimary, isAdmin, isReco
 };
 
 export default ShopifyIntegrationView;
+

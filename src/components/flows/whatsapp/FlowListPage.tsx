@@ -11,7 +11,9 @@ import { DataTable, createColumnHelper, useServerTable, type FilterDef } from '@
 import { notifyError } from '@/lib/api/notify';
 import { createBlankFlow, createSampleFlow } from '@/lib/whatsapp-flows/wa-component-registry';
 import type { WaFlow } from '@/lib/whatsapp-flows/wa-flow-types';
-import { flowsApi, categoryLabel, type FlowListItem } from './wa-api';
+import { flowsApi, categoryLabel, type FlowListItem, type FlowStatus } from './wa-api';
+import { useAuth } from '@/context/AuthContext';
+import { Lock } from 'lucide-react';
 import { forgetLocalDrafts, loadLocalDrafts } from './wa-flow-storage';
 import { StatusBadge, formatDate, iconBtn, primaryBtn, secondaryBtn } from './wa-ui';
 
@@ -50,6 +52,10 @@ export function FlowListPage({
   const [busyId, setBusyId] = useState<number | null>(null);
   const [localDrafts, setLocalDrafts] = useState<WaFlow[]>([]);
   const [importing, setImporting] = useState(false);
+  const { can } = useAuth();
+  const canCreate = can('flows', 'create');
+  const canUpdate = can('flows', 'update');
+  const canDelete = can('flows', 'delete');
 
   const table = useServerTable<FlowListItem>({
     fetcher: flowsApi.list,
@@ -108,7 +114,7 @@ export function FlowListPage({
     col.accessor('name', {
       header: 'Flow',
       enableSorting: true,
-      cell: ({ row: { original: f } }) => (
+      cell: ({ row: { original: f } }: { row: { original: FlowListItem } }) => (
         <>
           <button className="font-semibold text-slate-800 hover:text-[#3440a8] text-left" onClick={() => onDetails(f.id)}>
             {f.name}
@@ -120,7 +126,7 @@ export function FlowListPage({
     col.accessor('status', {
       header: 'Status',
       enableSorting: true,
-      cell: ({ row: { original: f } }) => (
+      cell: ({ row: { original: f } }: { row: { original: FlowListItem } }) => (
         <div className="flex flex-col items-start gap-0.5">
           <StatusBadge status={f.status} />
           {f.publishedVersionNumber && (
@@ -134,7 +140,7 @@ export function FlowListPage({
     col.accessor('metaFlowId', {
       header: 'Meta Flow ID',
       meta: { className: 'font-mono text-[10px] text-slate-500' },
-      cell: ({ getValue }) => getValue() ?? '—',
+      cell: ({ getValue }: { getValue: () => string | null }) => getValue() ?? '—',
     }),
     col.accessor('screensCount', {
       id: 'screens',
@@ -149,14 +155,14 @@ export function FlowListPage({
       enableSorting: true,
       sortDescFirst: true,
       meta: { className: 'tabular-nums' },
-      cell: ({ getValue }) => getValue() || '—',
+      cell: ({ getValue }: { getValue: () => number }) => getValue() || '—',
     }),
     col.display({
       id: 'automations',
       header: 'Automations',
-      cell: ({ row: { original: f } }) =>
+      cell: ({ row: { original: f } }: { row: { original: FlowListItem } }) =>
         f.automations.length ? (
-          <span className="inline-flex items-center gap-1 text-slate-600" title={f.automations.map((a) => a.name).join(', ')}>
+          <span className="inline-flex items-center gap-1 text-slate-600" title={f.automations.map((a: any) => a.name).join(', ')}>
             <Workflow className="w-3 h-3 text-[#3440a8]" /> {f.automations.length}
           </span>
         ) : '—',
@@ -166,36 +172,36 @@ export function FlowListPage({
       enableSorting: true,
       sortDescFirst: true,
       meta: { className: 'text-slate-500 whitespace-nowrap' },
-      cell: ({ getValue }) => formatDate(getValue()),
+      cell: ({ getValue }: { getValue: () => string }) => formatDate(getValue()),
     }),
     col.accessor('updatedAt', {
       header: 'Updated',
       enableSorting: true,
       sortDescFirst: true,
       meta: { className: 'text-slate-500 whitespace-nowrap' },
-      cell: ({ getValue }) => formatDate(getValue()),
+      cell: ({ getValue }: { getValue: () => string }) => formatDate(getValue()),
     }),
     col.display({
       id: 'actions',
       header: () => <span className="sr-only">Actions</span>,
-      cell: ({ row: { original: f } }) => {
+      cell: ({ row: { original: f } }: { row: { original: FlowListItem } }) => {
         const archived = f.status === 'archived';
         const busy = busyId === f.id;
         return (
           <div className="flex items-center justify-end gap-0.5">
-            {!archived && <button className={iconBtn} title="Edit" onClick={() => onEdit(f.id)}><Pencil className="w-3.5 h-3.5" /></button>}
+            {!archived && <button className={`${iconBtn} ${!canUpdate ? 'opacity-40 cursor-not-allowed' : ''}`} disabled={!canUpdate} title={!canUpdate ? 'You do not have permission to update flows' : 'Edit'} onClick={canUpdate ? () => onEdit(f.id) : undefined}><Pencil className="w-3.5 h-3.5" /></button>}
             <button className={iconBtn} title="Preview" onClick={() => onPreview(f.id)}><Eye className="w-3.5 h-3.5" /></button>
             {!archived && (
               <button
-                className={iconBtn}
-                title={f.publishedVersionId && !f.hasUnpublishedChanges ? 'Already published' : 'Publish'}
-                disabled={busy || (!!f.publishedVersionId && !f.hasUnpublishedChanges)}
-                onClick={() => window.confirm(`Publish "${f.name}" to WhatsApp?`) && run(f.id, () => flowsApi.action(f.id, 'publish'), 'Flow published')}
+                className={`${iconBtn} ${!canUpdate ? 'opacity-40 cursor-not-allowed' : ''}`}
+                title={!canUpdate ? 'You do not have permission to update flows' : f.publishedVersionId && !f.hasUnpublishedChanges ? 'Already published' : 'Publish'}
+                disabled={busy || !canUpdate || (!!f.publishedVersionId && !f.hasUnpublishedChanges)}
+                onClick={canUpdate ? () => window.confirm(`Publish "${f.name}" to WhatsApp?`) && run(f.id, () => flowsApi.action(f.id, 'publish'), 'Flow published') : undefined}
               >
                 <Rocket className="w-3.5 h-3.5" />
               </button>
             )}
-            <button className={iconBtn} title="Duplicate" disabled={busy} onClick={() => run(f.id, () => flowsApi.action(f.id, 'duplicate'), 'Flow duplicated')}>
+            <button className={`${iconBtn} ${!canCreate ? 'opacity-40 cursor-not-allowed' : ''}`} disabled={busy || !canCreate} title={!canCreate ? 'You do not have permission to create flows' : 'Duplicate'} onClick={canCreate ? () => run(f.id, () => flowsApi.action(f.id, 'duplicate'), 'Flow duplicated') : undefined}>
               <Copy className="w-3.5 h-3.5" />
             </button>
             <button className={iconBtn} title="Details" onClick={() => onDetails(f.id)}><Info className="w-3.5 h-3.5" /></button>
@@ -204,7 +210,7 @@ export function FlowListPage({
                 <RotateCcw className="w-3.5 h-3.5" />
               </button>
             ) : (
-              <button className={`${iconBtn} hover:!text-red-500`} title="Archive / delete" disabled={busy} onClick={() => onRemove(f)}>
+              <button className={`${iconBtn} ${canDelete ? 'hover:!text-red-500' : 'opacity-40 cursor-not-allowed'}`} title={!canDelete ? 'You do not have permission to delete flows' : 'Archive / delete'} disabled={busy || !canDelete} onClick={canDelete ? () => onRemove(f) : undefined}>
                 {f.publishedVersionId || f.latestVersionNumber || f.templatesCount ? <Archive className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
               </button>
             )}
@@ -222,10 +228,10 @@ export function FlowListPage({
           <p className="text-[11px] text-slate-500">Multi-screen forms customers complete inside WhatsApp. Publish a Flow, then attach it to templates or automations.</p>
         </div>
         <div className="flex-1" />
-        <button className={secondaryBtn} onClick={() => onCreate(createSampleFlow())}>
+        <button className={`${secondaryBtn} ${!canCreate ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!canCreate} title={!canCreate ? 'You do not have permission to create flows' : undefined} onClick={canCreate ? () => onCreate(createSampleFlow()) : undefined}>
           <Sparkles className="w-3.5 h-3.5" /> From example
         </button>
-        <button className={primaryBtn} onClick={() => onCreate(createBlankFlow())}>
+        <button className={`${primaryBtn} ${!canCreate ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!canCreate} title={!canCreate ? 'You do not have permission to create flows' : undefined} onClick={canCreate ? () => onCreate(createBlankFlow()) : undefined}>
           <Plus className="w-3.5 h-3.5" /> Create Flow
         </button>
       </div>
@@ -262,6 +268,7 @@ export function FlowListPage({
               </div>
             ) : undefined}
           />
+       
         )}
       />
     </div>

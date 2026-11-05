@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { channels } from "@/lib/services";
-import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, assertPagePermission } from "@/lib/security/auth";
 import { AppError } from "@/lib/errors";
 import { readJson } from "@/lib/api/handler";
 
 export const POST = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, "inbox", "create");
   const body = await readJson(req);
   const { code, wabaId, phoneNumberId } = body ?? {};
 

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, assertPagePermission } from "@/lib/security/auth";
 import { conversationService } from "@/lib/services";
 import { AppError } from "@/lib/errors";
 import { readJson } from "@/lib/api/handler";
@@ -11,6 +11,7 @@ type ConversationRouteContext = { params: Promise<{ id: string }> };
  * Body (all optional): { takeOver, handledBy: 'ai'|'human', needsHuman, assigneeId: number|'me'|null, status, tags }
  */
 export const PATCH = withAuth<ConversationRouteContext>(async (req: AuthenticatedRequest, context) => {
+  assertPagePermission(req.user, "inbox", "update");
   const id = Number((await context?.params)?.id);
   if (!id || isNaN(id)) {
     throw AppError.validation("Invalid conversation id.", "id");

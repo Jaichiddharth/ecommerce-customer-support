@@ -1,10 +1,11 @@
-import { pgTable, serial, varchar, integer, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, varchar, integer, timestamp, index, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { users } from "./users";
 import { channels } from "./channels";
 import { customers } from "./customers";
 import { tickets } from "./tickets";
 import { messages } from "./messages";
+import { messageReactions } from "./message_reactions";
 
 export const organizations = pgTable(
   "organizations",
@@ -12,7 +13,9 @@ export const organizations = pgTable(
     id: serial("id").primaryKey(),
     name: varchar("name", { length: 255 }).notNull(),
     slug: varchar("slug", { length: 100 }).notNull().unique(),
-    plan: varchar("plan", { length: 50 }).default("starter"), // 'starter', 'pro', 'enterprise'
+    plan: varchar("plan", { length: 50 }).default("growth"), // 'starter', 'growth', 'pro', 'enterprise'
+    maxSeats: integer("max_seats").default(10),
+    rolePermissions: jsonb("role_permissions"),
     slaResponseMinutes: integer("sla_response_minutes").default(15),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
@@ -28,6 +31,7 @@ export const organizationsRelations = relations(organizations, ({ many }) => ({
   customers: many(customers),
   tickets: many(tickets),
   messages: many(messages),
+  messageReactions: many(messageReactions),
 }));
 
 export type Organization = typeof organizations.$inferSelect;

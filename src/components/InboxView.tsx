@@ -22,10 +22,13 @@ import {
   Film,
   Music,
   Download,
+  CircleCheck,
+  RotateCcw,
   ShoppingBag,
   Clock,
   AlertTriangle,
   ShieldOff,
+  Lock
 } from 'lucide-react';
 import { Message, MessageStatus, normalizeMessageStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -260,7 +263,11 @@ interface InboxViewProps {
 }
 
 export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, onSelectConversation, onCountsChange }) => {
-  const { dbUser } = useAuth();
+  const { dbUser, can } = useAuth();
+  const canReadInbox = can('inbox', 'read');
+  const canUpdateInbox = can('inbox', 'update');
+  const canCreateInbox = can('inbox', 'create');
+  const canDeleteInbox = can('inbox', 'delete');
 
   // Channels & conversations from DB
   const [channels, setChannels] = useState<InboxChannel[]>([]);
@@ -852,7 +859,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     optimistic: Partial<InboxConversation>,
     successMessage?: string
   ) => {
-    if (!conv.hasConversation) return; // no ticket to update until the first message is sent
     setConversations((prev) => prev.map((c) => (c.id === conv.id ? { ...c, ...optimistic } : c)));
     try {
       await apiClient.patch(`/api/conversations/${conv.id}`, body);
@@ -889,6 +895,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // REACTIONS
   // -------------------------------------------------------------
   const handleToggleReaction = async (msgId: string, emojiToSet: string) => {
+    if (!canUpdateInbox) {
+      gooeyToast.error('You do not have permission to react to messages.');
+      return;
+    }
     if (!activeConv) return;
     if (isCustomerOptedOut) {
       gooeyToast.error(OPTED_OUT_MESSAGE);
@@ -997,6 +1007,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   };
 
   const handleSend = async () => {
+    if (!canUpdateInbox) {
+      gooeyToast.error('You do not have permission to reply or send messages in conversations.');
+      return;
+    }
     if ((!inputMessage.trim() && !selectedFile) || !activeConv) return;
 
     if (isCustomerOptedOut) {
@@ -1120,6 +1134,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   };
 
   const handleAddNote = async () => {
+    if (!canUpdateInbox) {
+      gooeyToast.error('You do not have permission to add notes.');
+      return;
+    }
     const text = inputMessage.trim();
     if (!text || !activeConv) return;
 
@@ -1213,7 +1231,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // -------------------------------------------------------------
   // WHATSAPP TEMPLATES
   // -------------------------------------------------------------
-  const templateDisabledReason = !activeConv
+  const templateDisabledReason = !canUpdateInbox
+    ? 'You do not have permission to send messages or templates.'
+    : !activeConv
     ? null
     : activeChannelType !== 'whatsapp'
       ? 'Message templates can only be sent on WhatsApp.'
@@ -1233,6 +1253,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
   /** Sends the chosen approved template; works outside the 24-hour window, unlike a normal reply */
   const handleSendTemplate = async () => {
+    if (!canUpdateInbox) {
+      gooeyToast.error('You do not have permission to send messages or templates.');
+      return;
+    }
     if (!activeConv || !templateDraft) return;
     if (templateDisabledReason) {
       gooeyToast.error(templateDisabledReason);
@@ -1345,6 +1369,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const [isCreatingContact, setIsCreatingContact] = useState(false);
 
   const openNewContactModal = (prefill = '') => {
+    if (!canCreateInbox) {
+      gooeyToast.error('You do not have permission to create contacts.');
+      return;
+    }
     let initialChannelId = whatsappChannels[0]?.id ?? null;
     if (selectedChannelId !== null && whatsappChannels.some((c) => c.id === selectedChannelId)) {
       initialChannelId = selectedChannelId;
@@ -1404,6 +1432,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   };
 
   const handleConnectChannel = (type: string) => {
+    if (!canCreateInbox) {
+      gooeyToast.error('You do not have permission to connect new channels.');
+      return;
+    }
     if (!type || type === 'whatsapp') {
       setShowAddChannelModal(true);
       return;
@@ -1630,6 +1662,22 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // -------------------------------------------------------------
   // RENDER
   // -------------------------------------------------------------
+  if (!canReadInbox) {
+    return (
+      <div className="h-full w-full flex items-center justify-center p-6 bg-slate-50">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200 p-8 text-center flex flex-col items-center shadow-xs">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 mb-4">
+            <Lock className="w-6 h-6 stroke-[2]" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900">Inbox Access Restricted</h2>
+          <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+            Your role does not have permission to view Inbox conversations. Contact your workspace administrator to request access.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const threadLabel = CHANNEL_THREAD_LABELS[activeChannelType] || CHANNEL_LABELS[activeChannelType] || activeChannelType;
   const channelDetail = activeConv?.channel
     ? formatHandle(activeConv.channel.handle) || activeConv.channel.name || formatPhone(activeConv.channel.phoneNumber)
@@ -1677,6 +1725,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           onSelectChannel={handleSelectChannel}
           onConnect={handleConnectChannel}
           onCollapse={() => setIsChannelsCollapsed(true)}
+          canCreate={canCreateInbox}
         />
       )}
 
@@ -1709,6 +1758,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
             selectedCustomerId={selectedCustomerId}
             onSelect={handleSelectConversation}
             onNewContact={() => openNewContactModal()}
+            canCreate={canCreateInbox}
             isLoading={isLoadingConversations}
             error={conversationsError}
             onRetry={fetchConversations}
@@ -1801,10 +1851,17 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
                     {(isAiHandling || activeConv.needsHuman || activeConv.assigneeId !== dbUser?.id) && (
                       <button
-                        onClick={handleTakeOver}
-                        className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-[13px] font-medium text-slate-900 hover:bg-slate-50 cursor-pointer whitespace-nowrap"
+                        onClick={canUpdateInbox ? handleTakeOver : undefined}
+                        disabled={!canUpdateInbox}
+                        title={!canUpdateInbox ? 'You do not have permission to update conversations' : undefined}
+                        className={`px-3 py-2 rounded-lg border text-[13px] font-medium transition-colors whitespace-nowrap ${
+                          canUpdateInbox
+                            ? 'border-slate-300 bg-white text-slate-900 hover:bg-slate-50 cursor-pointer'
+                            : 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed opacity-60'
+                        }`}
                       >
                         Take over
+                        {!canUpdateInbox && <Lock className="w-3.5 h-3.5 ml-1 text-slate-400 inline" />}
                       </button>
                     )}
                   </div>
@@ -1940,8 +1997,14 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       {composerMode !== 'template' && (
                         <button
                           type="button"
-                          onClick={() => setComposerMode('template')}
-                          className="px-2.5 py-1.5 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-medium text-[11.5px] shrink-0 cursor-pointer shadow-sm transition-colors"
+                          onClick={canUpdateInbox ? () => setComposerMode('template') : undefined}
+                          disabled={!canUpdateInbox}
+                          title={!canUpdateInbox ? 'You do not have permission to send templates' : undefined}
+                          className={`px-2.5 py-1.5 rounded-md text-white font-medium text-[11.5px] shrink-0 shadow-sm transition-colors ${
+                            canUpdateInbox
+                              ? 'bg-amber-600 hover:bg-amber-700 cursor-pointer'
+                              : 'bg-amber-400 cursor-not-allowed opacity-60'
+                          }`}
                         >
                           Send Template
                         </button>
@@ -2082,7 +2145,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                             }
                           }}
                           placeholder={
-                            composerMode === 'note'
+                            !canUpdateInbox ? 'You have view-only access. Replying is disabled.' : composerMode === 'note'
                               ? 'Add an internal note — only your team sees this…'
                               : isChannelDisconnected
                                 ? 'Messaging is paused because this number is disconnected. Reconnect in Settings to send messages.'
@@ -2096,7 +2159,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                           }
                           disabled={
                             (isChannelDisconnected && composerMode === 'reply') ||
-                            (isCustomerOptedOut && composerMode === 'reply') ||
                             (activeChannelType === 'whatsapp' && isWindowExpired && composerMode === 'reply')
                           }
                           className="flex-1 resize-none bg-transparent text-[13px] leading-5 text-slate-800 placeholder-slate-400 focus:outline-none py-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -2185,7 +2247,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       type="button"
                       onClick={handleSubmitComposer}
                       disabled={
-                        isSending ||
+                        !canUpdateInbox || isSending ||
                         (composerMode === 'template'
                           ? !templateReady || Boolean(templateDisabledReason)
                           : composerMode === 'note'
