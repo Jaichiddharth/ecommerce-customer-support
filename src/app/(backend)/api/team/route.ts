@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
-import { withAuth, AuthenticatedRequest, DEFAULT_ROLE_PERMISSIONS, assertRole } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, DEFAULT_ROLE_PERMISSIONS, assertRole, assertPagePermission } from "@/lib/security/auth";
 import { userRepository, organizationRepository, invitationRepository, shopifyRepository } from "@/lib/db/repositories";
 import { invitationService } from "@/lib/services/invitation.service";
 import { AppError } from "@/lib/errors";
 import { readJson } from "@/lib/api/handler";
 
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, 'settings', 'read');
   const orgId = req.user.organizationId;
   const org = await organizationRepository.findById(orgId);
   const users = await userRepository.listByOrg(orgId);
@@ -84,6 +85,7 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
 
 export const POST = withAuth(async (req: AuthenticatedRequest) => {
   assertRole(req.user.role, ["OWNER", "ADMIN"]);
+  assertPagePermission(req.user, 'settings', 'create');
 
   const orgId = req.user.organizationId;
   const body = (await readJson(req)) ?? {};
@@ -138,3 +140,5 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
     seats: result.seats,
   });
 });
+
+

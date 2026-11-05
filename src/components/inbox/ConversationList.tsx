@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, ListFilter, Plus, Search, User } from 'lucide-react';
+import { Check, ListFilter, Plus, Search, User, Lock } from 'lucide-react';
 import { ErrorState } from '@/components/ui/states';
 import type { ApiError } from '@/lib/api/api-error';
 import { ChannelIcon } from './ChannelIcon';
@@ -31,6 +31,7 @@ interface ConversationListProps {
   selectedCustomerId: number | null;
   onSelect: (conv: InboxConversation) => void;
   onNewContact: () => void;
+  canCreate?: boolean;
   isLoading: boolean;
   error: ApiError | null;
   onRetry: () => void;
@@ -69,6 +70,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   selectedCustomerId,
   onSelect,
   onNewContact,
+  canCreate = true,
   isLoading,
   error,
   onRetry,
@@ -182,11 +184,18 @@ export const ConversationList: React.FC<ConversationListProps> = ({
               <p className="text-xs text-slate-400 mt-0.5">Nothing matches this view yet.</p>
             </div>
             <button
-              onClick={onNewContact}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-[#3440a8] hover:bg-[#eef0fb] cursor-pointer"
+              onClick={canCreate ? onNewContact : undefined}
+              disabled={!canCreate}
+              title={!canCreate ? 'You do not have permission to create contacts' : undefined}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                canCreate
+                  ? 'border-slate-200 text-[#3440a8] hover:bg-[#eef0fb] cursor-pointer'
+                  : 'border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed opacity-60'
+              }`}
             >
               <Plus className="w-3.5 h-3.5" />
               New contact
+              {!canCreate && <Lock className="w-3 h-3 text-slate-400" />}
             </button>
           </div>
         ) : (

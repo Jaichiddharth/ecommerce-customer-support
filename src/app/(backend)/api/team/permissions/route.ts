@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
-import { withAuth, AuthenticatedRequest, assertRole, DEFAULT_ROLE_PERMISSIONS } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, assertRole, DEFAULT_ROLE_PERMISSIONS, assertPagePermission } from "@/lib/security/auth";
 import { organizationRepository } from "@/lib/db/repositories";
 import { readJson } from "@/lib/api/handler";
 import { publish } from "@/lib/realtime";
 
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, 'settings', 'read');
+
   const orgId = req.user.organizationId;
   const org = await organizationRepository.findById(orgId);
   const storedPermissions = (org?.rolePermissions as Record<string, Record<string, boolean>>) || {};
@@ -24,6 +26,7 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
 
 export const PATCH = withAuth(async (req: AuthenticatedRequest) => {
   assertRole(req.user.role, ["OWNER", "ADMIN"]);
+  assertPagePermission(req.user, 'settings', 'update');
 
   const orgId = req.user.organizationId;
   const body = (await readJson(req)) ?? {};

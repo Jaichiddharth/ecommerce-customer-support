@@ -105,6 +105,7 @@ export interface AuthUser {
   name: string;
   role: string;
   permissions?: Record<PermissionKey, boolean>;
+  customPermissions?: Record<string, any> | null;
   teams?: string[] | null;
   languages?: string[] | null;
   status?: string | null;
@@ -195,6 +196,7 @@ export async function authenticate(req: NextRequest): Promise<AuthContext> {
     name: dbUser.name || decodedToken.name || email?.split("@")[0] || "User",
     role: dbUser.role || "AGENT",
     permissions: effectivePermissions,
+    customPermissions: (dbUser.customPermissions as Record<string, any>) || null,
     teams: dbUser.teams ?? [],
     languages: dbUser.languages ?? ["EN"],
     status: dbUser.status ?? "active",
@@ -219,6 +221,8 @@ export async function getAuthContext(req: NextRequest): Promise<AuthContext | nu
 /**
  * Helper to get just the authenticated user from a request
  */
+export * from "./permissions";
+
 export async function getAuthUser(req: NextRequest): Promise<AuthUser | null> {
   const context = await getAuthContext(req);
   return context?.user ?? null;

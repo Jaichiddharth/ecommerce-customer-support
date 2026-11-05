@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { withAuth, AuthenticatedRequest, assertRole } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, assertRole, assertPagePermission } from "@/lib/security/auth";
 import { userRepository } from "@/lib/db/repositories";
 import { AppError } from "@/lib/errors";
 import { readJson } from "@/lib/api/handler";
@@ -7,6 +7,7 @@ import { readJson } from "@/lib/api/handler";
 export const PATCH = withAuth<{ params: Promise<{ id: string }> }>(
   async (req: AuthenticatedRequest, context) => {
     assertRole(req.user.role, ["OWNER", "ADMIN"]);
+    assertPagePermission(req.user, 'settings', 'update');
 
     const resolved = await context?.params;
     const memberId = Number(resolved?.id);
@@ -59,6 +60,7 @@ export const PATCH = withAuth<{ params: Promise<{ id: string }> }>(
 export const DELETE = withAuth<{ params: Promise<{ id: string }> }>(
   async (req: AuthenticatedRequest, context) => {
     assertRole(req.user.role, ["OWNER", "ADMIN"]);
+    assertPagePermission(req.user, 'settings', 'delete');
 
     const resolved = await context?.params;
     const memberId = Number(resolved?.id);

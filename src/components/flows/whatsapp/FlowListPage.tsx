@@ -11,6 +11,8 @@ import { notifyError } from '@/lib/api/notify';
 import { createBlankFlow, createSampleFlow } from '@/lib/whatsapp-flows/wa-component-registry';
 import type { WaFlow } from '@/lib/whatsapp-flows/wa-flow-types';
 import { flowsApi, categoryLabel, type FlowListItem, type FlowStatus } from './wa-api';
+import { useAuth } from '@/context/AuthContext';
+import { Lock } from 'lucide-react';
 import { forgetLocalDrafts, loadLocalDrafts } from './wa-flow-storage';
 import { StatusBadge, Pagination, formatDate, iconBtn, inputCls, primaryBtn, secondaryBtn } from './wa-ui';
 
@@ -45,6 +47,10 @@ export function FlowListPage({
   const [busyId, setBusyId] = useState<number | null>(null);
   const [localDrafts, setLocalDrafts] = useState<WaFlow[]>([]);
   const [importing, setImporting] = useState(false);
+  const { can } = useAuth();
+  const canCreate = can('flows', 'create');
+  const canUpdate = can('flows', 'update');
+  const canDelete = can('flows', 'delete');
 
   useEffect(() => {
     const t = setTimeout(() => { setDebouncedQ(q); setPage(1); }, 300);
@@ -116,10 +122,10 @@ export function FlowListPage({
           <p className="text-[11px] text-slate-500">Multi-screen forms customers complete inside WhatsApp. Publish a Flow, then attach it to templates or automations.</p>
         </div>
         <div className="flex-1" />
-        <button className={secondaryBtn} onClick={() => onCreate(createSampleFlow())}>
+        <button className={`${secondaryBtn} ${!canCreate ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!canCreate} title={!canCreate ? 'You do not have permission to create flows' : undefined} onClick={canCreate ? () => onCreate(createSampleFlow()) : undefined}>
           <Sparkles className="w-3.5 h-3.5" /> From example
         </button>
-        <button className={primaryBtn} onClick={() => onCreate(createBlankFlow())}>
+        <button className={`${primaryBtn} ${!canCreate ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!canCreate} title={!canCreate ? 'You do not have permission to create flows' : undefined} onClick={canCreate ? () => onCreate(createBlankFlow()) : undefined}>
           <Plus className="w-3.5 h-3.5" /> Create Flow
         </button>
       </div>
@@ -221,7 +227,7 @@ export function FlowListPage({
                         <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap">{formatDate(f.updatedAt)}</td>
                         <td className="px-3 py-2.5">
                           <div className="flex items-center justify-end gap-0.5">
-                            {!archived && <button className={iconBtn} title="Edit" onClick={() => onEdit(f.id)}><Pencil className="w-3.5 h-3.5" /></button>}
+                            {!archived && <button className={`${iconBtn} ${!canUpdate ? 'opacity-40 cursor-not-allowed' : ''}`} disabled={!canUpdate} title={!canUpdate ? 'You do not have permission to update flows' : 'Edit'} onClick={canUpdate ? () => onEdit(f.id) : undefined}><Pencil className="w-3.5 h-3.5" /></button>}
                             <button className={iconBtn} title="Preview" onClick={() => onPreview(f.id)}><Eye className="w-3.5 h-3.5" /></button>
                             {!archived && (
                               <button
@@ -233,7 +239,7 @@ export function FlowListPage({
                                 <Rocket className="w-3.5 h-3.5" />
                               </button>
                             )}
-                            <button className={iconBtn} title="Duplicate" disabled={busy} onClick={() => run(f.id, () => flowsApi.action(f.id, 'duplicate'), 'Flow duplicated')}>
+                            <button className={`${iconBtn} ${!canCreate ? 'opacity-40 cursor-not-allowed' : ''}`} disabled={busy || !canCreate} title={!canCreate ? 'You do not have permission to create flows' : 'Duplicate'} onClick={canCreate ? () => run(f.id, () => flowsApi.action(f.id, 'duplicate'), 'Flow duplicated') : undefined}>
                               <Copy className="w-3.5 h-3.5" />
                             </button>
                             <button className={iconBtn} title="Details" onClick={() => onDetails(f.id)}><Info className="w-3.5 h-3.5" /></button>
@@ -242,7 +248,7 @@ export function FlowListPage({
                                 <RotateCcw className="w-3.5 h-3.5" />
                               </button>
                             ) : (
-                              <button className={`${iconBtn} hover:!text-red-500`} title="Archive / delete" disabled={busy} onClick={() => onRemove(f)}>
+                              <button className={`${iconBtn} ${canDelete ? 'hover:!text-red-500' : 'opacity-40 cursor-not-allowed'}`} title={!canDelete ? 'You do not have permission to delete flows' : 'Archive / delete'} disabled={busy || !canDelete} onClick={canDelete ? () => onRemove(f) : undefined}>
                                 {f.publishedVersionId || f.latestVersionNumber || f.templatesCount ? <Archive className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
                               </button>
                             )}

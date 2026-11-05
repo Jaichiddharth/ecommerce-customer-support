@@ -75,6 +75,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       email: user.email,
       role: user.role,
       permissions: effectivePermissions,
+      customPermissions: (user.customPermissions as Record<string, any>) || null,
       avatarUrl: user.avatarUrl,
       isOnline: user.isOnline,
       createdAt: user.createdAt,

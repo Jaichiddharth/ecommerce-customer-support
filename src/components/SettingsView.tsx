@@ -443,11 +443,32 @@ function useSettingsTopBar() {
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }) => {
-  const { hasPermission } = useAuth();
+  const { hasPermission, can } = useAuth();
   const canManageBilling = hasPermission('manage_billing_and_integrations');
+  const canReadSettings = can('settings', 'read');
   const [activeSection, setActiveSection] = useState<Section>('whatsapp');
   const active = SECTIONS.find((s) => s.key === activeSection)!;
   const topBar = useSettingsTopBar();
+
+  if (!canReadSettings) {
+    return (
+      <div className="h-full overflow-y-auto bg-slate-50/60 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200/90 shadow-xs p-8 text-center flex flex-col items-center">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 mb-4 shadow-2xs">
+            <Lock className="w-6 h-6 stroke-[2]" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900">Settings Access Restricted</h2>
+          <p className="mt-2 text-xs text-slate-500 leading-relaxed max-w-sm">
+            Your role does not have permission to view workspace settings. Contact your workspace administrator to request access.
+          </p>
+          <div className="mt-6 w-full pt-4 border-t border-slate-100 flex items-center justify-center gap-2 text-[11px] font-semibold text-slate-500">
+            <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
+            <span>Permission required: Settings View</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full bg-[#f8f9fc]">
@@ -534,3 +555,4 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
 };
 
 export default SettingsView;
+

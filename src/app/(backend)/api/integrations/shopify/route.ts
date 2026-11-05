@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
-import { withAuth, AuthenticatedRequest, hasPermission } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, hasPermission, assertPagePermission } from "@/lib/security/auth";
 import { shopifyService } from "@/lib/services";
 import { organizationRepository } from "@/lib/db/repositories";
 import { AppError } from "@/lib/errors";
 
 /** GET /api/integrations/shopify — the organization's store connections (never includes tokens) */
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, 'integrations', 'read');
+
   const org = await organizationRepository.findById(req.user.organizationId);
   const canManage = hasPermission(req.user.role, "manage_billing_and_integrations", org?.rolePermissions as any);
   if (!canManage) {
@@ -18,6 +20,8 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
 
 /** DELETE /api/integrations/shopify?storeId=… — disconnect one store */
 export const DELETE = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, 'integrations', 'delete');
+
   const org = await organizationRepository.findById(req.user.organizationId);
   const canManage = hasPermission(req.user.role, "manage_billing_and_integrations", org?.rolePermissions as any);
   if (!canManage) {

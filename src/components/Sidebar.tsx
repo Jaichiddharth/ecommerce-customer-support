@@ -76,7 +76,7 @@ const initialsOf = (value?: string | null, fallback = '?') => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unreadCount = 0, aiCount = 0 }) => {
-  const { user, dbUser, logout, hasPermission } = useAuth();
+  const { user, dbUser, logout, hasPermission, can } = useAuth();
   const canManageBillingAndIntegrations = hasPermission('manage_billing_and_integrations');
   const router = useRouter();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -154,10 +154,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
 
   const badgeFor = (item: NavItem) => (item.badge === 'unread' ? unreadCount : item.badge === 'ai' ? aiCount : 0);
 
+  const isItemRestricted = (item: NavItem) => {
+    if (!can(item.key, 'read')) return true;
+    if (item.key === 'integrations' && !canManageBillingAndIntegrations) return true;
+    return false;
+  };
+
   const handleItemClick = (item: NavItem) => {
-    if (item.key === 'integrations' && !canManageBillingAndIntegrations) {
-      gooeyToast.info('Integrations are restricted for your role');
-      setActiveTab('integrations');
+    if (isItemRestricted(item)) {
+      gooeyToast.error(`${item.label} access is restricted`);
+      if (item.tab) setActiveTab(item.tab);
       return;
     }
     if (item.tab) {
@@ -233,24 +239,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
                   const Icon = item.icon;
                   const active = item.tab === activeTab;
                   const badge = badgeFor(item);
+                  const isRestricted = isItemRestricted(item);
                   return (
                     <button
                       key={item.key}
                       onClick={() => handleItemClick(item)}
-                      title={item.tab ? item.label : `${item.label} · coming soon`}
+                      title={isRestricted ? `${item.label} · restricted` : item.tab ? item.label : `${item.label} · coming soon`}
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-colors cursor-pointer ${
                         active
                           ? 'bg-[#eef0fb] text-[#3440a8] font-bold'
-                          : 'text-black hover:text-black hover:bg-slate-100/70'
+                          : isRestricted
+                            ? 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'
+                            : 'text-black hover:text-black hover:bg-slate-100/70'
                       }`}
                     >
                       <Icon
                         className={`w-[18px] h-[18px] stroke-[1.8] shrink-0 ${
-                          active ? 'text-[#3440a8]' : 'text-black'
+                          active ? 'text-[#3440a8]' : isRestricted ? 'text-slate-400' : 'text-black'
                         }`}
                       />
                       <span className="flex-1 text-left truncate">{item.label}</span>
-                      {badge > 0 && (
+                      {isRestricted && (
+                        <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      )}
+                      {badge > 0 && !isRestricted && (
                         <span className="px-2 py-0.5 rounded-full bg-[#eef0fb] text-[#3440a8] text-[11px] font-bold">
                           {badge > 99 ? '99+' : badge}
                         </span>
@@ -271,7 +283,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
                   const Icon = item.icon;
                   const active = item.tab === activeTab;
                   const badge = badgeFor(item);
-                  const isRestricted = item.key === 'integrations' && !canManageBillingAndIntegrations;
+                  const isRestricted = isItemRestricted(item);
                   return (
                     <button
                       key={item.key}
@@ -409,18 +421,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
               const Icon = item.icon;
               const active = item.tab === activeTab;
               const badge = badgeFor(item);
+              const isRestricted = isItemRestricted(item);
               return (
                 <div key={item.key} className="relative">
                   <button
                     onClick={() => handleItemClick(item)}
-                    title={item.tab ? item.label : `${item.label} · coming soon`}
+                    title={isRestricted ? `${item.label} · restricted` : item.tab ? item.label : `${item.label} · coming soon`}
                     className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
                       active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-black hover:text-black hover:bg-slate-100'
                     }`}
                   >
                     <Icon className="w-[19px] h-[19px] stroke-[1.8]" />
                   </button>
-                  {badge > 0 && (
+                  {isRestricted && (
+                    <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center pointer-events-none">
+                      <Lock className="w-2 h-2 text-slate-500" />
+                    </span>
+                  )}
+                  {badge > 0 && !isRestricted && (
                     <span className="absolute -top-1 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#3440a8] text-white text-[10px] font-semibold flex items-center justify-center ring-2 ring-white pointer-events-none">
                       {badge > 99 ? '99+' : badge}
                     </span>

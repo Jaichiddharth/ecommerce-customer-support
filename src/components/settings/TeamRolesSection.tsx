@@ -33,7 +33,102 @@ import {
   CheckCircle2,
   X,
   ChevronDown,
+  LayoutGrid,
+  Inbox,
+  Bot,
+  Megaphone,
+  FileText,
+  BarChart3,
+  Plug,
+  Settings,
+  RotateCcw,
 } from 'lucide-react';
+
+export interface PageCrudPermissions {
+  create: boolean;
+  read: boolean;
+  update: boolean;
+  delete: boolean;
+}
+
+export interface PageDefinition {
+  key: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  description: string;
+  category: 'Workspace' | 'Setup';
+}
+
+export const WORKSPACE_PAGES: PageDefinition[] = [
+  { key: 'home', label: 'Home / Dashboard', icon: LayoutGrid, description: 'Workspace metrics, performance overview & summary', category: 'Workspace' },
+  { key: 'inbox', label: 'Inbox', icon: Inbox, description: 'Customer chats, multi-channel messaging & replies', category: 'Workspace' },
+  { key: 'contacts', label: 'Contacts', icon: Users, description: 'Customer profiles, audience segments, tags & consent', category: 'Workspace' },
+  { key: 'ai', label: 'AI agent', icon: Sparkles, description: 'Autonomous AI resolutions, prompts & bot triggers', category: 'Workspace' },
+  { key: 'flows', label: 'Flows', icon: Bot, description: 'Visual chatbot automation builder, triggers & workflows', category: 'Workspace' },
+  { key: 'broadcasts', label: 'Broadcasts', icon: Megaphone, description: 'Outbound marketing campaigns & bulk messaging blasts', category: 'Workspace' },
+  { key: 'templates', label: 'Templates', icon: FileText, description: 'WhatsApp HSM message templates, approval status & sync', category: 'Workspace' },
+  { key: 'analytics', label: 'Analytics', icon: BarChart3, description: 'Resolution times, agent KPIs, CSAT & conversation reports', category: 'Workspace' },
+  { key: 'integrations', label: 'Integrations', icon: Plug, description: 'Shopify stores, WhatsApp Cloud API & third-party connectors', category: 'Setup' },
+  { key: 'settings', label: 'Settings', icon: Settings, description: 'Workspace settings, team management, billing & security', category: 'Setup' },
+];
+
+export function getDefaultPagePermissions(role: string): Record<string, PageCrudPermissions> {
+  const norm = (role || 'AGENT').toUpperCase();
+  const result: Record<string, PageCrudPermissions> = {};
+
+  WORKSPACE_PAGES.forEach((page) => {
+    if (norm === 'OWNER') {
+      result[page.key] = { create: true, read: true, update: true, delete: true };
+    } else if (norm === 'ADMIN') {
+      result[page.key] = { create: true, read: true, update: true, delete: page.key !== 'settings' };
+    } else if (norm === 'AGENT') {
+      if (['inbox', 'contacts'].includes(page.key)) {
+        result[page.key] = { create: true, read: true, update: true, delete: false };
+      } else if (['home', 'ai', 'flows', 'broadcasts', 'templates', 'analytics'].includes(page.key)) {
+        result[page.key] = { create: false, read: true, update: false, delete: false };
+      } else {
+        result[page.key] = { create: false, read: false, update: false, delete: false };
+      }
+    } else {
+      // VIEWER
+      if (['integrations', 'settings'].includes(page.key)) {
+        result[page.key] = { create: false, read: false, update: false, delete: false };
+      } else {
+        result[page.key] = { create: false, read: true, update: false, delete: false };
+      }
+    }
+  });
+
+  return result;
+}
+
+export function getMemberPagePermissions(member: TeamMember): Record<string, PageCrudPermissions> {
+  const defaults = getDefaultPagePermissions(member.role);
+  const stored = (member.customPermissions as any)?.pagePermissions;
+  if (!stored || typeof stored !== 'object') {
+    return defaults;
+  }
+  const merged: Record<string, PageCrudPermissions> = { ...defaults };
+  WORKSPACE_PAGES.forEach((page) => {
+    if (stored[page.key]) {
+      merged[page.key] = {
+        create: Boolean(stored[page.key].create),
+        read: Boolean(stored[page.key].read),
+        update: Boolean(stored[page.key].update),
+        delete: Boolean(stored[page.key].delete),
+      };
+    }
+  });
+  return merged;
+}
+
+export function hasCustomPagePermissions(member: TeamMember): boolean {
+  return Boolean(
+    member.customPermissions &&
+      typeof member.customPermissions === 'object' &&
+      (member.customPermissions as any).pagePermissions
+  );
+}
 
 export interface TeamMember {
   id: number;
@@ -43,7 +138,7 @@ export interface TeamMember {
   teams: string[];
   languages: string[];
   stores?: string[];
-  customPermissions?: Record<string, boolean> | null;
+  customPermissions?: Record<string, any> | null;
   status: 'active' | 'online' | 'away' | 'invited' | string;
   isOnline?: boolean;
   avatarUrl?: string | null;
@@ -118,6 +213,407 @@ function getAvatarColor(name: string) {
   return colors[Math.abs(hash) % colors.length];
 }
 
+interface PagePermissionsMatrixProps {
+  member: TeamMember;
+  permissions: Record<string, PageCrudPermissions>;
+  onChange: (updated: Record<string, PageCrudPermissions>) => void;
+  onSave: () => void;
+  onClose: () => void;
+  isSaving: boolean;
+  canManage: boolean;
+  isModal?: boolean;
+}
+
+export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
+  member,
+  permissions,
+  onChange,
+  onSave,
+  onClose,
+  isSaving,
+  canManage,
+  isModal = false,
+}) => {
+  const roleUpper = (member.role || 'AGENT').toUpperCase();
+  const isOwner = roleUpper === 'OWNER';
+
+  const toggleCell = (pageKey: string, action: keyof PageCrudPermissions) => {
+    if (!canManage || isSaving) return;
+    const current = permissions[pageKey] || { create: false, read: false, update: false, delete: false };
+    onChange({
+      ...permissions,
+      [pageKey]: {
+        ...current,
+        [action]: !current[action],
+      },
+    });
+  };
+
+  const toggleAllForPage = (pageKey: string) => {
+    if (!canManage || isSaving) return;
+    const current = permissions[pageKey] || { create: false, read: false, update: false, delete: false };
+    const allChecked = current.create && current.read && current.update && current.delete;
+    const nextVal = !allChecked;
+    onChange({
+      ...permissions,
+      [pageKey]: { create: nextVal, read: nextVal, update: nextVal, delete: nextVal },
+    });
+  };
+
+  const toggleAllForAction = (action: keyof PageCrudPermissions) => {
+    if (!canManage || isSaving) return;
+    const allChecked = WORKSPACE_PAGES.every((p) => permissions[p.key]?.[action]);
+    const nextVal = !allChecked;
+    const updated = { ...permissions };
+    WORKSPACE_PAGES.forEach((p) => {
+      updated[p.key] = {
+        ...(updated[p.key] || { create: false, read: false, update: false, delete: false }),
+        [action]: nextVal,
+      };
+    });
+    onChange(updated);
+  };
+
+  const applyPreset = (preset: 'all' | 'readOnly' | 'defaults' | 'clear') => {
+    if (!canManage || isSaving) return;
+    if (preset === 'defaults') {
+      onChange(getDefaultPagePermissions(member.role));
+      return;
+    }
+    const updated: Record<string, PageCrudPermissions> = {};
+    WORKSPACE_PAGES.forEach((p) => {
+      if (preset === 'all') {
+        updated[p.key] = { create: true, read: true, update: true, delete: true };
+      } else if (preset === 'readOnly') {
+        updated[p.key] = { create: false, read: true, update: false, delete: false };
+      } else if (preset === 'clear') {
+        updated[p.key] = { create: false, read: false, update: false, delete: false };
+      }
+    });
+    onChange(updated);
+  };
+
+  const countGranted = useMemo(() => {
+    let count = 0;
+    WORKSPACE_PAGES.forEach((p) => {
+      const perm = permissions[p.key];
+      if (perm?.create) count++;
+      if (perm?.read) count++;
+      if (perm?.update) count++;
+      if (perm?.delete) count++;
+    });
+    return count;
+  }, [permissions]);
+
+  const totalPossible = WORKSPACE_PAGES.length * 4;
+
+  const isAllCreate = WORKSPACE_PAGES.every((p) => permissions[p.key]?.create);
+  const isAllRead = WORKSPACE_PAGES.every((p) => permissions[p.key]?.read);
+  const isAllUpdate = WORKSPACE_PAGES.every((p) => permissions[p.key]?.update);
+  const isAllDelete = WORKSPACE_PAGES.every((p) => permissions[p.key]?.delete);
+
+  return (
+    <div className="space-y-4">
+      {/* Top Banner & Presets */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-slate-900 text-sm">
+              Page Permissions: <span className="text-[#1e2a78]">{member.name}</span>
+            </span>
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#eef0fb] text-[#1e2a78] uppercase">
+              {roleUpper}
+            </span>
+            {hasCustomPagePermissions(member) && (
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-100 text-purple-700">
+                Custom Overrides Active
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Configure individual Create, Read, Update, and Delete permissions across all pages for this user.
+          </p>
+        </div>
+
+        {/* Preset Toolbar */}
+        {canManage && (
+          <div className="flex items-center flex-wrap gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => applyPreset('all')}
+              className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs"
+            >
+              Grant All
+            </button>
+            <button
+              type="button"
+              onClick={() => applyPreset('readOnly')}
+              className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs"
+            >
+              Read Only
+            </button>
+            <button
+              type="button"
+              onClick={() => applyPreset('defaults')}
+              className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
+            >
+              <RotateCcw className="w-3 h-3 text-slate-500" />
+              Role Defaults
+            </button>
+            <button
+              type="button"
+              onClick={() => applyPreset('clear')}
+              className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-red-200 hover:bg-red-50 text-slate-600 hover:text-red-600 rounded-lg cursor-pointer transition-colors shadow-2xs"
+            >
+              Clear All
+            </button>
+          </div>
+        )}
+      </div>
+
+      {isOwner && (
+        <div className="p-3 bg-amber-50/80 border border-amber-200/80 rounded-xl flex items-center gap-2 text-xs text-amber-900">
+          <Shield className="w-4 h-4 text-amber-600 shrink-0" />
+          <span>
+            <strong>Workspace Owner:</strong> Owners inherently have unrestricted access across all pages. You may configure custom page flags or keep standard ownership.
+          </span>
+        </div>
+      )}
+
+      {/* Pages CRUD Matrix Table */}
+      <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white shadow-2xs">
+        <table className="w-full text-left text-sm border-collapse">
+          <thead>
+            <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+              <th className="py-2.5 px-4 font-semibold w-2/5">Page / Module</th>
+              
+              {/* CREATE Column */}
+              <th className="py-2.5 px-3 text-center font-semibold">
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-slate-700 font-bold">CREATE</span>
+                  {canManage && (
+                    <label className="cursor-pointer inline-flex items-center" title="Toggle all Create permissions">
+                      <input
+                        type="checkbox"
+                        checked={isAllCreate}
+                        disabled={!canManage || isSaving}
+                        onChange={() => toggleAllForAction('create')}
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer"
+                      />
+                    </label>
+                  )}
+                </div>
+              </th>
+
+              {/* READ Column */}
+              <th className="py-2.5 px-3 text-center font-semibold">
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-slate-700 font-bold">READ</span>
+                  {canManage && (
+                    <label className="cursor-pointer inline-flex items-center" title="Toggle all Read permissions">
+                      <input
+                        type="checkbox"
+                        checked={isAllRead}
+                        disabled={!canManage || isSaving}
+                        onChange={() => toggleAllForAction('read')}
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer"
+                      />
+                    </label>
+                  )}
+                </div>
+              </th>
+
+              {/* UPDATE Column */}
+              <th className="py-2.5 px-3 text-center font-semibold">
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-slate-700 font-bold">UPDATE</span>
+                  {canManage && (
+                    <label className="cursor-pointer inline-flex items-center" title="Toggle all Update permissions">
+                      <input
+                        type="checkbox"
+                        checked={isAllUpdate}
+                        disabled={!canManage || isSaving}
+                        onChange={() => toggleAllForAction('update')}
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer"
+                      />
+                    </label>
+                  )}
+                </div>
+              </th>
+
+              {/* DELETE Column */}
+              <th className="py-2.5 px-3 text-center font-semibold">
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-slate-700 font-bold">DELETE</span>
+                  {canManage && (
+                    <label className="cursor-pointer inline-flex items-center" title="Toggle all Delete permissions">
+                      <input
+                        type="checkbox"
+                        checked={isAllDelete}
+                        disabled={!canManage || isSaving}
+                        onChange={() => toggleAllForAction('delete')}
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer"
+                      />
+                    </label>
+                  )}
+                </div>
+              </th>
+
+              {/* Row Toggle */}
+              <th className="py-2.5 px-4 text-center font-semibold text-slate-500">Row</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {WORKSPACE_PAGES.map((page) => {
+              const Icon = page.icon;
+              const perm = permissions[page.key] || { create: false, read: false, update: false, delete: false };
+              const isRowAll = perm.create && perm.read && perm.update && perm.delete;
+              const isRowNone = !perm.create && !perm.read && !perm.update && !perm.delete;
+
+              return (
+                <tr key={page.key} className="hover:bg-slate-50/80 transition-colors">
+                  {/* Page / Module info */}
+                  <td className="py-3 px-4">
+                    <div className="flex items-start gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-indigo-50/80 border border-indigo-100 flex items-center justify-center shrink-0 mt-0.5 text-[#1e2a78]">
+                        <Icon className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-slate-900 text-xs">{page.label}</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-medium">
+                            {page.category}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 truncate max-w-sm">{page.description}</p>
+                      </div>
+                    </div>
+                  </td>
+
+                  {/* Create Checkbox */}
+                  <td className="py-3 px-3 text-center">
+                    <label className="inline-flex items-center justify-center cursor-pointer p-1">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(perm.create)}
+                        disabled={!canManage || isSaving}
+                        onChange={() => toggleCell(page.key, 'create')}
+                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
+                      />
+                    </label>
+                  </td>
+
+                  {/* Read Checkbox */}
+                  <td className="py-3 px-3 text-center">
+                    <label className="inline-flex items-center justify-center cursor-pointer p-1">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(perm.read)}
+                        disabled={!canManage || isSaving}
+                        onChange={() => toggleCell(page.key, 'read')}
+                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
+                      />
+                    </label>
+                  </td>
+
+                  {/* Update Checkbox */}
+                  <td className="py-3 px-3 text-center">
+                    <label className="inline-flex items-center justify-center cursor-pointer p-1">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(perm.update)}
+                        disabled={!canManage || isSaving}
+                        onChange={() => toggleCell(page.key, 'update')}
+                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
+                      />
+                    </label>
+                  </td>
+
+                  {/* Delete Checkbox */}
+                  <td className="py-3 px-3 text-center">
+                    <label className="inline-flex items-center justify-center cursor-pointer p-1">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(perm.delete)}
+                        disabled={!canManage || isSaving}
+                        onChange={() => toggleCell(page.key, 'delete')}
+                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
+                      />
+                    </label>
+                  </td>
+
+                  {/* Row toggle button */}
+                  <td className="py-3 px-4 text-center">
+                    {canManage && (
+                      <button
+                        type="button"
+                        onClick={() => toggleAllForPage(page.key)}
+                        disabled={isSaving}
+                        className={`text-[11px] font-semibold px-2 py-0.5 rounded transition-colors cursor-pointer ${
+                          isRowAll
+                            ? 'bg-indigo-50 text-[#1e2a78] hover:bg-indigo-100'
+                            : isRowNone
+                              ? 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                        title="Toggle all CRUD permissions for this page"
+                      >
+                        {isRowAll ? 'All ✓' : isRowNone ? 'None' : 'Mixed'}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Action Footer Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-500 font-medium">
+            <strong>{countGranted}</strong> of <strong>{totalPossible}</strong> permissions granted
+          </span>
+          <div className="w-24 bg-slate-200 h-1.5 rounded-full overflow-hidden">
+            <div
+              className="bg-[#1e2a78] h-full rounded-full transition-all duration-300"
+              style={{ width: `${Math.round((countGranted / totalPossible) * 100)}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isSaving}
+            className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg cursor-pointer transition-colors"
+          >
+            {isModal ? 'Close' : 'Collapse'}
+          </button>
+
+          {canManage && (
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={isSaving}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1e2a78] hover:bg-[#16205e] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer shadow-sm transition-all"
+            >
+              {isSaving ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+              )}
+              Save permissions
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const TeamRolesSection: React.FC = () => {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [pendingInvitations, setPendingInvitations] = useState<PendingInvitation[]>([]);
@@ -143,6 +639,12 @@ export const TeamRolesSection: React.FC = () => {
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
   const [activeMenuMemberId, setActiveMenuMemberId] = useState<number | null>(null);
   const [activeInviteMenuId, setActiveInviteMenuId] = useState<number | null>(null);
+
+  // Page CRUD permissions state
+  const [expandedMemberId, setExpandedMemberId] = useState<number | null>(null);
+  const [memberPermissionsDraft, setMemberPermissionsDraft] = useState<Record<string, PageCrudPermissions>>({});
+  const [isSavingMemberPermissions, setIsSavingMemberPermissions] = useState(false);
+  const [permissionsModalMember, setPermissionsModalMember] = useState<TeamMember | null>(null);
 
   // Multi-email invite form state
   const [emailInput, setEmailInput] = useState('');
@@ -210,13 +712,17 @@ export const TeamRolesSection: React.FC = () => {
     return () => window.removeEventListener('click', handleClickOutside);
   }, []);
 
-  const { hasPermission } = useAuth();
+  const { hasPermission, dbUser, refreshDbUser, can } = useAuth();
   const canManageBilling = hasPermission('manage_billing_and_integrations');
 
   const canManage = useMemo(() => {
     const norm = currentRole.toUpperCase();
     return norm === 'OWNER' || norm === 'ADMIN';
   }, [currentRole]);
+
+  const canCreateMember = canManage && can('settings', 'create');
+  const canUpdateMember = canManage && can('settings', 'update');
+  const canDeleteMember = canManage && can('settings', 'delete');
 
   // Seat metrics
   const availableSeats = Math.max(0, seats.total - seats.used);
@@ -457,6 +963,61 @@ export const TeamRolesSection: React.FC = () => {
     }
   };
 
+  // Handle toggling expandable member permissions row
+  const handleToggleMemberPermissions = (member: TeamMember) => {
+    if (expandedMemberId === member.id) {
+      setExpandedMemberId(null);
+    } else {
+      setExpandedMemberId(member.id);
+      setMemberPermissionsDraft(getMemberPagePermissions(member));
+    }
+  };
+
+  // Handle opening dedicated permissions modal
+  const handleOpenPermissionsModal = (member: TeamMember) => {
+    setPermissionsModalMember(member);
+    setMemberPermissionsDraft(getMemberPagePermissions(member));
+  };
+
+  // Handle saving member's page CRUD permissions
+  const handleSaveMemberPermissions = async (
+    member: TeamMember,
+    permissionsToSave: Record<string, PageCrudPermissions>
+  ) => {
+    try {
+      setIsSavingMemberPermissions(true);
+      const existingCustom = (member.customPermissions as Record<string, any>) || {};
+      const updatedCustom = {
+        ...existingCustom,
+        pagePermissions: permissionsToSave,
+      };
+
+      const res = await apiClient.patch(`/api/team/${member.id}`, {
+        customPermissions: updatedCustom,
+      });
+
+      if (res.data?.success) {
+        gooeyToast.success(`Page permissions saved for ${member.name}`);
+        if (dbUser && (member.id === dbUser.id || member.email === dbUser.email)) {
+          refreshDbUser();
+        }
+        setMembers((prev) =>
+          prev.map((m) =>
+            m.id === member.id
+              ? { ...m, customPermissions: updatedCustom }
+              : m
+          )
+        );
+      }
+    } catch (err: any) {
+      gooeyToast.error('Failed to save permissions', {
+        description: err.response?.data?.message || err.message,
+      });
+    } finally {
+      setIsSavingMemberPermissions(false);
+    }
+  };
+
   // Handle toggling permission matrix checkboxes
   const handleTogglePermission = async (role: 'ADMIN' | 'AGENT' | 'VIEWER', permissionKey: string) => {
     if (!canManage || !permissions) return;
@@ -530,14 +1091,17 @@ export const TeamRolesSection: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => {
+              disabled={!canCreateMember}
+              onClick={canCreateMember ? () => {
                 resetInviteForm();
                 setIsInviteOpen(true);
-              }}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1e2a78] hover:bg-[#16205e] text-white text-[13px] font-semibold shadow-sm transition-all cursor-pointer shrink-0"
+              } : undefined}
+              title={!canCreateMember ? "You do not have permission to invite team members" : undefined}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold shadow-sm transition-all shrink-0 ${canCreateMember ? 'bg-[#1e2a78] hover:bg-[#16205e] text-white cursor-pointer' : 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-60'}`}
             >
               <Plus className="w-4 h-4 stroke-[2.5]" />
               Invite member
+              {!canCreateMember && <Lock className="w-3.5 h-3.5 ml-1 text-slate-400" />}
             </button>
           </div>
         )}
@@ -670,6 +1234,7 @@ export const TeamRolesSection: React.FC = () => {
                 <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50/50">
                   <th className="py-3 px-6 font-semibold">Member</th>
                   <th className="py-3 px-6 font-semibold">Role</th>
+                  <th className="py-3 px-6 font-semibold">Permissions</th>
                   <th className="py-3 px-6 font-semibold">Stores</th>
                   <th className="py-3 px-6 font-semibold">Teams</th>
                   <th className="py-3 px-6 font-semibold">Languages</th>
@@ -680,14 +1245,14 @@ export const TeamRolesSection: React.FC = () => {
               <tbody className="divide-y divide-slate-100">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-xs text-slate-400">
+                    <td colSpan={8} className="py-12 text-center text-xs text-slate-400">
                       <Loader2 className="w-5 h-5 animate-spin mx-auto text-[#1e2a78] mb-2" />
                       Loading team members…
                     </td>
                   </tr>
                 ) : members.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-xs text-slate-400">
+                    <td colSpan={8} className="py-12 text-center text-xs text-slate-400">
                       No team members found.
                     </td>
                   </tr>
@@ -698,165 +1263,230 @@ export const TeamRolesSection: React.FC = () => {
                     const isOnline = member.isOnline || statusLower === 'online' || statusLower === 'active';
                     const isAway = statusLower === 'away';
                     const isInvited = statusLower === 'invited';
+                    const isExpanded = expandedMemberId === member.id;
+                    const hasCustom = hasCustomPagePermissions(member);
 
                     return (
-                      <tr key={member.id} className="hover:bg-slate-50/70 transition-colors">
-                        {/* Member */}
-                        <td className="py-4 px-6">
-                          <div className="flex items-center gap-3">
-                            <div
-                              className={`w-9 h-9 rounded-full border flex items-center justify-center font-bold text-xs shrink-0 ${getAvatarColor(
-                                member.name
-                              )}`}
+                      <React.Fragment key={member.id}>
+                        <tr className={`transition-colors ${isExpanded ? 'bg-indigo-50/40' : 'hover:bg-slate-50/70'}`}>
+                          {/* Member */}
+                          <td className="py-4 px-6">
+                            <div className="flex items-center gap-3">
+                              <div
+                                className={`w-9 h-9 rounded-full border flex items-center justify-center font-bold text-xs shrink-0 ${getAvatarColor(
+                                  member.name
+                                )}`}
+                              >
+                                {member.avatarUrl ? (
+                                  <img
+                                    src={member.avatarUrl}
+                                    alt={member.name}
+                                    className="w-full h-full rounded-full object-cover"
+                                  />
+                                ) : (
+                                  getInitials(member.name)
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="font-semibold text-slate-900 text-[13.5px] truncate">{member.name}</p>
+                                <p className="text-xs text-slate-500 truncate">{member.email}</p>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Role */}
+                          <td className="py-4 px-6">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleMemberPermissions(member)}
+                              className="flex items-center gap-1.5 text-left group cursor-pointer"
+                              title="Click to view & configure permissions for this role"
                             >
-                              {member.avatarUrl ? (
-                                <img
-                                  src={member.avatarUrl}
-                                  alt={member.name}
-                                  className="w-full h-full rounded-full object-cover"
-                                />
+                              <span className="text-[13px] font-semibold text-slate-800 group-hover:text-[#1e2a78] transition-colors">
+                                {roleNormalized.charAt(0) + roleNormalized.slice(1).toLowerCase()}
+                              </span>
+                              {member.twoFactorEnabled && (
+                                <span title="2-Step Verification Enabled">
+                                  <Shield className="w-3.5 h-3.5 text-emerald-600" />
+                                </span>
+                              )}
+                            </button>
+                          </td>
+
+                          {/* Permissions */}
+                          <td className="py-4 px-6">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleMemberPermissions(member)}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer shadow-2xs ${
+                                isExpanded
+                                  ? 'bg-[#1e2a78] text-white ring-2 ring-[#1e2a78]/30'
+                                  : hasCustom
+                                    ? 'bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200'
+                                    : 'bg-indigo-50/80 hover:bg-indigo-100 text-[#1e2a78] border border-indigo-200/70'
+                              }`}
+                              title="Click to view & configure page-by-page Create, Read, Update, and Delete permissions"
+                            >
+                              <Sliders className="w-3.5 h-3.5" />
+                              <span>{hasCustom ? 'Custom CRUD' : 'Permissions'}</span>
+                              <ChevronDown
+                                className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                                  isExpanded ? 'rotate-180' : ''
+                                }`}
+                              />
+                            </button>
+                          </td>
+
+                          {/* Stores */}
+                          <td className="py-4 px-6 text-xs text-slate-600">
+                            {member.stores && member.stores.length > 0 ? (
+                              <span className="truncate max-w-[140px] block" title={member.stores.join(', ')}>
+                                {member.stores.join(' · ')}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">All</span>
+                            )}
+                          </td>
+
+                          {/* Teams */}
+                          <td className="py-4 px-6 text-xs text-slate-600">
+                            {member.teams && member.teams.length > 0 ? (
+                              <span>{member.teams.join(' · ')}</span>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </td>
+
+                          {/* Languages */}
+                          <td className="py-4 px-6 text-xs text-slate-600 font-medium">
+                            {member.languages && member.languages.length > 0 ? (
+                              <span>{member.languages.join(' · ')}</span>
+                            ) : (
+                              <span className="text-slate-400">EN</span>
+                            )}
+                          </td>
+
+                          {/* Status */}
+                          <td className="py-4 px-6">
+                            <div className="inline-flex items-center gap-1.5 text-xs font-medium">
+                              {isInvited ? (
+                                <>
+                                  <span className="w-2 h-2 rounded-full bg-blue-500" />
+                                  <span className="text-blue-700">Invited</span>
+                                </>
+                              ) : isAway ? (
+                                <>
+                                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                                  <span className="text-amber-800">Away</span>
+                                </>
+                              ) : isOnline ? (
+                                <>
+                                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                                  <span className="text-emerald-700">{statusLower === 'online' ? 'Online' : 'Active'}</span>
+                                </>
                               ) : (
-                                getInitials(member.name)
+                                <>
+                                  <span className="w-2 h-2 rounded-full bg-slate-300" />
+                                  <span className="text-slate-500">Offline</span>
+                                </>
                               )}
                             </div>
-                            <div className="min-w-0">
-                              <p className="font-semibold text-slate-900 text-[13.5px] truncate">{member.name}</p>
-                              <p className="text-xs text-slate-500 truncate">{member.email}</p>
-                            </div>
-                          </div>
-                        </td>
+                          </td>
 
-                        {/* Role */}
-                        <td className="py-4 px-6">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[13px] font-medium text-slate-800">
-                              {roleNormalized.charAt(0) + roleNormalized.slice(1).toLowerCase()}
-                            </span>
-                            {member.twoFactorEnabled && (
-                              <span title="2-Step Verification Enabled">
-                                <Shield className="w-3.5 h-3.5 text-emerald-600" />
-                              </span>
-                            )}
-                          </div>
-                        </td>
+                          {/* Action Menu */}
+                          <td className="py-4 px-6 text-right relative">
+                            {canManage && (
+                              <div className="inline-block text-left" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setActiveMenuMemberId(activeMenuMemberId === member.id ? null : member.id)
+                                  }
+                                  className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                                >
+                                  <MoreHorizontal className="w-4 h-4" />
+                                </button>
 
-                        {/* Stores */}
-                        <td className="py-4 px-6 text-xs text-slate-600">
-                          {member.stores && member.stores.length > 0 ? (
-                            <span className="truncate max-w-[140px] block" title={member.stores.join(', ')}>
-                              {member.stores.join(' · ')}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">All</span>
-                          )}
-                        </td>
-
-                        {/* Teams */}
-                        <td className="py-4 px-6 text-xs text-slate-600">
-                          {member.teams && member.teams.length > 0 ? (
-                            <span>{member.teams.join(' · ')}</span>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
-
-                        {/* Languages */}
-                        <td className="py-4 px-6 text-xs text-slate-600 font-medium">
-                          {member.languages && member.languages.length > 0 ? (
-                            <span>{member.languages.join(' · ')}</span>
-                          ) : (
-                            <span className="text-slate-400">EN</span>
-                          )}
-                        </td>
-
-                        {/* Status */}
-                        <td className="py-4 px-6">
-                          <div className="inline-flex items-center gap-1.5 text-xs font-medium">
-                            {isInvited ? (
-                              <>
-                                <span className="w-2 h-2 rounded-full bg-blue-500" />
-                                <span className="text-blue-700">Invited</span>
-                              </>
-                            ) : isAway ? (
-                              <>
-                                <span className="w-2 h-2 rounded-full bg-amber-500" />
-                                <span className="text-amber-800">Away</span>
-                              </>
-                            ) : isOnline ? (
-                              <>
-                                <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                                <span className="text-emerald-700">{statusLower === 'online' ? 'Online' : 'Active'}</span>
-                              </>
-                            ) : (
-                              <>
-                                <span className="w-2 h-2 rounded-full bg-slate-300" />
-                                <span className="text-slate-500">Offline</span>
-                              </>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Action Menu */}
-                        <td className="py-4 px-6 text-right relative">
-                          {canManage && (
-                            <div className="inline-block text-left" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setActiveMenuMemberId(activeMenuMemberId === member.id ? null : member.id)
-                                }
-                                className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-                              >
-                                <MoreHorizontal className="w-4 h-4" />
-                              </button>
-
-                              {activeMenuMemberId === member.id && (
-                                <div className="absolute right-6 top-10 w-44 bg-white border border-slate-200 rounded-xl shadow-xl p-1 z-30 text-xs">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveMenuMemberId(null);
-                                      handleOpenEdit(member);
-                                    }}
-                                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 text-left cursor-pointer"
-                                  >
-                                    <Edit3 className="w-3.5 h-3.5 text-slate-500" />
-                                    Edit details & role
-                                  </button>
-
-                                  {isInvited && (
+                                {activeMenuMemberId === member.id && (
+                                  <div className="absolute right-6 top-10 w-48 bg-white border border-slate-200 rounded-xl shadow-xl p-1 z-30 text-xs">
                                     <button
                                       type="button"
                                       onClick={() => {
                                         setActiveMenuMemberId(null);
-                                        handleResendInvite(0, member.email);
+                                        handleOpenPermissionsModal(member);
+                                      }}
+                                      className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-indigo-50 text-[#1e2a78] font-medium text-left cursor-pointer"
+                                    >
+                                      <Sliders className="w-3.5 h-3.5 text-[#1e2a78]" />
+                                      Page permissions (CRUD)
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveMenuMemberId(null);
+                                        handleOpenEdit(member);
                                       }}
                                       className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 text-left cursor-pointer"
                                     >
-                                      <Send className="w-3.5 h-3.5 text-indigo-600" />
-                                      Resend invitation
+                                      <Edit3 className="w-3.5 h-3.5 text-slate-500" />
+                                      Edit details & role
                                     </button>
-                                  )}
 
-                                  {member.role !== 'OWNER' && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveMenuMemberId(null);
-                                        handleDeleteMember(member);
-                                      }}
-                                      className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-red-50 text-red-600 text-left cursor-pointer"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                      Remove member
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                      </tr>
+                                    {isInvited && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActiveMenuMemberId(null);
+                                          handleResendInvite(0, member.email);
+                                        }}
+                                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 text-left cursor-pointer"
+                                      >
+                                        <Send className="w-3.5 h-3.5 text-indigo-600" />
+                                        Resend invitation
+                                      </button>
+                                    )}
+
+                                    {member.role !== 'OWNER' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActiveMenuMemberId(null);
+                                          handleDeleteMember(member);
+                                        }}
+                                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-red-50 text-red-600 text-left cursor-pointer"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                        Remove member
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+
+                        {/* Inline Page CRUD Permissions Expansion Row */}
+                        {isExpanded && (
+                          <tr className="bg-slate-50/95 border-b-2 border-indigo-200">
+                            <td colSpan={8} className="p-0">
+                              <div className="p-5 border-l-4 border-[#1e2a78] bg-slate-50/95 shadow-inner">
+                                <PagePermissionsMatrix
+                                  member={member}
+                                  permissions={memberPermissionsDraft}
+                                  onChange={setMemberPermissionsDraft}
+                                  onSave={() => handleSaveMemberPermissions(member, memberPermissionsDraft)}
+                                  onClose={() => setExpandedMemberId(null)}
+                                  isSaving={isSavingMemberPermissions}
+                                  canManage={canUpdateMember}
+                                  isModal={false}
+                                />
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     );
                   })
                 )}
@@ -1022,7 +1652,7 @@ export const TeamRolesSection: React.FC = () => {
                         <input
                           type="checkbox"
                           checked={adminChecked}
-                          disabled={!canManage || isSavingPermissions}
+                          disabled={!canUpdateMember || isSavingPermissions}
                           onChange={() => handleTogglePermission('ADMIN', key)}
                           className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
                         />
@@ -1035,7 +1665,7 @@ export const TeamRolesSection: React.FC = () => {
                         <input
                           type="checkbox"
                           checked={agentChecked}
-                          disabled={!canManage || isSavingPermissions}
+                          disabled={!canUpdateMember || isSavingPermissions}
                           onChange={() => handleTogglePermission('AGENT', key)}
                           className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
                         />
@@ -1048,7 +1678,7 @@ export const TeamRolesSection: React.FC = () => {
                         <input
                           type="checkbox"
                           checked={viewerChecked}
-                          disabled={!canManage || isSavingPermissions}
+                          disabled={!canUpdateMember || isSavingPermissions}
                           onChange={() => handleTogglePermission('VIEWER', key)}
                           className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
                         />
@@ -1673,8 +2303,37 @@ export const TeamRolesSection: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      {/* ─── Modal: Page Permissions (CRUD) ─────────────────────────────────────── */}
+      <Modal
+        isOpen={Boolean(permissionsModalMember)}
+        onClose={() => setPermissionsModalMember(null)}
+        title={`Page Permissions · ${permissionsModalMember?.name || 'Member'}`}
+        maxWidth="2xl"
+      >
+        {permissionsModalMember && (
+          <div className="pt-2">
+            <PagePermissionsMatrix
+              member={permissionsModalMember}
+              permissions={memberPermissionsDraft}
+              onChange={setMemberPermissionsDraft}
+              onSave={async () => {
+                await handleSaveMemberPermissions(permissionsModalMember, memberPermissionsDraft);
+                setPermissionsModalMember(null);
+              }}
+              onClose={() => setPermissionsModalMember(null)}
+              isSaving={isSavingMemberPermissions}
+              canManage={canUpdateMember}
+              isModal={true}
+            />
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };
 
 export default TeamRolesSection;
+
+
+

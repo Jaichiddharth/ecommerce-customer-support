@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, assertPagePermission } from "@/lib/security/auth";
 import { conversationService } from "@/lib/services";
 
 /**
@@ -7,6 +7,7 @@ import { conversationService } from "@/lib/services";
  * Inbox list: latest conversation per customer with channel, AI state, unread count and last message.
  */
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, "inbox", "read");
   const orgId = req.user.organizationId;
   const canSeeAll = req.user.permissions?.see_all_chats ?? true;
 

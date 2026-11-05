@@ -12,6 +12,8 @@ import { StatusBadge, Pagination, formatDate, iconBtn, inputCls, primaryBtn, sec
 import { loadLegacyBrowserAutomation, forgetLegacyBrowserAutomation, toServerGraph } from '../FlowView';
 import { automationsApi, TRIGGER_LABELS, type AutomationListItem, type TriggerType } from './automation-api';
 import { AutomationRunsDrawer } from './AutomationRunsDrawer';
+import { useAuth } from '@/context/AuthContext';
+import { Lock } from 'lucide-react';
 
 const PAGE_SIZE = 20;
 
@@ -42,6 +44,11 @@ export function AutomationListPage({
   const [history, setHistory] = useState<AutomationListItem | null>(null);
   const [legacy, setLegacy] = useState<ReturnType<typeof loadLegacyBrowserAutomation>>(null);
   const [importing, setImporting] = useState(false);
+
+  const { can } = useAuth();
+  const canCreate = can('flows', 'create');
+  const canUpdate = can('flows', 'update');
+  const canDelete = can('flows', 'delete');
 
   useEffect(() => {
     const t = setTimeout(() => { setDebouncedQ(q); setPage(1); }, 300);
@@ -121,10 +128,10 @@ export function AutomationListPage({
           <p className="text-[11px] text-slate-500">Event-driven workflows that run on incoming WhatsApp messages. Activate one to start running it.</p>
         </div>
         <div className="flex-1" />
-        <button className={secondaryBtn} onClick={() => onCreate('example')}>
+        <button className={`${secondaryBtn} ${!canCreate ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!canCreate} title={!canCreate ? 'You do not have permission to create automations' : undefined} onClick={canCreate ? () => onCreate('example') : undefined}>
           <Sparkles className="w-3.5 h-3.5" /> From example
         </button>
-        <button className={primaryBtn} onClick={() => onCreate('blank')}>
+        <button className={`${primaryBtn} ${!canCreate ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!canCreate} title={!canCreate ? 'You do not have permission to create automations' : undefined} onClick={canCreate ? () => onCreate('blank') : undefined}>
           <Plus className="w-3.5 h-3.5" /> Create Automation
         </button>
       </div>
@@ -197,8 +204,8 @@ export function AutomationListPage({
             description={filtered ? 'Try a different search or filter.' : 'Create an automation to reply, tag contacts or send WhatsApp Flows automatically.'}
             action={!filtered ? (
               <div className="flex gap-2">
-                <button className={primaryBtn} onClick={() => onCreate('blank')}><Plus className="w-3.5 h-3.5" /> Create Automation</button>
-                <button className={secondaryBtn} onClick={() => onCreate('example')}><Sparkles className="w-3.5 h-3.5" /> From example</button>
+                <button className={`${primaryBtn} ${!canCreate ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!canCreate} title={!canCreate ? 'You do not have permission to create automations' : undefined} onClick={canCreate ? () => onCreate('blank') : undefined}><Plus className="w-3.5 h-3.5" /> Create Automation</button>
+                <button className={`${secondaryBtn} ${!canCreate ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!canCreate} title={!canCreate ? 'You do not have permission to create automations' : undefined} onClick={canCreate ? () => onCreate('example') : undefined}><Sparkles className="w-3.5 h-3.5" /> From example</button>
               </div>
             ) : undefined}
           />
@@ -269,9 +276,9 @@ export function AutomationListPage({
                                 {a.isActive ? <PauseCircle className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
                               </button>
                             )}
-                            {!archived && <button className={iconBtn} title="Edit" onClick={() => onEdit(a.id)}><Pencil className="w-3.5 h-3.5" /></button>}
+                            {!archived && <button className={`${iconBtn} ${!canUpdate ? 'opacity-40 cursor-not-allowed' : ''}`} disabled={!canUpdate} title={!canUpdate ? 'You do not have permission to update automations' : 'Edit'} onClick={canUpdate ? () => onEdit(a.id) : undefined}><Pencil className="w-3.5 h-3.5" /></button>}
                             <button className={iconBtn} title="Execution history" onClick={() => setHistory(a)}><History className="w-3.5 h-3.5" /></button>
-                            <button className={iconBtn} title="Duplicate" disabled={busy} onClick={() => run(a.id, () => automationsApi.duplicate(a.id), 'Automation duplicated as a draft')}>
+                            <button className={`${iconBtn} ${!canCreate ? 'opacity-40 cursor-not-allowed' : ''}`} title={!canCreate ? 'You do not have permission to create automations' : 'Duplicate'} disabled={busy || !canCreate} onClick={canCreate ? () => run(a.id, () => automationsApi.duplicate(a.id), 'Automation duplicated as a draft') : undefined}>
                               <Copy className="w-3.5 h-3.5" />
                             </button>
                             {archived ? (
@@ -279,7 +286,7 @@ export function AutomationListPage({
                                 <RotateCcw className="w-3.5 h-3.5" />
                               </button>
                             ) : (
-                              <button className={`${iconBtn} hover:!text-red-500`} title={a.totalRuns > 0 ? 'Archive' : 'Delete'} disabled={busy} onClick={() => onRemove(a)}>
+                              <button className={`${iconBtn} ${canDelete ? 'hover:!text-red-500' : 'opacity-40 cursor-not-allowed'}`} title={!canDelete ? 'You do not have permission to delete automations' : (a.totalRuns > 0 ? 'Archive' : 'Delete')} disabled={busy || !canDelete} onClick={canDelete ? () => onRemove(a) : undefined}>
                                 {a.totalRuns > 0 ? <Archive className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
                               </button>
                             )}

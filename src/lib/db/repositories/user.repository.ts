@@ -201,7 +201,7 @@ export class UserRepository {
       teams: string[];
       languages: string[];
       stores: string[];
-      customPermissions: Record<string, boolean> | null;
+      customPermissions: Record<string, any> | null;
       status: string;
       avatarUrl: string | null;
       twoFactorEnabled: boolean;

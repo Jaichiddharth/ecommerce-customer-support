@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import { WhatsAppTemplate, HeaderType, isTemplateEditable } from '@/types/templates';
 import { WhatsAppChatPreview } from './WhatsAppChatPreview';
+import { useAuth } from '@/context/AuthContext';
+import { Lock } from 'lucide-react';
 
 /** A connected WhatsApp number the page can show templates for */
 export interface TemplateNumber {
@@ -217,6 +219,10 @@ const RowMenu: React.FC<{
   const tpl = group.versions[Math.min(index, group.versions.length - 1)];
   const blockedReason = editBlockedReason(tpl);
   const languages = group.versions.map((v) => v.language);
+  const { can } = useAuth();
+  const canUpdate = can('templates', 'update');
+  const canCreate = can('templates', 'create');
+  const canDelete = can('templates', 'delete');
 
   useEffect(() => {
     if (!open) return;
@@ -278,8 +284,8 @@ const RowMenu: React.FC<{
           <button
             type="button"
             onClick={() => run(onEdit)}
-            disabled={Boolean(blockedReason)}
-            title={blockedReason ?? undefined}
+            disabled={Boolean(blockedReason) || !canUpdate}
+            title={!canUpdate ? 'You do not have permission to update templates' : (blockedReason ?? undefined)}
             className={menuItem}
           >
             <Pencil className="w-4 h-4 text-slate-400" />
@@ -288,14 +294,21 @@ const RowMenu: React.FC<{
           <button
             type="button"
             onClick={() => run(onDuplicate)}
-            disabled={tpl.category === 'AUTHENTICATION'}
+            disabled={tpl.category === 'AUTHENTICATION' || !canCreate}
+            title={!canCreate ? 'You do not have permission to create templates' : undefined}
             className={menuItem}
           >
             <Copy className="w-4 h-4 text-slate-400" />
             Duplicate
           </button>
           <div className="my-1 border-t border-slate-100" />
-          <button type="button" onClick={() => run(onDelete)} className={`${menuItemBase} text-red-600 hover:bg-red-50`}>
+          <button
+            type="button"
+            onClick={canDelete ? () => run(onDelete) : undefined}
+            disabled={!canDelete}
+            title={!canDelete ? 'You do not have permission to delete templates' : undefined}
+            className={`${menuItemBase} ${canDelete ? 'text-red-600 hover:bg-red-50' : 'text-slate-300 cursor-not-allowed opacity-50'}`}
+          >
             <Trash2 className="w-4 h-4" />
             {group.versions.length > 1 ? `Delete ${languageLabel(tpl.language, languages)} version` : 'Delete'}
           </button>
@@ -368,6 +381,11 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
   const [previewing, setPreviewing] = useState<WhatsAppTemplate | null>(null);
   const [deleting, setDeleting] = useState<WhatsAppTemplate | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const { can } = useAuth();
+  const canCreate = can('templates', 'create');
+  const canRead = can('templates', 'read');
+  const canUpdate = can('templates', 'update');
+  const canDelete = can('templates', 'delete');
 
   // Meta returns one template per language; the list shows one row per name
   const groups = useMemo(() => {
@@ -424,6 +442,22 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
     }
   };
 
+  if (!canRead) {
+    return (
+      <div className="h-full flex items-center justify-center p-6 bg-slate-50">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200 p-8 text-center flex flex-col items-center shadow-xs">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 mb-4">
+            <Lock className="w-6 h-6 stroke-[2]" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900">Templates Access Restricted</h2>
+          <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+            Your role does not have permission to view WhatsApp templates. Contact your workspace administrator to request access.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const openFromPreview = (action: (tpl: WhatsAppTemplate) => void) => {
     const tpl = previewing!;
     setPreviewing(null);
@@ -479,12 +513,18 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
               </button>
               <button
                 type="button"
-                onClick={onCreateNew}
-                disabled={!isConnected}
-                className="px-4 py-2.5 text-sm font-semibold rounded-xl bg-[#3440a8] hover:bg-[#2b358d] text-white transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={canCreate ? onCreateNew : undefined}
+                disabled={!isConnected || !canCreate}
+                title={!canCreate ? "You do not have permission to create templates" : undefined}
+                className={`px-4 py-2.5 text-sm font-semibold rounded-xl transition-colors flex items-center gap-2 ${
+                  canCreate && isConnected
+                    ? 'bg-[#3440a8] hover:bg-[#2b358d] text-white cursor-pointer'
+                    : 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-60'
+                }`}
               >
                 <Plus className="w-4 h-4" />
                 New template
+                {!canCreate && <Lock className="w-3.5 h-3.5 ml-1 text-slate-400" />}
               </button>
             </div>
           </div>
@@ -688,7 +728,9 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
             <div className="flex items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={() => openFromPreview(onDuplicate)}
+                onClick={canCreate ? () => openFromPreview(onDuplicate) : undefined}
+                disabled={!canCreate}
+                title={!canCreate ? 'You do not have permission to create templates' : undefined}
                 className="px-4 py-2 text-xs font-semibold rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 cursor-pointer"
               >
                 Duplicate
@@ -696,7 +738,9 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
               {!editBlockedReason(previewing) && (
                 <button
                   type="button"
-                  onClick={() => openFromPreview(onEdit)}
+                  onClick={canUpdate ? () => openFromPreview(onEdit) : undefined}
+                  disabled={!canUpdate}
+                  title={!canUpdate ? 'You do not have permission to update templates' : undefined}
                   className="px-4 py-2 text-xs font-semibold rounded-lg bg-[#3440a8] text-white hover:bg-[#2b358d] cursor-pointer"
                 >
                   Edit
@@ -740,3 +784,5 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
     </div>
   );
 };
+
+

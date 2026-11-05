@@ -20,6 +20,7 @@ import { gooeyToast } from '@/components/ui/goey-toaster';
 import { notifyError, errorDescription } from '@/lib/api/notify';
 import { toApiError } from '@/lib/api/api-error';
 import { clientLogger } from '@/lib/client-logger';
+import { canUser, CrudAction } from '@/lib/security/permissions';
 
 export const NO_WORKSPACE_MESSAGE =
   'No workspace is linked to this email. Create an account to set up your company, or ask your admin to invite you.';
@@ -77,6 +78,7 @@ export interface DbUser {
   email: string;
   role: string;
   permissions?: Record<string, boolean>;
+  customPermissions?: Record<string, any> | null;
   avatarUrl: string | null;
   isOnline: boolean;
   createdAt: string;
@@ -87,6 +89,8 @@ interface AuthContextType {
   dbUser: DbUser | null;
   permissions: Record<string, boolean> | null;
   hasPermission: (key: string) => boolean;
+  hasPagePermission: (page: string, action: 'create' | 'read' | 'update' | 'delete') => boolean;
+  can: (page: string, action: 'create' | 'read' | 'update' | 'delete') => boolean;
   refreshDbUser: () => Promise<void>;
   loading: boolean;
   error: string | null;
@@ -264,6 +268,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
+  const hasPagePermission = useCallback((page: string, action: 'create' | 'read' | 'update' | 'delete'): boolean => canUser(dbUser, page, action), [dbUser]);
+  const can = hasPagePermission;
+
   const hasPermission = useCallback(
     (permissionKey: string): boolean => {
       if (!dbUser) return false;
@@ -437,6 +444,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         dbUser,
         permissions: dbUser?.permissions ?? null,
         hasPermission,
+        hasPagePermission,
+        can,
         refreshDbUser,
         loading,
         error,

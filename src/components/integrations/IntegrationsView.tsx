@@ -40,8 +40,8 @@ interface IntegrationsViewProps {
 }
 
 export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ openIntegration, onOpenIntegration }) => {
-  const { hasPermission } = useAuth();
-  const canManageIntegrations = hasPermission('manage_billing_and_integrations');
+  const { hasPermission, can } = useAuth();
+  const canManageIntegrations = can('integrations', 'read') && hasPermission('manage_billing_and_integrations');
   const shopify = useShopifyStore();
 
   if (!canManageIntegrations) {

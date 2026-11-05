@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import { ChevronLeft, Inbox, Plus } from 'lucide-react';
+import { ChevronLeft, Inbox, Plus, Lock } from 'lucide-react';
 import { ChannelIcon } from './ChannelIcon';
 import {
   CHANNEL_LABELS,
@@ -23,6 +23,7 @@ interface ChannelsPaneProps {
   onFilterChange: (filter: ChannelFilter) => void;
   onConnect: (type: string) => void;
   onCollapse: () => void;
+  canCreate?: boolean;
 }
 
 const CountPill: React.FC<{ count: number; active?: boolean }> = ({ count, active }) => (
@@ -43,6 +44,7 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
   onFilterChange,
   onConnect,
   onCollapse,
+  canCreate = true,
 }) => {
   // Conversation counts per channel id and per channel type
   const { byChannel, byType } = useMemo(() => {
@@ -102,9 +104,10 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
         <div className="mt-5 mb-1.5 px-2.5 flex items-center justify-between text-[11px] font-bold text-slate-700 tracking-wider">
           <span>CONNECTED · {groups.length}</span>
           <button
-            onClick={() => onConnect('')}
-            title="Connect new channel"
-            className="text-slate-600 hover:text-[#3440a8] cursor-pointer"
+            onClick={canCreate ? () => onConnect('') : undefined}
+            disabled={!canCreate}
+            title={!canCreate ? 'You do not have permission to connect channels' : 'Connect new channel'}
+            className={canCreate ? 'text-slate-600 hover:text-[#3440a8] cursor-pointer' : 'text-slate-300 cursor-not-allowed opacity-40'}
           >
             <Plus className="w-4 h-4" />
           </button>
@@ -239,8 +242,14 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                   <ChannelIcon type={type} size="md" className={type === 'email' ? '' : 'opacity-90'} />
                   <span className="flex-1 min-w-0 truncate text-black font-medium">{CHANNEL_LABELS[type]}</span>
                   <button
-                    onClick={() => onConnect(type)}
-                    className="px-2 py-1 rounded-md border border-slate-300 text-[12px] font-semibold shrink-0 text-[#3440a8] hover:bg-[#eef0fb] cursor-pointer"
+                    onClick={canCreate ? () => onConnect(type) : undefined}
+                    disabled={!canCreate}
+                    title={!canCreate ? 'You do not have permission to connect channels' : undefined}
+                    className={`px-2 py-1 rounded-md border text-[12px] font-semibold shrink-0 transition-colors ${
+                      canCreate
+                        ? 'border-slate-300 text-[#3440a8] hover:bg-[#eef0fb] cursor-pointer'
+                        : 'border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed opacity-50'
+                    }`}
                   >
                     Connect
                   </button>
@@ -254,11 +263,18 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
       {/* Footer */}
       <div className="px-3 pt-2 pb-3 shrink-0">
         <button
-          onClick={() => onConnect('')}
-          className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-lg border border-dashed border-slate-300 text-[13px] font-medium text-[#3440a8] hover:bg-[#eef0fb] cursor-pointer"
+          onClick={canCreate ? () => onConnect('') : undefined}
+          disabled={!canCreate}
+          title={!canCreate ? 'You do not have permission to connect channels' : undefined}
+          className={`w-full flex items-center justify-center gap-1.5 py-2.5 rounded-lg border border-dashed text-[13px] font-medium transition-colors ${
+            canCreate
+              ? 'border-slate-300 text-[#3440a8] hover:bg-[#eef0fb] cursor-pointer'
+              : 'border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed opacity-60'
+          }`}
         >
           <Plus className="w-4 h-4" />
           Connect new channel
+          {!canCreate && <Lock className="w-3.5 h-3.5 ml-1 text-slate-400" />}
         </button>
         <p className="mt-2.5 px-1 text-[11px] text-slate-500 flex items-center gap-1.5">
           <span className={`w-1.5 h-1.5 rounded-full ${attentionCount > 0 ? 'bg-orange-500' : 'bg-emerald-500'}`} />
