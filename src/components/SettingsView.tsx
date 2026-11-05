@@ -22,10 +22,13 @@ import {
   CreditCard,
   Webhook,
   Unplug,
+  Lock,
+  ShieldAlert,
   type LucideIcon,
 } from 'lucide-react';
 
 import apiClient from '@/lib/api/client';
+import { useAuth } from '@/context/AuthContext';
 import { notifyError } from '@/lib/api/notify';
 import { useRealtime } from '@/lib/hooks/useRealtime';
 import { AddChannelModal } from './channels/AddChannelModal';
@@ -34,6 +37,7 @@ import { InboxConversation, formatPhone, isChannelHealthy } from './inbox/inbox-
 import { ContactSearch, TopBar } from './TopBar';
 import { Channel, STATUS_META, fmtDate, needsReconnect, useDisconnectChannel } from './settings/channel-settings';
 import { WhatsAppNumberSection } from './settings/WhatsAppNumberSection';
+import { TeamRolesSection } from './settings/TeamRolesSection';
 import { ConsentPrivacySection } from './settings/ConsentPrivacySection';
 
 interface DetailField {
@@ -389,7 +393,7 @@ const SECTIONS: { key: Section; label: string; subtitle: string; icon: LucideIco
   { key: 'general', label: 'General', subtitle: 'Workspace name, timezone and notification preferences.', icon: Settings, soon: true },
   { key: 'channels', label: 'Channels', subtitle: 'Connect the messaging accounts your team replies from and manage the ones already connected', icon: Layers },
   { key: 'whatsapp', label: 'WhatsApp number', subtitle: 'Your connected number, its health at Meta and the business profile customers see', icon: Phone },
-  { key: 'team', label: 'Team & roles', subtitle: 'Invite teammates, assign roles and control who can reply.', icon: Users, soon: true },
+  { key: 'team', label: 'Team & roles', subtitle: 'Invite teammates, assign roles and control who can reply.', icon: Users },
   { key: 'routing', label: 'Routing & hours', subtitle: 'Assign conversations automatically and set business hours and away messages.', icon: Route, soon: true },
   { key: 'consent', label: 'Consent & privacy', subtitle: 'Opt-out keywords, confirmation messages and data retention.', icon: ShieldCheck },
   { key: 'languages', label: 'Languages', subtitle: 'The languages your AI agent and templates reply in.', icon: Languages, soon: true },
@@ -440,9 +444,32 @@ function useSettingsTopBar() {
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }) => {
+  const { hasPermission, can } = useAuth();
+  const canManageBilling = hasPermission('manage_billing_and_integrations');
+  const canReadSettings = can('settings', 'read');
   const [activeSection, setActiveSection] = useState<Section>('whatsapp');
   const active = SECTIONS.find((s) => s.key === activeSection)!;
   const topBar = useSettingsTopBar();
+
+  if (!canReadSettings) {
+    return (
+      <div className="h-full overflow-y-auto bg-slate-50/60 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200/90 shadow-xs p-8 text-center flex flex-col items-center">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 mb-4 shadow-2xs">
+            <Lock className="w-6 h-6 stroke-[2]" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900">Settings Access Restricted</h2>
+          <p className="mt-2 text-xs text-slate-500 leading-relaxed max-w-sm">
+            Your role does not have permission to view workspace settings. Contact your workspace administrator to request access.
+          </p>
+          <div className="mt-6 w-full pt-4 border-t border-slate-100 flex items-center justify-center gap-2 text-[11px] font-semibold text-slate-500">
+            <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
+            <span>Permission required: Settings View</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full bg-[#f8f9fc]">
@@ -472,17 +499,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
           <nav className="px-3 space-y-0.5">
             {SECTIONS.map(({ key, label, soon }) => {
               const isActive = activeSection === key;
+              const isRestricted = key === 'billing' && !canManageBilling;
               return (
                 <button
                   key={key}
                   onClick={() => setActiveSection(key)}
-                  title={soon ? `${label} · coming soon` : label}
-                  className={`w-full flex items-center px-3 py-2 rounded-lg border text-[13px] transition-colors cursor-pointer text-left ${isActive
+                  title={isRestricted ? 'Billing & usage is restricted for your role' : soon ? `${label} · coming soon` : label}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-[13px] transition-colors cursor-pointer text-left ${isActive
                       ? 'bg-[#eef0fb] border-[#dfe3f7] text-[#3440a8] font-semibold'
                       : 'border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                     }`}
                 >
-                  {label}
+                  <span className="truncate">{label}</span>
+                  {isRestricted && <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
                 </button>
               );
             })}
@@ -491,11 +520,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
 
         {/* Content */}
         <main className="flex-1 overflow-y-auto pt-4">
-          {active.soon && <ComingSoonSection icon={active.icon} title={active.label} description={active.subtitle} />}
-          {activeSection === 'channels' && (
+          {activeSection === 'billing' && !canManageBilling ? (
+            <div className="flex flex-col items-center justify-center py-24 gap-4 text-center px-4">
+              <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 shadow-2xs">
+                <Lock className="w-6 h-6 stroke-[2]" />
+              </div>
+              <div>
+                <p className="text-base font-bold text-slate-900">Billing & usage restricted</p>
+                <p className="text-xs text-slate-500 mt-1 max-w-sm leading-relaxed">
+                  Your role does not have permission to view or manage workspace billing, subscription plans, and usage limits. Contact your workspace owner to request access.
+                </p>
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-[11px] font-semibold">
+                <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
+                Permission required: Manage billing and integrations
+              </div>
+            </div>
+          ) : (
             <>
-              <p className="px-8 pt-2 pb-5 text-xs text-slate-500">{active.subtitle}</p>
-              <ChannelsSection />
+              {active.soon && <ComingSoonSection icon={active.icon} title={active.label} description={active.subtitle} />}
+              {activeSection === 'channels' && (
+                <>
+                  <p className="px-8 pt-2 pb-5 text-xs text-slate-500">{active.subtitle}</p>
+                  <ChannelsSection />
+                </>
+              )}
+              {activeSection === 'whatsapp' && <WhatsAppNumberSection onOpenChannels={() => setActiveSection('channels')} />}
+              {activeSection === 'team' && <TeamRolesSection />}
             </>
           )}
           {activeSection === 'whatsapp' && <WhatsAppNumberSection onOpenChannels={() => setActiveSection('channels')} />}
@@ -507,3 +558,4 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
 };
 
 export default SettingsView;
+

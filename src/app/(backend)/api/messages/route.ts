@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
+import { withAuth, AuthenticatedRequest, assertPagePermission } from "@/lib/security/auth";
 import { messageRepository } from "@/lib/db/repositories/message.repository";
 import { customerService } from "@/lib/services";
 import { MessageStatus } from "@/lib/db/schema";
@@ -16,7 +16,9 @@ const MAX_PAGE_SIZE = 100;
  * pass the oldest loaded message id as `before` to get the batch above it.
  */
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, "inbox", "read");
   const orgId = req.user.organizationId;
+
   const { searchParams } = new URL(req.url);
   const customerIdStr = searchParams.get("customerId");
 
@@ -63,7 +65,9 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
  * Store a custom message or internal note directly
  */
 export const POST = withAuth(async (req: AuthenticatedRequest) => {
+  assertPagePermission(req.user, "inbox", "update");
   const orgId = req.user.organizationId;
+
   const body = await readJson(req);
   const { customerId, textContent, mediaUrl, mediaType, isInternalNote, status, errorCode, repliedToId } = body ?? {};
 
