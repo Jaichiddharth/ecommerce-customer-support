@@ -1,3 +1,5 @@
+import type { ConsentChange } from './consent';
+
 export type ChannelType = 'whatsapp' | 'instagram' | 'messenger' | 'sms' | 'email' | 'webchat';
 
 export interface RecentOrderItem {
@@ -126,6 +128,8 @@ export interface Message {
   isInternalNote?: boolean;
   /** Action the AI agent performed with this reply, e.g. 'catalog lookup' */
   aiAction?: string | null;
+  /** Set on the team-only note that records a WhatsApp consent change (opt-out / opt-in) */
+  consent?: ConsentChange | null;
   reactions?: MessageReactionItem[];
   createdAt?: string | Date;
   templateCard?: {

@@ -1,8 +1,9 @@
 import { Customer } from "../db";
-import { customerRepository, type CustomerWithChannel } from "../db/repositories";
+import { customerRepository, channelRepository, type CustomerWithChannel, type ContactListFilter } from "../db/repositories";
 import { AppError } from "../errors";
 import { createLogger } from "../logger";
 import type { ContactIdentity } from "@/types";
+import type { ContactChannelSummary, ContactListItem } from "@/types/contacts";
 
 const log = createLogger("CustomerService");
 
@@ -34,6 +35,62 @@ export class CustomerService {
 
   async listCustomers(organizationId: number, channelId?: number): Promise<Customer[]> {
     return await customerRepository.listByOrg(organizationId, channelId);
+  }
+
+  /**
+   * One page of one channel's contacts, plus every live channel with its contact and opted-out counts.
+   * Without a channelId it lists the first live channel. channelId is null when the workspace has no live channel.
+   */
+  async listContacts(
+    organizationId: number,
+    filter: Omit<ContactListFilter, "channelId"> & { channelId?: number }
+  ): Promise<{ channelId: number | null; contacts: ContactListItem[]; total: number; channels: ContactChannelSummary[] }> {
+    const [counts, liveChannels] = await Promise.all([
+      customerRepository.countByChannel(organizationId),
+      channelRepository.listByOrgAndType(organizationId, undefined, { includeDisconnected: false }),
+    ]);
+
+    const channels = [...liveChannels].sort((a, b) => a.id - b.id).map((ch): ContactChannelSummary => {
+      const count = counts.find((c) => c.channelId === ch.id);
+      return {
+        id: ch.id,
+        type: ch.type,
+        name: ch.name,
+        phoneNumber: ch.phoneNumber,
+        handle: ch.handle,
+        total: count?.total ?? 0,
+        optedOut: count?.optedOut ?? 0,
+      };
+    });
+
+    const channelId = filter.channelId ?? channels[0]?.id ?? null;
+    if (channelId === null) return { channelId, contacts: [], total: 0, channels };
+
+    const { rows, total } = await customerRepository.listContacts(organizationId, { ...filter, channelId });
+
+    const contacts = rows.map(
+      (c): ContactListItem => ({
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        email: c.email,
+        handle: c.handle,
+        avatarUrl: c.avatarUrl,
+        isOptedOut: Boolean(c.isOptedOut),
+        channel: c.channel!,
+        lastActiveAt: c.lastActiveAt ? c.lastActiveAt.toISOString() : null,
+        hasConversation: c.hasConversation,
+        createdAt: c.createdAt.toISOString(),
+      })
+    );
+
+    return { channelId, contacts, total, channels };
+  }
+
+  /** Visible contacts and opt-outs per live channel id */
+  async contactCountsByChannel(organizationId: number): Promise<Map<number, { total: number; optedOut: number }>> {
+    const counts = await customerRepository.countByChannel(organizationId);
+    return new Map(counts.map((c) => [c.channelId, { total: c.total, optedOut: c.optedOut }]));
   }
 
   async listCustomersByChannel(organizationId: number, channelId: number): Promise<Customer[]> {

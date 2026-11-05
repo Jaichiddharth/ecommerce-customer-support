@@ -3,6 +3,8 @@ import { channelRepository, customerRepository, normalizePhone, whatsappFlowRepo
 import {
   SENDABLE_VERSION_STATUSES,
   WaFlowExecutionStatus,
+  type Channel,
+  type Customer,
   type WaFlowVersionStatusValue,
   type WhatsAppFlowExecutionRow,
 } from "../../db/schema";
@@ -38,6 +40,8 @@ export interface SendFlowInput {
   userId?: number | null;
   automationRunId?: number | null;
   automationNodeId?: string | null;
+  /** Rows the caller already loaded (automation engine): the contact and the org's live WhatsApp channels. */
+  preloaded?: { customer?: Customer; connections?: Channel[] };
 }
 
 export interface SendFlowTestInput {
@@ -63,7 +67,11 @@ export class WhatsAppFlowSendService {
     const flow = await whatsappFlowRepository.findFlow(input.flowId, organizationId);
     if (!flow || flow.archivedAt) throw AppError.notFound("WhatsApp Flow not found.");
 
-    const customer = await customerService.requireVisible(input.customerId, organizationId);
+    const given = input.preloaded?.customer;
+    const customer =
+      given && given.id === input.customerId && given.organizationId === organizationId
+        ? given
+        : await customerService.requireVisible(input.customerId, organizationId);
     if (!customer.phone) throw AppError.validation("This contact has no WhatsApp phone number.", "customerId");
 
     // ── Resolve the exact version to send ──
@@ -107,7 +115,10 @@ export class WhatsAppFlowSendService {
 
     // A Flow (and its templates) live on one WABA: send from a number on that WABA,
     // preferring the number the customer already talks to
-    const customerChannel = customer.channelId ? await channelRepository.findById(customer.channelId, organizationId) : null;
+    const customerChannel = customer.channelId
+      ? input.preloaded?.connections?.find((c) => c.id === customer.channelId) ??
+        (await channelRepository.findById(customer.channelId, organizationId))
+      : null;
     const sendChannelId =
       customerChannel?.wabaId === version.wabaId ? customerChannel.id : template?.channelId ?? null;
     if (!sendChannelId) {
@@ -156,6 +167,7 @@ export class WhatsAppFlowSendService {
                 },
               ],
               metadata: { whatsappFlow: { flowId: flow.id, executionId: execution.id, versionId: version.id } },
+              preloaded: { contact: customer, connections: input.preloaded?.connections },
             })
           : await whatsAppService.sendMessage({
               organizationId,
@@ -175,6 +187,7 @@ export class WhatsAppFlowSendService {
                 screen: version.definition.screens[0].id,
               },
               metadata: { whatsappFlow: { flowId: flow.id, executionId: execution.id, versionId: version.id } },
+              preloaded: { contact: customer, connections: input.preloaded?.connections },
             });
 
       const wamid = (result.metaResponse as { messages?: { id?: string }[] } | null)?.messages?.[0]?.id ?? null;

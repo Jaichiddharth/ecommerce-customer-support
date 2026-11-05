@@ -1,4 +1,5 @@
 import apiClient from '@/lib/api/client';
+import { readListResult, type ListResult } from '@/lib/listing';
 
 export type AutomationStatus = 'draft' | 'active' | 'paused' | 'failed' | 'archived';
 export type TriggerType = 'incoming_message' | 'keyword' | 'conversation_event' | 'none';
@@ -45,20 +46,13 @@ export interface AutomationRun {
   updatedAt: string;
 }
 
-export interface ListParams {
-  q?: string;
-  status?: string;
-  trigger?: string;
-  modified?: string;
-  execution?: string;
-  page?: number;
-  pageSize?: number;
-}
+/** Listing query: page, limit, sortBy, sortOrder, q, status, trigger, execution, fromDate, toDate (last modified). */
+export type AutomationListQuery = Record<string, string | number>;
 
 export const automationsApi = {
-  async list(params: ListParams): Promise<{ items: AutomationListItem[]; total: number; page: number; pageSize: number }> {
+  async list(params: AutomationListQuery): Promise<ListResult<AutomationListItem>> {
     const { data } = await apiClient.get('/api/automations', { params });
-    return { items: data.automations, total: data.total, page: data.page, pageSize: data.pageSize };
+    return readListResult<AutomationListItem>(data, 'automations');
   },
   async create(body: { name: string; description?: string | null; graph: { nodes: unknown[]; edges: unknown[] } }) {
     return (await apiClient.post('/api/automations', body)).data.automation as { id: number };
@@ -75,9 +69,10 @@ export const automationsApi = {
   async remove(id: number): Promise<{ deleted: boolean; archived: boolean }> {
     return (await apiClient.delete(`/api/automations/${id}`)).data;
   },
-  async runs(id: number, params: { status?: string; page?: number; pageSize?: number }) {
+  /** Execution history listing: status, fromDate / toDate (started at), sortBy createdAt | status | customer. */
+  async runs(id: number, params: AutomationListQuery): Promise<ListResult<AutomationRun>> {
     const { data } = await apiClient.get(`/api/automations/${id}/runs`, { params });
-    return { items: data.runs as AutomationRun[], total: data.total as number, page: data.page as number, pageSize: data.pageSize as number };
+    return readListResult<AutomationRun>(data, 'runs');
   },
   async run(id: number, runId: number): Promise<AutomationRun> {
     return (await apiClient.get(`/api/automations/${id}/runs/${runId}`)).data.run;

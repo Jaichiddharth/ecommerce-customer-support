@@ -614,7 +614,9 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
                     className={`grid grid-cols-[minmax(0,1fr)_auto] ${GRID_COLUMNS} gap-x-4 gap-y-2 items-center px-6 py-4 md:py-5 border-b border-slate-100 last:border-0 last:rounded-b-xl hover:bg-[#3440a8]/[0.04] cursor-pointer transition-colors`}
                   >
                     <div className="min-w-0">
-                      <p className="text-[15px] text-slate-900 font-mono truncate">{group.name}</p>
+                      <p className="text-[15px] text-slate-900 font-mono truncate" title={group.name}>
+                        {group.name}
+                      </p>
                       {/* Small screens: the other columns fold under the name */}
                       <div className="md:hidden mt-2 flex flex-wrap items-center gap-1.5">
                         <CategoryPill category={group.category} />
@@ -661,7 +663,7 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
                     <AlertTriangle className="hidden sm:block w-6 h-6 text-red-600 shrink-0 self-start mt-0.5" />
                     <div className="flex-1 min-w-0">
                       <p className="text-[15px] font-semibold text-red-700">
-                        <span className="font-mono">{tpl.name}</span>
+                        <span className="font-mono wrap-anywhere">{tpl.name}</span>
                         {siblings.length > 1 && ` (${languageLabel(tpl.language, siblings)})`} was rejected: {help.title}
                       </p>
                       <p className="mt-1 text-sm text-slate-700 leading-relaxed">{help.fix}</p>
@@ -686,7 +688,7 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
         <Modal onClose={() => setPreviewing(null)} className="max-w-md space-y-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h3 className="text-sm font-bold text-slate-900 font-mono truncate">{previewing.name}</h3>
+              <h3 className="text-sm font-bold text-slate-900 font-mono wrap-anywhere">{previewing.name}</h3>
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <CategoryPill category={previewing.category} />
                 <StatusPill status={previewing.status} />
@@ -757,7 +759,7 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
           <div>
             <h3 className="text-sm font-bold text-slate-900">Delete template?</h3>
             <p className="mt-1.5 text-xs text-slate-600">
-              <span className="font-mono font-semibold text-slate-900">{deleting.name}</span> ({deleting.language}) will be
+              <span className="font-mono font-semibold text-slate-900 wrap-anywhere">{deleting.name}</span> ({deleting.language}) will be
               removed from your WhatsApp Business Account. This can&apos;t be undone.
             </p>
           </div>

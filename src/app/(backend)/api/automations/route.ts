@@ -1,24 +1,30 @@
 import { NextResponse } from "next/server";
 import { withAuth, AuthenticatedRequest, assertPagePermission } from "@/lib/security/auth";
 import { readJson } from "@/lib/api/handler";
-import { optionalInt } from "@/lib/api/params";
-import { automationService } from "@/lib/services/automation.service";
+import { listBody, optionalEnum, parseListQuery } from "@/lib/api/list-query";
+import { AUTOMATION_SORT_KEYS } from "@/lib/db/repositories";
+import {
+  automationService,
+  AUTOMATION_EXECUTION_FILTERS,
+  AUTOMATION_LIST_STATUSES,
+  AUTOMATION_TRIGGER_TYPES,
+} from "@/lib/services/automation.service";
 
-// GET /api/automations?q=&status=&trigger=&modified=&execution=&page=&pageSize=
-// Listing with derived status (draft/active/paused/failed/archived), trigger, node count and run stats.
+// GET /api/automations?page=&limit=&sortBy=&sortOrder=&q=&status=&trigger=&execution=&fromDate=&toDate=
+// Server-side listing: derived status (draft/active/paused/failed/archived), trigger, node count and run stats.
+// fromDate/toDate bound the last-modified time; execution = latest run status or "never".
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
   assertPagePermission(req.user, "flows", "read");
   const sp = req.nextUrl.searchParams;
+  const query = parseListQuery(sp, { sortable: AUTOMATION_SORT_KEYS, defaultSortBy: "updatedAt", defaultSortOrder: "desc" });
   const result = await automationService.listing(req.user.organizationId, {
+    ...query,
     q: sp.get("q") ?? undefined,
-    status: sp.get("status") || undefined,
-    trigger: sp.get("trigger") || undefined,
-    modified: sp.get("modified") || undefined,
-    execution: sp.get("execution") || undefined,
-    page: optionalInt(sp.get("page")),
-    pageSize: optionalInt(sp.get("pageSize")),
+    status: optionalEnum(sp.get("status"), AUTOMATION_LIST_STATUSES, "status"),
+    trigger: optionalEnum(sp.get("trigger"), AUTOMATION_TRIGGER_TYPES, "trigger"),
+    execution: optionalEnum(sp.get("execution"), AUTOMATION_EXECUTION_FILTERS, "execution"),
   });
-  return NextResponse.json({ success: true, ...result });
+  return NextResponse.json(listBody("automations", result));
 });
 
 // POST /api/automations  { name, description?, graph: { nodes, edges }, isActive? }

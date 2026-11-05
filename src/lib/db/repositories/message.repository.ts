@@ -41,11 +41,26 @@ export interface CreateMessageData {
   repliedToId?: number | null;
   metadata?: MessageMetadata | null;
   createdAt?: Date;
+  /** Inbound message whose automation triggers still have to be evaluated (see `clearAutomationPending`). */
+  automationPendingSince?: Date | null;
+}
+
+/** An inbound message whose automation triggers were never evaluated (claimed for a replay). */
+export interface PendingAutomationMessage {
+  id: number;
+  organizationId: number;
+  customerId: number;
+  channelId: number | null;
+  metaMessageId: string | null;
+  mediaType: string | null;
+  textContent: string | null;
 }
 
 export class MessageRepository {
   /**
-   * Create and store a new message (outbound agent message or inbound webhook message)
+   * Create and store a new message (outbound agent message or inbound webhook message).
+   * Returns null when a message with the same wamid already exists in the organization (concurrent
+   * webhook delivery): the unique index decides, not a prior lookup.
    */
   async createMessage(data: CreateMessageData): Promise<Message | null> {
     // Every message belongs to the customer's inbox conversation
@@ -79,9 +94,11 @@ export class MessageRepository {
         metaMessageId: data.metaMessageId || null,
         repliedToId: data.repliedToId || null,
         metadata: data.metadata ?? null,
+        automationPendingSince: data.automationPendingSince ?? null,
         createdAt: data.createdAt || new Date(),
         updatedAt: new Date(),
       })
+      .onConflictDoNothing()
       .returning();
 
     if (created && conversation) {
@@ -94,6 +111,50 @@ export class MessageRepository {
     }
 
     return created || null;
+  }
+
+  /** Automation triggers of this inbound message have been evaluated. */
+  async clearAutomationPending(id: number): Promise<void> {
+    await db.update(messages).set({ automationPendingSince: null }).where(eq(messages.id, id));
+  }
+
+  /**
+   * Claims inbound messages whose automation evaluation was lost (process stopped before the deferred
+   * work ran). Claiming moves `automation_pending_since` to now, which works as a lease: a message
+   * is replayed again only if this replay is lost too. SKIP LOCKED keeps concurrent sweeps apart.
+   */
+  async claimPendingAutomationMessages(olderThan: Date, limit = 50): Promise<PendingAutomationMessage[]> {
+    const rows = await db.execute<{
+      id: number; organization_id: number; customer_id: number; channel_id: number | null;
+      meta_message_id: string | null; media_type: string | null; text_content: string | null;
+    }>(sql`
+      UPDATE ${messages} SET automation_pending_since = now()
+       WHERE id IN (
+         SELECT id FROM ${messages}
+          WHERE automation_pending_since IS NOT NULL AND automation_pending_since <= ${olderThan.toISOString()}::timestamptz
+          ORDER BY automation_pending_since
+          LIMIT ${limit}
+          FOR UPDATE SKIP LOCKED)
+      RETURNING id, organization_id, customer_id, channel_id, meta_message_id, media_type, text_content`);
+    return (rows as unknown as any[]).map((r) => ({
+      id: Number(r.id),
+      organizationId: Number(r.organization_id),
+      customerId: Number(r.customer_id),
+      channelId: r.channel_id === null ? null : Number(r.channel_id),
+      metaMessageId: r.meta_message_id,
+      mediaType: r.media_type,
+      textContent: r.text_content,
+    }));
+  }
+
+  /** Gives up on replays older than `before` (the customer has moved on; starting now would surprise them). */
+  async dropStaleAutomationPending(before: Date): Promise<number> {
+    const rows = await db
+      .update(messages)
+      .set({ automationPendingSince: null })
+      .where(and(sql`${messages.automationPendingSince} IS NOT NULL`, sql`${messages.createdAt} < ${before.toISOString()}::timestamptz`))
+      .returning({ id: messages.id });
+    return rows.length;
   }
 
   /**

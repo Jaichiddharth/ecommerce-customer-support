@@ -1,4 +1,5 @@
-import { whatsappFlowRepository, automationRepository } from "../../db/repositories";
+import { whatsappFlowRepository, automationRepository, type FlowSortKey } from "../../db/repositories";
+import { toListResult, type ListQuery } from "@/lib/api/list-query";
 import {
   META_FLOW_CATEGORIES,
   SENDABLE_VERSION_STATUSES,
@@ -111,42 +112,30 @@ const describeValidationErrors = (errors: MetaValidationError[]) =>
 export class WhatsAppFlowService {
   // ── Queries ───────────────────────────────────────────────────────────
 
-  async list(organizationId: number, params: { q?: string; status?: string; page?: number; pageSize?: number }) {
-    const pageSize = Math.min(Math.max(params.pageSize ?? 20, 1), 100);
-    const page = Math.max(params.page ?? 1, 1);
-    const { rows, total } = await whatsappFlowRepository.listFlows(organizationId, {
+  /** Flow listing: filtered, sorted, counted and paginated in the database (see `listFlowsPage`). */
+  async list(organizationId: number, params: ListQuery<FlowSortKey> & { q?: string; status?: string }) {
+    const { rows, total } = await whatsappFlowRepository.listFlowsPage(organizationId, {
       q: params.q?.trim() || undefined,
       status: params.status || undefined,
-      limit: pageSize,
-      offset: (page - 1) * pageSize,
+      fromDate: params.fromDate,
+      toDate: params.toDate,
+      sortBy: params.sortBy,
+      sortOrder: params.sortOrder,
+      limit: params.limit,
+      offset: params.offset,
     });
+    // Only the automations that reference a Flow on this page (graph filtered in SQL)
+    const automations = await automationRepository.listReferencingFlows(organizationId, rows.map((r) => r.id));
+    const items = rows.map((f) => ({
+      ...f,
+      automations: automationsUsingFlow(automations, f.id).map(({ id, name, isActive }) => ({ id, name, isActive })),
+    }));
+    return toListResult(items, total, params);
+  }
 
-    const ids = rows.map((r) => r.id);
-    const [versions, templateCounts, submissionCounts, automations] = await Promise.all([
-      whatsappFlowRepository.listVersionsForFlows(organizationId, ids),
-      whatsappFlowRepository.countTemplatesByFlow(organizationId, ids),
-      whatsappFlowRepository.countSubmissionsByFlow(organizationId, ids),
-      automationRepository.list(organizationId),
-    ]);
-
-    return {
-      flows: rows.map((f) => {
-        const published = versions.find((v) => v.id === f.publishedVersionId);
-        const latest = versions.find((v) => v.flowId === f.id);
-        return {
-          ...this.summary(f),
-          metaFlowId: published?.metaFlowId ?? latest?.metaFlowId ?? null,
-          publishedVersionNumber: published?.versionNumber ?? null,
-          latestVersionNumber: latest?.versionNumber ?? null,
-          templatesCount: templateCounts.get(f.id) ?? 0,
-          submissionsCount: submissionCounts.get(f.id) ?? 0,
-          automations: automationsUsingFlow(automations, f.id).map(({ id, name, isActive }) => ({ id, name, isActive })),
-        };
-      }),
-      total,
-      page,
-      pageSize,
-    };
+  /** Every Flow (incl. archived) as id / name / status — for filter pickers such as Submissions → Flow. */
+  async options(organizationId: number) {
+    return whatsappFlowRepository.listFlowOptions(organizationId);
   }
 
   /** Sendable Flows for pickers (templates, automation action). */

@@ -1,113 +1,132 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Inbox, X } from 'lucide-react';
-import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
-import { flowsApi, type FlowListItem, type FlowSubmission } from './wa-api';
-import { Pagination, StatusBadge, formatDate, formatValue, iconBtn, inputCls } from './wa-ui';
+import { EmptyState } from '@/components/ui/states';
+import { DataTable, TableFilters, createColumnHelper, useServerTable, type FilterDef } from '@/components/ui/data-table';
+import { flowsApi, type FlowOption, type FlowSubmission } from './wa-api';
+import { StatusBadge, formatDate, formatValue, iconBtn } from './wa-ui';
 
-const PAGE_SIZE = 25;
+const col = createColumnHelper<FlowSubmission>();
+
+const STATUS_OPTIONS = [
+  { value: 'processed', label: 'Processed' },
+  { value: 'received', label: 'Received' },
+  { value: 'unmatched', label: 'Unmatched' },
+  { value: 'failed', label: 'Failed' },
+];
 
 export function SubmissionsPage({ flowFilter, onOpenFlow }: { flowFilter?: number; onOpenFlow: (id: number) => void }) {
-  const [flowId, setFlowId] = useState<number | ''>(flowFilter ?? '');
-  const [status, setStatus] = useState('');
-  const [page, setPage] = useState(1);
-  const [flows, setFlows] = useState<FlowListItem[]>([]);
-  const [data, setData] = useState<{ items: FlowSubmission[]; total: number } | null>(null);
-  const [error, setError] = useState<unknown>(null);
+  const [flows, setFlows] = useState<FlowOption[]>([]);
   const [selected, setSelected] = useState<FlowSubmission | null>(null);
 
   useEffect(() => {
-    flowsApi.list({ pageSize: 100 }).then((r) => setFlows(r.items)).catch(() => setFlows([]));
+    flowsApi.options().then(setFlows).catch(() => setFlows([]));
   }, []);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const res = await flowsApi.submissions({ flowId: flowId || undefined, status: status || undefined, page, pageSize: PAGE_SIZE });
-      setData({ items: res.items, total: res.total });
-    } catch (err) {
-      setError(err);
-    }
-  }, [flowId, status, page]);
+  const filters = useMemo<FilterDef[]>(() => [
+    {
+      type: 'select',
+      key: 'flowId',
+      label: 'Flow',
+      allLabel: 'All flows',
+      options: flows.map((f) => ({ value: String(f.id), label: f.status === 'archived' ? `${f.name} (archived)` : f.name })),
+    },
+    { type: 'select', key: 'status', label: 'Status', allLabel: 'All', options: STATUS_OPTIONS },
+    { type: 'dateRange', key: 'submittedAt', label: 'Submitted' },
+  ], [flows]);
 
-  useEffect(() => { load(); }, [load]);
+  const table = useServerTable<FlowSubmission>({
+    fetcher: flowsApi.submissions,
+    filters,
+    initialFilters: flowFilter ? { flowId: String(flowFilter) } : undefined,
+    defaultSort: { sortBy: 'submittedAt', sortOrder: 'desc' },
+  });
+
+  const columns = [
+    col.accessor((r) => r.customerName ?? null, {
+      id: 'customer',
+      header: 'Customer',
+      enableSorting: true,
+      cell: ({ row: { original: r } }) => (
+        <>
+          <div className="font-semibold text-slate-800">{r.customerName ?? 'Unknown'}</div>
+          <div className="text-[10px] text-slate-400">{r.customerPhone ? `+${r.customerPhone}` : ''}</div>
+        </>
+      ),
+    }),
+    col.accessor((r) => r.flowName ?? null, {
+      id: 'flow',
+      header: 'Flow',
+      enableSorting: true,
+      cell: ({ row: { original: r } }) => (
+        <>
+          {r.flowName ?? <span className="text-slate-400">Not matched</span>}
+          {r.versionNumber && <span className="text-[10px] text-slate-400"> · v{r.versionNumber}</span>}
+        </>
+      ),
+    }),
+    col.accessor('submittedAt', {
+      header: 'Submitted',
+      enableSorting: true,
+      sortDescFirst: true,
+      meta: { className: 'text-slate-500 whitespace-nowrap' },
+      cell: ({ getValue }) => formatDate(getValue()),
+    }),
+    col.accessor('processingStatus', {
+      id: 'status',
+      header: 'Status',
+      enableSorting: true,
+      cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+    }),
+    col.display({
+      id: 'answers',
+      header: 'Answers',
+      meta: { className: 'text-slate-500 max-w-[260px] truncate' },
+      cell: ({ row: { original: r } }) => Object.entries(r.response).slice(0, 3).map(([k, v]) => `${k}: ${formatValue(v)}`).join(' · '),
+    }),
+    col.display({
+      id: 'via',
+      header: 'Via',
+      meta: { className: 'text-[11px] text-slate-500' },
+      cell: ({ row: { original: r } }) => (r.automationRunId ? 'Automation' : r.templateName ? `Template ${r.templateName}` : r.executionId ? 'Direct send' : '—'),
+    }),
+  ];
 
   return (
     <div className="p-5 space-y-4 max-w-[1300px] mx-auto">
-      <div className="flex flex-wrap items-center gap-3">
-        <div>
-          <h1 className="text-[16px] font-bold text-slate-800">Flow submissions</h1>
-          <p className="text-[11px] text-slate-500">Responses customers submitted from WhatsApp Flows.</p>
-        </div>
-        <div className="flex-1" />
-        <select value={flowId} onChange={(e) => { setFlowId(e.target.value ? Number(e.target.value) : ''); setPage(1); }} className={`${inputCls} w-auto max-w-[220px]`}>
-          <option value="">All flows</option>
-          {flows.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-        </select>
-        <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} className={`${inputCls} w-auto`}>
-          <option value="">All statuses</option>
-          <option value="processed">Processed</option>
-          <option value="received">Received</option>
-          <option value="unmatched">Unmatched</option>
-          <option value="failed">Failed</option>
-        </select>
+      <div>
+        <h1 className="text-[16px] font-bold text-slate-800">Flow submissions</h1>
+        <p className="text-[11px] text-slate-500">Responses customers submitted from WhatsApp Flows.</p>
       </div>
 
+      <TableFilters
+        filters={filters}
+        values={table.filterValues}
+        hasActiveFilters={table.hasActiveFilters}
+        onChange={table.setFilter}
+        onClear={table.clearFilters}
+      />
+
       <div className="flex gap-4 items-start">
-        <div className="flex-1 min-w-0 bg-white border border-slate-200 rounded-xl overflow-hidden">
-          {error ? (
-            <ErrorState error={error} title="Couldn't load submissions" onRetry={load} />
-          ) : !data ? (
-            <LoadingState label="Loading submissions…" />
-          ) : data.items.length === 0 ? (
-            <EmptyState icon={<Inbox className="w-9 h-9 text-slate-300" />} title="No submissions yet" description="Responses appear here as soon as customers complete a Flow." />
-          ) : (
-            <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-[12px]">
-                  <thead>
-                    <tr className="text-left text-[10px] uppercase tracking-wider text-slate-400 border-b border-slate-100">
-                      <th className="px-4 py-2.5 font-semibold">Customer</th>
-                      <th className="px-3 py-2.5 font-semibold">Flow</th>
-                      <th className="px-3 py-2.5 font-semibold">Submitted</th>
-                      <th className="px-3 py-2.5 font-semibold">Status</th>
-                      <th className="px-3 py-2.5 font-semibold">Answers</th>
-                      <th className="px-3 py-2.5 font-semibold">Via</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.items.map((s) => (
-                      <tr
-                        key={s.id}
-                        onClick={() => setSelected(s)}
-                        className={`border-b border-slate-50 cursor-pointer ${selected?.id === s.id ? 'bg-[#3440a8]/[0.04]' : 'hover:bg-slate-50/60'}`}
-                      >
-                        <td className="px-4 py-2.5">
-                          <div className="font-semibold text-slate-800">{s.customerName ?? 'Unknown'}</div>
-                          <div className="text-[10px] text-slate-400">{s.customerPhone ? `+${s.customerPhone}` : ''}</div>
-                        </td>
-                        <td className="px-3 py-2.5">
-                          {s.flowName ?? <span className="text-slate-400">Not matched</span>}
-                          {s.versionNumber && <span className="text-[10px] text-slate-400"> · v{s.versionNumber}</span>}
-                        </td>
-                        <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap">{formatDate(s.submittedAt)}</td>
-                        <td className="px-3 py-2.5"><StatusBadge status={s.processingStatus} /></td>
-                        <td className="px-3 py-2.5 text-slate-500 max-w-[260px] truncate">
-                          {Object.entries(s.response).slice(0, 3).map(([k, v]) => `${k}: ${formatValue(v)}`).join(' · ')}
-                        </td>
-                        <td className="px-3 py-2.5 text-[11px] text-slate-500">
-                          {s.automationRunId ? 'Automation' : s.templateName ? `Template ${s.templateName}` : s.executionId ? 'Direct send' : '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <Pagination page={page} pageSize={PAGE_SIZE} total={data.total} onPage={setPage} />
-            </>
+        <DataTable
+          {...table.tableProps}
+          filters={[]}
+          className="flex-1"
+          columns={columns}
+          getRowId={(s) => s.id}
+          onRowClick={setSelected}
+          rowClassName={(s) => (selected?.id === s.id ? 'bg-[#3440a8]/[0.04]' : 'hover:bg-slate-50/60')}
+          errorTitle="Couldn't load submissions"
+          loadingLabel="Loading submissions…"
+          emptyState={(filtered) => (
+            <EmptyState
+              icon={<Inbox className="w-9 h-9 text-slate-300" />}
+              title={filtered ? 'No submissions match these filters' : 'No submissions yet'}
+              description={filtered ? 'Try a different Flow, status or date.' : 'Responses appear here as soon as customers complete a Flow.'}
+            />
           )}
-        </div>
+        />
 
         {selected && (
           <aside className="w-80 shrink-0 bg-white border border-slate-200 rounded-xl overflow-hidden hidden md:block">

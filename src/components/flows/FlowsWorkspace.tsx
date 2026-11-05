@@ -48,8 +48,11 @@ export default function FlowsWorkspace() {
           <button
             key={key}
             onClick={() => setKind(key)}
-            className={`flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-colors
-              ${kind === key ? 'bg-white text-[#3440a8] shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700 hover:bg-white/60 border border-transparent'}`}
+            className={`flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+              kind === key
+                ? 'bg-white text-[#3440a8] shadow-sm border border-slate-200'
+                : 'text-slate-500 hover:text-slate-700 hover:bg-white/60 border border-transparent'
+            }`}
           >
             <Icon className="w-3.5 h-3.5" />
             {label}

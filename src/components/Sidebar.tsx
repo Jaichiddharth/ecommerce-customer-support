@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import {
   BarChart3,
   Bot,
@@ -25,6 +25,7 @@ import { useAuth } from '../context/AuthContext';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 import apiClient from '@/lib/api/client';
 
+/** Kept for backwards-compat with any component that imports TabType */
 export type TabType =
   | 'dashboard'
   | 'inbox'
@@ -37,35 +38,31 @@ export type TabType =
   | 'settings'
   | 'integrations';
 
-interface SidebarProps {
-  activeTab: TabType;
-  setActiveTab: (tab: TabType) => void;
-  unreadCount?: number;
-  aiCount?: number;
-}
-
 interface NavItem {
   key: string;
   label: string;
   icon: LucideIcon;
-  tab?: TabType; // Only items with a tab are built; the rest show "coming soon"
+  /** Path to navigate to; determines active state */
+  path?: string;
+  /** Prefix to match for active state (useful for nested routes) */
+  activePrefix?: string;
   badge?: 'unread' | 'ai';
 }
 
 const WORKSPACE_ITEMS: NavItem[] = [
-  { key: 'home', label: 'Home', icon: LayoutGrid, tab: 'dashboard' },
-  { key: 'inbox', label: 'Inbox', icon: Inbox, tab: 'inbox', badge: 'unread' },
-  { key: 'contacts', label: 'Contacts', icon: Users },
+  { key: 'home', label: 'Home', icon: LayoutGrid, path: '/dashboard' },
+  { key: 'inbox', label: 'Inbox', icon: Inbox, path: '/inbox', activePrefix: '/inbox', badge: 'unread' },
+  { key: 'contacts', label: 'Contacts', icon: Users, path: '/contacts' },
   { key: 'ai', label: 'AI agent', icon: Sparkles, badge: 'ai' },
-  { key: 'flows', label: 'Flows', icon: Bot, tab: 'automations' },
+  { key: 'flows', label: 'Flows', icon: Bot, path: '/flows/automations', activePrefix: '/flows' },
   { key: 'broadcasts', label: 'Broadcasts', icon: Megaphone },
-  { key: 'templates', label: 'Templates', icon: FileText, tab: 'templates' },
+  { key: 'templates', label: 'Templates', icon: FileText, path: '/templates' },
   { key: 'analytics', label: 'Analytics', icon: BarChart3 },
 ];
 
 const SETUP_ITEMS: NavItem[] = [
-  { key: 'integrations', label: 'Integrations', icon: Plug, tab: 'integrations' },
-  { key: 'settings', label: 'Settings', icon: Settings, tab: 'settings' },
+  { key: 'integrations', label: 'Integrations', icon: Plug, path: '/integrations', activePrefix: '/integrations' },
+  { key: 'settings', label: 'Settings', icon: Settings, path: '/settings' },
 ];
 
 const initialsOf = (value?: string | null, fallback = '?') => {
@@ -75,10 +72,18 @@ const initialsOf = (value?: string | null, fallback = '?') => {
   return parts[0].slice(0, 2).toUpperCase();
 };
 
+interface SidebarProps {
+  activeTab?: string;
+  setActiveTab?: (tab: string) => void;
+  unreadCount?: number;
+  aiCount?: number;
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unreadCount = 0, aiCount = 0 }) => {
   const { user, dbUser, logout, hasPermission, can } = useAuth();
   const canManageBillingAndIntegrations = hasPermission('manage_billing_and_integrations');
   const router = useRouter();
+  const pathname = usePathname();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
@@ -154,6 +159,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
 
   const badgeFor = (item: NavItem) => (item.badge === 'unread' ? unreadCount : item.badge === 'ai' ? aiCount : 0);
 
+  const isActive = (item: NavItem) => {
+    if (!item.path) return false;
+    if (item.activePrefix) return pathname?.startsWith(item.activePrefix);
+    return pathname === item.path;
+  };
+
   const isItemRestricted = (item: NavItem) => {
     if (!can(item.key, 'read')) return true;
     if (item.key === 'integrations' && !canManageBillingAndIntegrations) return true;
@@ -163,11 +174,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
   const handleItemClick = (item: NavItem) => {
     if (isItemRestricted(item)) {
       gooeyToast.error(`${item.label} access is restricted`);
-      if (item.tab) setActiveTab(item.tab);
       return;
     }
-    if (item.tab) {
-      setActiveTab(item.tab);
+    if (item.path) {
+      router.push(item.path);
     } else {
       gooeyToast.info(`${item.label} is coming soon`);
     }
@@ -175,9 +185,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
 
   return (
     <aside
-      className={`bg-white border-r border-slate-200 flex flex-col shrink-0 h-full select-none z-20 transition-[width] duration-200 ease-in-out ${
-        isCollapsed ? 'w-[68px]' : 'w-[240px]'
-      }`}
+      className={`bg-white border-r border-slate-200 flex flex-col shrink-0 h-full select-none z-20 transition-[width] duration-200 ease-in-out ${isCollapsed ? 'w-[68px]' : 'w-[240px]'
+        }`}
     >
       {/* ============================================================ */}
       {/* EXPANDED VIEW                                                */}
@@ -237,14 +246,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
               <div className="space-y-0.5">
                 {WORKSPACE_ITEMS.map((item) => {
                   const Icon = item.icon;
-                  const active = item.tab === activeTab;
+                  const active = isActive(item);
                   const badge = badgeFor(item);
                   const isRestricted = isItemRestricted(item);
                   return (
                     <button
                       key={item.key}
                       onClick={() => handleItemClick(item)}
-                      title={isRestricted ? `${item.label} · restricted` : item.tab ? item.label : `${item.label} · coming soon`}
+                      title={isRestricted ? `${item.label} · restricted` : item.path ? item.label : `${item.label} · coming soon`}
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-colors cursor-pointer ${
                         active
                           ? 'bg-[#eef0fb] text-[#3440a8] font-bold'
@@ -281,24 +290,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
               <div className="space-y-0.5">
                 {SETUP_ITEMS.map((item) => {
                   const Icon = item.icon;
-                  const active = item.tab === activeTab;
+                  const active = isActive(item);
                   const badge = badgeFor(item);
                   const isRestricted = isItemRestricted(item);
                   return (
                     <button
                       key={item.key}
                       onClick={() => handleItemClick(item)}
-                      title={isRestricted ? `${item.label} · restricted` : item.tab ? item.label : `${item.label} · coming soon`}
+                      title={isRestricted ? `${item.label} · restricted` : item.path ? item.label : `${item.label} · coming soon`}
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-colors cursor-pointer ${
                         active
                           ? 'bg-[#eef0fb] text-[#3440a8] font-bold'
-                          : 'text-black hover:text-black hover:bg-slate-100/70'
+                          : isRestricted
+                            ? 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'
+                            : 'text-black hover:text-black hover:bg-slate-100/70'
                       }`}
                     >
                       <Icon
-                        className={`w-[18px] h-[18px] stroke-[1.8] shrink-0 ${
-                          active ? 'text-[#3440a8]' : 'text-black'
-                        }`}
+                        className={`w-[18px] h-[18px] stroke-[1.8] shrink-0 ${active ? 'text-[#3440a8]' : 'text-black'
+                          }`}
                       />
                       <span className="flex-1 text-left truncate">{item.label}</span>
                       {isRestricted && (
@@ -419,16 +429,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
           <nav className="flex-1 overflow-y-auto px-2 py-2 flex flex-col items-center gap-1.5">
             {WORKSPACE_ITEMS.map((item) => {
               const Icon = item.icon;
-              const active = item.tab === activeTab;
+              const active = isActive(item);
               const badge = badgeFor(item);
               const isRestricted = isItemRestricted(item);
               return (
                 <div key={item.key} className="relative">
                   <button
                     onClick={() => handleItemClick(item)}
-                    title={isRestricted ? `${item.label} · restricted` : item.tab ? item.label : `${item.label} · coming soon`}
+                    title={isRestricted ? `${item.label} · restricted` : item.path ? item.label : `${item.label} · coming soon`}
                     className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
-                      active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-black hover:text-black hover:bg-slate-100'
+                      active ? 'bg-[#eef0fb] text-[#3440a8]' : isRestricted ? 'text-slate-400 hover:text-slate-600 hover:bg-slate-50' : 'text-black hover:text-black hover:bg-slate-100'
                     }`}
                   >
                     <Icon className="w-[19px] h-[19px] stroke-[1.8]" />
@@ -451,16 +461,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
 
             {SETUP_ITEMS.map((item) => {
               const Icon = item.icon;
-              const active = item.tab === activeTab;
+              const active = isActive(item);
               const badge = badgeFor(item);
               const isRestricted = item.key === 'integrations' && !canManageBillingAndIntegrations;
               return (
                 <div key={item.key} className="relative">
                   <button
                     onClick={() => handleItemClick(item)}
-                    title={isRestricted ? `${item.label} · restricted` : item.tab ? item.label : `${item.label} · coming soon`}
+                    title={isRestricted ? `${item.label} · restricted` : item.path ? item.label : `${item.label} · coming soon`}
                     className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
-                      active ? 'bg-[#eef0fb] text-[#3440a8]' : 'text-black hover:text-black hover:bg-slate-100'
+                      active ? 'bg-[#eef0fb] text-[#3440a8]' : isRestricted ? 'text-slate-400 hover:text-slate-600 hover:bg-slate-50' : 'text-black hover:text-black hover:bg-slate-100'
                     }`}
                   >
                     <Icon className="w-[19px] h-[19px] stroke-[1.8]" />

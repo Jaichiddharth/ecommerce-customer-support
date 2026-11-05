@@ -38,6 +38,7 @@ import { ContactSearch, TopBar } from './TopBar';
 import { Channel, STATUS_META, fmtDate, needsReconnect, useDisconnectChannel } from './settings/channel-settings';
 import { WhatsAppNumberSection } from './settings/WhatsAppNumberSection';
 import { TeamRolesSection } from './settings/TeamRolesSection';
+import { ConsentPrivacySection } from './settings/ConsentPrivacySection';
 
 interface DetailField {
   icon: React.ReactNode;
@@ -394,7 +395,7 @@ const SECTIONS: { key: Section; label: string; subtitle: string; icon: LucideIco
   { key: 'whatsapp', label: 'WhatsApp number', subtitle: 'Your connected number, its health at Meta and the business profile customers see', icon: Phone },
   { key: 'team', label: 'Team & roles', subtitle: 'Invite teammates, assign roles and control who can reply.', icon: Users },
   { key: 'routing', label: 'Routing & hours', subtitle: 'Assign conversations automatically and set business hours and away messages.', icon: Route, soon: true },
-  { key: 'consent', label: 'Consent & privacy', subtitle: 'Opt-in collection, opt-out keywords and data retention.', icon: ShieldCheck, soon: true },
+  { key: 'consent', label: 'Consent & privacy', subtitle: 'Opt-out keywords, confirmation messages and data retention.', icon: ShieldCheck },
   { key: 'languages', label: 'Languages', subtitle: 'The languages your AI agent and templates reply in.', icon: Languages, soon: true },
   { key: 'billing', label: 'Billing & usage', subtitle: 'Your plan, seats, AI resolutions and invoices.', icon: CreditCard, soon: true },
   { key: 'api', label: 'API & webhooks', subtitle: 'API keys and webhooks to connect UnoCX to your own systems.', icon: Webhook, soon: true },
@@ -548,6 +549,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
               {activeSection === 'team' && <TeamRolesSection />}
             </>
           )}
+          {activeSection === 'whatsapp' && <WhatsAppNumberSection onOpenChannels={() => setActiveSection('channels')} />}
+          {activeSection === 'consent' && <ConsentPrivacySection />}
         </main>
       </div>
     </div>

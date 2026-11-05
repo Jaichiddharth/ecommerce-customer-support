@@ -6,11 +6,14 @@ import {
 } from 'lucide-react';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 import { ErrorState, LoadingState } from '@/components/ui/states';
+import { DataTable, createColumnHelper } from '@/components/ui/data-table';
 import { notifyError } from '@/lib/api/notify';
-import { flowsApi, categoryLabel, type FlowDetails } from './wa-api';
+import { flowsApi, categoryLabel, type FlowDetails, type FlowVersion } from './wa-api';
 import { StatusBadge, formatDate, iconBtn, primaryBtn, secondaryBtn } from './wa-ui';
 import { SendFlowDialog } from './SendFlowDialog';
 import { TestFlowDialog } from './TestFlowDialog';
+
+const vcol = createColumnHelper<FlowVersion>();
 
 function Card({ title, icon, action, children }: { title: string; icon?: React.ReactNode; action?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -85,6 +88,70 @@ export function FlowDetailsPage({
   const live = flow.versions.find((v) => v.id === flow.publishedVersionId);
   const archived = flow.status === 'archived';
 
+  const versionColumns = [
+    vcol.accessor('versionNumber', {
+      header: 'Version',
+      enableSorting: true,
+      sortDescFirst: true,
+      meta: { className: 'font-semibold text-slate-700' },
+      cell: ({ row: { original: v } }) => (
+        <>v{v.versionNumber} {v.id === flow.publishedVersionId && <span className="text-[10px] font-medium text-emerald-600">(live)</span>}</>
+      ),
+    }),
+    vcol.accessor('status', { header: 'Status', enableSorting: true, cell: ({ getValue }) => <StatusBadge status={getValue()} /> }),
+    vcol.accessor('metaFlowId', { header: 'Meta Flow ID', meta: { className: 'font-mono text-[10px] text-slate-500' }, cell: ({ getValue }) => getValue() ?? '—' }),
+    vcol.accessor('publishedAt', {
+      header: 'Published',
+      enableSorting: true,
+      sortDescFirst: true,
+      sortUndefined: 'last',
+      meta: { className: 'text-slate-500 whitespace-nowrap' },
+      cell: ({ getValue }) => formatDate(getValue()),
+    }),
+    vcol.accessor((v) => v.healthStatus?.can_send_message ?? null, { id: 'health', header: 'Health', meta: { className: 'text-slate-500' }, cell: ({ getValue }) => getValue() ?? '—' }),
+    vcol.display({
+      id: 'notes',
+      header: 'Notes',
+      meta: { className: 'text-[11px] text-red-500 max-w-xs' },
+      cell: ({ row: { original: v } }) => (
+        <>
+          {v.lastError}
+          {v.validationErrors.length > 0 && (
+            <ul className="list-disc pl-4 mt-0.5">
+              {v.validationErrors.slice(0, 5).map((e, i) => <li key={i}>{e.message || e.error}{e.line_start ? ` (line ${e.line_start})` : ''}</li>)}
+            </ul>
+          )}
+        </>
+      ),
+    }),
+    vcol.display({
+      id: 'actions',
+      header: () => <span className="sr-only">Actions</span>,
+      cell: ({ row: { original: v } }) => (
+        <div className="flex items-center justify-end gap-0.5">
+          {v.metaFlowId && (
+            <button className={iconBtn} title="Open Meta web preview" disabled={!!busy} onClick={() => openPreview(v.id)}>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {(v.status === 'published' || v.status === 'throttled') && (
+            <button
+              className={`${iconBtn} hover:!text-red-500`}
+              title="Deprecate (irreversible)"
+              disabled={!!busy}
+              onClick={() =>
+                window.confirm(`Deprecate v${v.versionNumber}? Customers can no longer open it and templates using it stop working. This cannot be undone.`) &&
+                act(`dep-${v.id}`, () => flowsApi.deprecate(flowId, v.id), 'Version deprecated')
+              }
+            >
+              <Ban className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      ),
+    }),
+  ];
+
   return (
     <div className="p-5 space-y-4 max-w-[1200px] mx-auto">
       <div className="flex flex-wrap items-center gap-3">
@@ -148,68 +215,15 @@ export function FlowDetailsPage({
       </div>
 
       <Card title="Versions" icon={<Rocket className="w-3.5 h-3.5 text-[#3440a8]" />}>
-        {flow.versions.length === 0 ? (
-          <p className="px-4 py-6 text-[12px] text-slate-400 text-center">Not published yet. Each publish creates an immutable version on Meta.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[12px]">
-              <thead>
-                <tr className="text-left text-[10px] uppercase tracking-wider text-slate-400 border-b border-slate-100">
-                  <th className="px-4 py-2 font-semibold">Version</th>
-                  <th className="px-3 py-2 font-semibold">Status</th>
-                  <th className="px-3 py-2 font-semibold">Meta Flow ID</th>
-                  <th className="px-3 py-2 font-semibold">Published</th>
-                  <th className="px-3 py-2 font-semibold">Health</th>
-                  <th className="px-3 py-2 font-semibold">Notes</th>
-                  <th className="px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {flow.versions.map((v) => (
-                  <tr key={v.id} className="border-b border-slate-50 align-top">
-                    <td className="px-4 py-2.5 font-semibold text-slate-700">
-                      v{v.versionNumber} {v.id === flow.publishedVersionId && <span className="text-[10px] font-medium text-emerald-600">(live)</span>}
-                    </td>
-                    <td className="px-3 py-2.5"><StatusBadge status={v.status} /></td>
-                    <td className="px-3 py-2.5 font-mono text-[10px] text-slate-500">{v.metaFlowId ?? '—'}</td>
-                    <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap">{formatDate(v.publishedAt)}</td>
-                    <td className="px-3 py-2.5 text-slate-500">{v.healthStatus?.can_send_message ?? '—'}</td>
-                    <td className="px-3 py-2.5 text-[11px] text-red-500 max-w-xs">
-                      {v.lastError}
-                      {v.validationErrors.length > 0 && (
-                        <ul className="list-disc pl-4 mt-0.5">
-                          {v.validationErrors.slice(0, 5).map((e, i) => <li key={i}>{e.message || e.error}{e.line_start ? ` (line ${e.line_start})` : ''}</li>)}
-                        </ul>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex items-center justify-end gap-0.5">
-                        {v.metaFlowId && (
-                          <button className={iconBtn} title="Open Meta web preview" disabled={!!busy} onClick={() => openPreview(v.id)}>
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        {(v.status === 'published' || v.status === 'throttled') && (
-                          <button
-                            className={`${iconBtn} hover:!text-red-500`}
-                            title="Deprecate (irreversible)"
-                            disabled={!!busy}
-                            onClick={() =>
-                              window.confirm(`Deprecate v${v.versionNumber}? Customers can no longer open it and templates using it stop working. This cannot be undone.`) &&
-                              act(`dep-${v.id}`, () => flowsApi.deprecate(flowId, v.id), 'Version deprecated')
-                            }
-                          >
-                            <Ban className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <DataTable
+          bare
+          columns={versionColumns}
+          data={flow.versions}
+          getRowId={(v) => v.id}
+          initialSort={{ sortBy: 'versionNumber', sortOrder: 'desc' }}
+          rowClassName={() => 'align-top'}
+          emptyState={<p className="px-4 py-6 text-[12px] text-slate-400 text-center">Not published yet. Each publish creates an immutable version on Meta.</p>}
+        />
       </Card>
 
       <div className="grid lg:grid-cols-2 gap-4">
