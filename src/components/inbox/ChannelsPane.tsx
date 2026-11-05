@@ -25,17 +25,17 @@ interface ChannelsPaneProps {
   onCollapse: () => void;
 }
 
-/** Rows listed in the inbox for the folder: conversations plus contacts without one yet */
-const CountPill: React.FC<{ count: number; active?: boolean }> = ({ count, active }) => (
-  <span
-    title={`${count} in the inbox`}
-    className={`min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 ${
-      active ? 'bg-[#3440a8] text-white' : 'bg-slate-200 text-slate-900'
-    }`}
-  >
-    {count}
-  </span>
-);
+/** Unread-message badge: shown only while the channel has unread messages */
+const UnreadBadge: React.FC<{ unread: number }> = ({ unread }) =>
+  unread > 0 ? (
+    <span
+      title={`${unread} unread message${unread === 1 ? '' : 's'}`}
+      aria-label={`${unread} unread messages`}
+      className="min-w-5 h-5 px-1.5 rounded-full bg-[#3440a8] text-white text-[11px] font-bold flex items-center justify-center shrink-0"
+    >
+      {unread > 99 ? '99+' : unread}
+    </span>
+  ) : null;
 
 const nf = new Intl.NumberFormat('en-IN');
 
@@ -61,16 +61,15 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
   onConnect,
   onCollapse,
 }) => {
-  // Conversation counts per channel id and per channel type
-  const { byChannel, byType } = useMemo(() => {
-    const byChannel = new Map<number, number>();
-    const byType = new Map<string, number>();
+  // Unread messages per channel id
+  const unreadByChannel = useMemo(() => {
+    const map = new Map<number, number>();
     for (const conv of conversations) {
-      const type = conv.channel?.type || 'whatsapp';
-      byType.set(type, (byType.get(type) ?? 0) + 1);
-      if (conv.channel) byChannel.set(conv.channel.id, (byChannel.get(conv.channel.id) ?? 0) + 1);
+      if (conv.channel && conv.unreadCount > 0) {
+        map.set(conv.channel.id, (map.get(conv.channel.id) ?? 0) + conv.unreadCount);
+      }
     }
-    return { byChannel, byType };
+    return map;
   }, [conversations]);
 
   const groups = useMemo(
@@ -185,7 +184,8 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                       )}
                       {!isDisconnected && <ContactsLine total={contactTotal} optedOut={optedOutTotal} />}
                     </span>
-                    <CountPill count={byType.get(type) ?? 0} active={active} />
+                    {/* Several accounts: the contacts line already summarises them, unread shows on each account below */}
+                    {single && <UnreadBadge unread={unreadByChannel.get(single.id) ?? 0} />}
                 </>
               );
 
@@ -236,7 +236,7 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                                 <ContactsLine total={channel.contactCount ?? 0} optedOut={channel.optedOutCount ?? 0} />
                               )}
                             </span>
-                            <CountPill count={byChannel.get(channel.id) ?? 0} active={channelActive} />
+                            <UnreadBadge unread={unreadByChannel.get(channel.id) ?? 0} />
                           </button>
                         );
                       })}
