@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { X, Save, Trash2 } from 'lucide-react';
 import type { AutomationNodeData } from './flow-types';
 import { SendWhatsAppFlowFields, WaitForFlowSubmissionFields } from './whatsapp/AutomationFlowFields';
+import { nodeConfigIssues } from '@/lib/automation/validate';
 
 interface ConfigPanelProps {
   nodeId: string;
@@ -13,18 +14,26 @@ interface ConfigPanelProps {
   onDelete: (id: string) => void;
 }
 
+/** Values the form shows before the user touches them, so saving untouched stores what was shown. */
+const FIELD_DEFAULTS: Record<string, Record<string, unknown>> = {
+  flow_delay: { delayAmount: 5, delayUnit: 'minutes' },
+};
+
 export function ConfigPanel({ nodeId, data, onUpdate, onClose, onDelete }: ConfigPanelProps) {
-  const [local, setLocal] = useState<Record<string, unknown>>({ ...data } as Record<string, unknown>);
+  const [local, setLocal] = useState<Record<string, unknown>>(() => {
+    const { _onConfigure, _issues, ...rest } = data as Record<string, unknown>;
+    return { ...FIELD_DEFAULTS[data.type], ...rest };
+  });
 
   const set = (key: string, value: unknown) =>
     setLocal((prev) => ({ ...prev, [key]: value }));
 
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
 
   const save = () => {
-    const problem = validateNode(data.type, local);
-    if (problem) {
-      setError(problem);
+    const problems = nodeConfigIssues(data.type, local);
+    if (problems.length) {
+      setErrors(problems);
       return;
     }
     onUpdate(nodeId, { ...local, configured: true } as Partial<AutomationNodeData>);
@@ -60,13 +69,15 @@ export function ConfigPanel({ nodeId, data, onUpdate, onClose, onDelete }: Confi
         </Field>
 
         {/* Type-specific fields */}
-        <TypeFields type={data.type} local={local} set={(k, v) => { setError(null); set(k, v); }} />
+        <TypeFields type={data.type} local={local} set={(k, v) => { setErrors([]); set(k, v); }} />
       </div>
 
-      {error && (
-        <p role="alert" className="mx-4 mb-0 mt-0 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-[11px] text-red-600 shrink-0">
-          {error}
-        </p>
+      {errors.length > 0 && (
+        <ul role="alert" className="mx-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-[11px] text-red-600 shrink-0 space-y-0.5">
+          {errors.map((e) => (
+            <li key={e}>{errors.length > 1 ? `• ${e}` : e}</li>
+          ))}
+        </ul>
       )}
 
       {/* Footer actions */}
@@ -90,21 +101,6 @@ export function ConfigPanel({ nodeId, data, onUpdate, onClose, onDelete }: Confi
   );
 }
 
-// ─── Validation before saving (activation re-checks on the server) ───────────
-
-function validateNode(type: string, d: Record<string, unknown>): string | null {
-  if (type === 'action_send_whatsapp_flow') {
-    if (!d.flowId) return 'Choose a published WhatsApp Flow.';
-    if (d.sendMethod === 'interactive') {
-      if (!String(d.flowBody ?? '').trim()) return 'Enter the message text.';
-      if (!String(d.flowCta ?? '').trim()) return 'Enter the button text.';
-    } else if (!d.templateId) {
-      return 'Choose an approved template that opens this Flow.';
-    }
-  }
-  return null;
-}
-
 // ─── Type-specific field groups ───────────────────────────────────────────────
 
 function TypeFields({
@@ -120,12 +116,7 @@ function TypeFields({
     case 'trigger_keyword':
       return (
         <Field label="Keywords (comma-separated)">
-          <input
-            value={String((local.keywords as string[] | undefined)?.join(', ') ?? '')}
-            onChange={(e) => set('keywords', e.target.value.split(',').map((k) => k.trim()))}
-            className={inputCls}
-            placeholder="e.g. hello, help, start"
-          />
+          <KeywordsInput keywords={local.keywords} onChange={(k) => set('keywords', k)} placeholder="e.g. hello, help, start" />
         </Field>
       );
 
@@ -157,6 +148,7 @@ function TypeFields({
               className={inputCls}
             >
               <option value="">Select attribute…</option>
+              <option value="message">Message text</option>
               <option value="phone">Phone number</option>
               <option value="name">Contact name</option>
               <option value="email">Email</option>
@@ -192,12 +184,7 @@ function TypeFields({
     case 'condition_keyword_match':
       return (
         <Field label="Keywords to match (comma-separated)">
-          <input
-            value={String((local.keywords as string[] | undefined)?.join(', ') ?? '')}
-            onChange={(e) => set('keywords', e.target.value.split(',').map((k) => k.trim()))}
-            className={inputCls}
-            placeholder="e.g. price, order, help"
-          />
+          <KeywordsInput keywords={local.keywords} onChange={(k) => set('keywords', k)} placeholder="e.g. price, order, help" />
         </Field>
       );
 
@@ -311,6 +298,34 @@ function TypeFields({
         </p>
       );
   }
+}
+
+/**
+ * Comma-separated keywords. The field keeps exactly what the user typed (trailing commas, spaces
+ * inside phrases); only the stored list is cleaned. Rebuilding the text from the list on every
+ * keystroke made "Hello," impossible to delete and phrases impossible to type.
+ */
+function KeywordsInput({
+  keywords,
+  onChange,
+  placeholder,
+}: {
+  keywords: unknown;
+  onChange: (keywords: string[]) => void;
+  placeholder: string;
+}) {
+  const [text, setText] = useState(() => (Array.isArray(keywords) ? keywords.map(String).filter((k) => k.trim()).join(', ') : ''));
+  return (
+    <input
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(e.target.value.split(',').map((k) => k.trim()).filter(Boolean));
+      }}
+      className={inputCls}
+      placeholder={placeholder}
+    />
+  );
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
