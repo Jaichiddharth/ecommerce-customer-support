@@ -5,6 +5,7 @@ import { automationEngine } from "@/lib/automation/engine";
 import { mapLimit } from "@/lib/concurrency";
 import { toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
+import { formatFlowResponse, summarizeFlowAnswers, type FlowAnswer } from "@/lib/whatsapp-flows/flow-response-format";
 
 const log = createLogger("WhatsAppFlowSubmission");
 
@@ -28,16 +29,39 @@ export function parseFlowReply(msg: any): { response: Record<string, unknown>; f
   };
 }
 
-/** One-line inbox summary of a Flow response. */
+/** One-line inbox summary of a Flow response, without its Flow's labels (see `describeReply`). */
 export function summarizeFlowReply(response: Record<string, unknown>): string {
-  const parts = Object.entries(response)
-    .filter(([k]) => !k.startsWith("_"))
-    .slice(0, 4)
-    .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : String(v)}`);
-  return `📋 Flow response${parts.length ? ` — ${parts.join(" · ")}` : ""}`;
+  return summarizeFlowAnswers(formatFlowResponse(response));
 }
 
 export class WhatsAppFlowSubmissionService {
+  /**
+   * How an inbound Flow response reads in the inbox: answers labelled with the questions of the Flow
+   * version that was sent (option ids → titles), plus a one-line summary. Display only: linking the
+   * response to its send happens in `record`. Returns null when `msg` isn't a Flow response.
+   */
+  async describeReply(organizationId: number, msg: any): Promise<{
+    flowId: number | null;
+    flowName: string | null;
+    answers: FlowAnswer[];
+    summary: string;
+  } | null> {
+    const reply = parseFlowReply(msg);
+    if (!reply) return null;
+    const execution = await whatsappFlowRepository
+      .findExecutionForReply(organizationId, { flowToken: reply.flowToken, contextWamid: reply.contextWamid })
+      .catch(() => null);
+    const [version, flow] = execution
+      ? await Promise.all([
+          whatsappFlowRepository.findVersion(execution.flowVersionId, organizationId).catch(() => null),
+          whatsappFlowRepository.findFlow(execution.flowId, organizationId).catch(() => null),
+        ])
+      : [null, null];
+    const answers = formatFlowResponse(reply.response, version?.definition);
+    const flowName = flow?.name ?? null;
+    return { flowId: flow?.id ?? null, flowName, answers, summary: summarizeFlowAnswers(answers, flowName) };
+  }
+
   /**
    * Stores a Flow response (synchronously, inside the webhook request) and returns the stored row,
    * or null when this wamid was already stored (Meta retry). The automation is resumed separately
@@ -135,7 +159,12 @@ export class WhatsAppFlowSubmissionService {
       limit: params.limit,
       offset: params.offset,
     });
-    return toListResult(rows, total, params);
+    // Readable answers (question labels, option titles) from the version that was sent; the definition itself stays server-side
+    const withAnswers = rows.map(({ flowDefinition, ...row }) => ({
+      ...row,
+      answers: formatFlowResponse(row.response ?? {}, flowDefinition),
+    }));
+    return toListResult(withAnswers, total, params);
   }
 }
 

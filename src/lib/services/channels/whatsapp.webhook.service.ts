@@ -456,10 +456,20 @@ export class WhatsAppWebhookService {
 
     // Save Inbound Message to PostgreSQL messages Table
     if (customer) {
+      const isFlowReply = Boolean(parseFlowReply(msg));
+      // A Flow response reads as the Flow's questions and option titles; the inbox renders `answers` as a card.
+      // Display only, so a failed lookup falls back to the plain summary instead of losing the message.
+      const flowView = isFlowReply
+        ? await whatsappFlowSubmissionService.describeReply(orgId, msg).catch((err) => {
+            log.warn('Could not label Flow response; storing plain summary', { err, wamid: messageId });
+            return null;
+          })
+        : null;
+
       const rawBody =
         messageType === 'text'
           ? msg.text?.body
-          : parsedContent.summary;
+          : flowView?.summary ?? parsedContent.summary;
       const textBody = rawBody && rawBody.trim() ? rawBody.trim() : null;
 
       const mediaUrl =
@@ -469,7 +479,6 @@ export class WhatsAppWebhookService {
 
       // Durable marker for the automation start that runs after the response: if the process stops first,
       // the sweep replays it. Only set when the org has message-triggered automations (cached lookup).
-      const isFlowReply = Boolean(parseFlowReply(msg));
       const automationPending =
         !isFlowReply && Boolean(messageId) && (await automationEngine.hasMessageTriggers(orgId).catch(() => true));
 
@@ -489,6 +498,9 @@ export class WhatsAppWebhookService {
         repliedToId: repliedToId,
         createdAt: msgDate,
         automationPendingSince: automationPending ? new Date() : null,
+        metadata: flowView
+          ? { flowResponse: { flowId: flowView.flowId, flowName: flowView.flowName, answers: flowView.answers } }
+          : null,
       });
 
       // The unique (organization, wamid) index refused it: a concurrent delivery of the same message won
@@ -498,6 +510,10 @@ export class WhatsAppWebhookService {
       }
 
       if (savedMessage) {
+        // A reply (or Flow response) carries the quoted message, as thread pages do
+        const repliedTo = savedMessage.repliedToId
+          ? (await messageRepository.findReplyPreviews([savedMessage.repliedToId], orgId).catch(() => null))?.get(savedMessage.repliedToId) ?? null
+          : null;
         publish(orgId, {
           type: "message.new",
           customerId: customer.id,
@@ -507,7 +523,7 @@ export class WhatsAppWebhookService {
             phone: customer.phone,
             channelId: channelId,
           },
-          message: savedMessage,
+          message: repliedTo ? { ...savedMessage, repliedTo } : savedMessage,
         });
       }
 

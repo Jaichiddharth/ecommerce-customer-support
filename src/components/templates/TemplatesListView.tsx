@@ -1,19 +1,22 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertTriangle,
   ChevronDown,
   Copy,
   Eye,
+  FileText,
   MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
-  Search,
   Trash2,
   X,
 } from 'lucide-react';
+import { DataTable, createColumnHelper, type FilterDef } from '@/components/ui/data-table';
+import { EmptyState } from '@/components/ui/states';
 import { WhatsAppTemplate, HeaderType, isTemplateEditable } from '@/types/templates';
 import { WhatsAppChatPreview } from './WhatsAppChatPreview';
 import { useAuth } from '@/context/AuthContext';
@@ -215,7 +218,10 @@ const RowMenu: React.FC<{
 }> = ({ group, onPreview, onEdit, onDuplicate, onDelete }) => {
   const [open, setOpen] = useState(false);
   const [index, setIndex] = useState(0);
-  const ref = useRef<HTMLDivElement>(null);
+  // Fixed position next to the button: the menu lives in a portal so the table's overflow can't clip it
+  const [position, setPosition] = useState<React.CSSProperties | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const tpl = group.versions[Math.min(index, group.versions.length - 1)];
   const blockedReason = editBlockedReason(tpl);
   const languages = group.versions.map((v) => v.language);
@@ -224,17 +230,40 @@ const RowMenu: React.FC<{
   const canCreate = can('templates', 'create');
   const canDelete = can('templates', 'delete');
 
+  // Below the button, or above it when it doesn't fit; measured before paint
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null);
+      return;
+    }
+    const button = buttonRef.current?.getBoundingClientRect();
+    if (!button) return;
+    const menuHeight = menuRef.current?.offsetHeight ?? 220;
+    const right = window.innerWidth - button.right;
+    const fitsBelow = button.bottom + 4 + menuHeight <= window.innerHeight - 8;
+    setPosition(fitsBelow ? { top: button.bottom + 4, right } : { bottom: window.innerHeight - button.top + 4, right });
+  }, [open, group.versions.length]);
+
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (!buttonRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    // The menu doesn't follow the page, so scrolling or resizing closes it
+    const close = (e: Event) => {
+      if (!menuRef.current?.contains(e.target as Node)) setOpen(false);
+    };
     document.addEventListener('mousedown', onDown);
     window.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
     return () => {
       document.removeEventListener('mousedown', onDown);
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
     };
   }, [open]);
 
@@ -244,18 +273,27 @@ const RowMenu: React.FC<{
   };
 
   return (
-    <div ref={ref} className="relative" onClick={(e) => e.stopPropagation()}>
+    <div className="relative" onClick={(e) => e.stopPropagation()}>
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
         title="Actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
         className={`${iconButton} ${open ? 'bg-slate-100 text-slate-900' : ''}`}
       >
         <MoreHorizontal className="w-5 h-5" />
       </button>
 
-      {open && (
-        <div className="absolute right-0 top-full mt-1 z-20 w-52 py-1.5 bg-white border border-slate-200 rounded-xl shadow-lg">
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          onClick={(e) => e.stopPropagation()}
+          style={position ?? { top: -9999, right: 0 }}
+          className={`fixed z-50 w-52 py-1.5 bg-white border border-slate-200 rounded-xl shadow-lg ${position ? '' : 'invisible'}`}
+        >
           {group.versions.length > 1 && (
             <div className="px-3 pt-1 pb-2 mb-1 border-b border-slate-100">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Language</p>
@@ -312,7 +350,8 @@ const RowMenu: React.FC<{
             <Trash2 className="w-4 h-4" />
             {group.versions.length > 1 ? `Delete ${languageLabel(tpl.language, languages)} version` : 'Delete'}
           </button>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -358,7 +397,19 @@ const NumberPill: React.FC<{
   );
 };
 
-const GRID_COLUMNS = 'md:grid-cols-[minmax(0,1fr)_160px_180px_160px_40px]';
+const col = createColumnHelper<TemplateGroup>();
+
+/** Toolbar filters of the shared table; the list is filtered here, in the browser */
+const FILTERS: FilterDef[] = [
+  { type: 'search', key: 'q', placeholder: 'Search name or message' },
+  {
+    type: 'select',
+    key: 'status',
+    label: 'Status',
+    allLabel: 'All',
+    options: STATUS_PRIORITY.slice().reverse().map((s) => ({ value: s, label: STATUS_STYLES[s].label })),
+  },
+];
 
 export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
   templates,
@@ -377,6 +428,7 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
   onNumberChange,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const [category, setCategory] = useState('ALL');
   const [previewing, setPreviewing] = useState<WhatsAppTemplate | null>(null);
   const [deleting, setDeleting] = useState<WhatsAppTemplate | null>(null);
@@ -416,17 +468,20 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
     const q = searchQuery.trim().toLowerCase();
     return groups.filter((g) => {
       if (category !== 'ALL' && g.category !== category) return false;
+      // A name matches the status when any of its languages has it
+      if (statusFilter && !g.versions.some((v) => v.status?.toUpperCase() === statusFilter)) return false;
       if (!q) return true;
       return (
         g.name.toLowerCase().includes(q) ||
         g.versions.some((v) => (v.components?.find((c) => c.type === 'BODY')?.text ?? '').toLowerCase().includes(q))
       );
     });
-  }, [groups, category, searchQuery]);
+  }, [groups, category, statusFilter, searchQuery]);
 
   const rejected = useMemo(() => templates.filter((t) => t.status?.toUpperCase() === 'REJECTED'), [templates]);
 
-  const isFiltered = Boolean(searchQuery.trim()) || category !== 'ALL';
+  const hasActiveFilters = Boolean(searchQuery.trim()) || Boolean(statusFilter);
+  const isFiltered = hasActiveFilters || category !== 'ALL';
   const previewSiblings = previewing ? groups.find((g) => g.name === previewing.name)?.versions ?? [previewing] : [];
 
   const confirmDelete = async () => {
@@ -463,6 +518,68 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
     setPreviewing(null);
     action(tpl);
   };
+
+  const columns = [
+    col.accessor('name', {
+      header: 'Name',
+      enableSorting: true,
+      meta: { className: 'max-w-[360px]' },
+      cell: ({ getValue }) => (
+        <p className="text-[13px] text-slate-900 font-mono truncate" title={getValue()}>
+          {getValue()}
+        </p>
+      ),
+    }),
+    col.accessor('category', {
+      header: 'Category',
+      enableSorting: true,
+      cell: ({ getValue }) => <CategoryPill category={getValue()} />,
+    }),
+    col.display({
+      id: 'languages',
+      header: 'Languages',
+      cell: ({ row: { original: group } }) => {
+        const languages = group.versions.map((v) => v.language);
+        const mixedStatus = new Set(group.versions.map((v) => v.status)).size > 1;
+        return (
+          <div className="flex flex-wrap gap-1.5">
+            {group.versions.map((v) => (
+              <button
+                key={v.id ?? v.language}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPreviewing(v);
+                }}
+                title={`${v.language} · ${statusStyle(v.status).label}`}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 hover:border-slate-300 hover:bg-white cursor-pointer"
+              >
+                {mixedStatus && <span className={`w-1.5 h-1.5 rounded-full ${statusStyle(v.status).dot}`} />}
+                {languageLabel(v.language, languages)}
+              </button>
+            ))}
+          </div>
+        );
+      },
+    }),
+    // Sorted by how urgently it needs attention (rejected first when ascending), not alphabetically
+    col.accessor((g) => STATUS_PRIORITY.indexOf(g.status?.toUpperCase() ?? ''), {
+      id: 'status',
+      header: 'Status',
+      enableSorting: true,
+      cell: ({ row: { original: group } }) => <StatusPill status={group.status} />,
+    }),
+    col.display({
+      id: 'actions',
+      header: () => <span className="sr-only">Actions</span>,
+      meta: { align: 'right', className: 'w-12' },
+      cell: ({ row: { original: group } }) => (
+        <div className="flex justify-end">
+          <RowMenu group={group} onPreview={setPreviewing} onEdit={onEdit} onDuplicate={onDuplicate} onDelete={setDeleting} />
+        </div>
+      ),
+    }),
+  ];
 
   return (
     <div className="h-full flex flex-col bg-slate-50">
@@ -534,119 +651,44 @@ export const TemplatesListView: React.FC<TemplatesListViewProps> = ({
               Connect a WhatsApp number in Settings to create and manage templates.
             </p>
           )}
-          {isConnected && loadError && (
+          {isConnected && loadError && templates.length > 0 && (
             <p className="mt-5 px-4 py-3 rounded-xl border border-red-200 bg-red-50 text-xs text-red-700">
-              Couldn&apos;t load templates: {loadError}
+              Couldn&apos;t refresh templates: {loadError}
             </p>
           )}
 
-          {/* ── Search ── */}
-          <div className="mt-4 flex justify-end">
-            <div className="relative w-full sm:w-96">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search templates"
-                className="w-full pl-10 pr-3 py-2.5 text-sm bg-white border border-slate-200 rounded-xl text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#3440a8]"
+          {/* ── Table (shared TanStack DataTable: sorting and pagination over the full list from Meta) ── */}
+          <DataTable
+            className="mt-4"
+            columns={columns}
+            data={filteredGroups}
+            getRowId={(g) => g.name}
+            paginationPosition="bottom"
+            loading={isLoading}
+            error={isConnected && loadError && templates.length === 0 ? loadError : null}
+            onRetry={onRefresh}
+            errorTitle="Couldn't load templates"
+            loadingLabel="Loading templates…"
+            filters={FILTERS}
+            filterValues={{ q: searchQuery, status: statusFilter }}
+            onFilterChange={(key, value) => (key === 'q' ? setSearchQuery(value as string) : setStatusFilter(value as string))}
+            onClearFilters={() => {
+              setSearchQuery('');
+              setStatusFilter('');
+            }}
+            hasActiveFilters={hasActiveFilters}
+            onRowClick={(g) => setPreviewing(g.versions[0])}
+            rowClassName={() => 'hover:bg-[#3440a8]/[0.04] transition-colors'}
+            emptyState={() => (
+              <EmptyState
+                icon={<FileText className="w-6 h-6" />}
+                title={isFiltered ? 'No templates match these filters' : 'No templates yet'}
+                description={
+                  isFiltered ? 'Try a different name, status or category.' : 'Create a template to send order updates and broadcasts.'
+                }
               />
-            </div>
-          </div>
-
-          {/* ── Table ── */}
-          <div className="mt-4 bg-white rounded-xl border border-slate-200">
-            <div
-              className={`hidden md:grid ${GRID_COLUMNS} gap-4 items-center px-6 py-3.5 rounded-t-xl bg-slate-50/80 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider`}
-            >
-              <span>Name</span>
-              <span>Category</span>
-              <span>Languages</span>
-              <span>Status</span>
-              <span />
-            </div>
-
-            {isLoading && templates.length === 0 ? (
-              Array.from({ length: 5 }, (_, i) => (
-                <div key={i} className="px-6 py-5 border-b border-slate-100 last:border-0 animate-pulse flex items-center gap-6">
-                  <div className="h-3.5 w-44 bg-slate-100 rounded" />
-                  <div className="hidden md:block h-5 w-20 bg-slate-100 rounded-full" />
-                  <div className="hidden md:block h-5 w-16 bg-slate-100 rounded" />
-                  <div className="hidden md:block h-5 w-24 bg-slate-100 rounded-full" />
-                </div>
-              ))
-            ) : filteredGroups.length === 0 ? (
-              <div className="px-6 py-16 text-center">
-                <p className="text-sm font-semibold text-slate-700">
-                  {isFiltered ? 'No templates match your search' : 'No templates yet'}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {isFiltered
-                    ? 'Try a different name or category.'
-                    : 'Create a template to send order updates and broadcasts.'}
-                </p>
-              </div>
-            ) : (
-              filteredGroups.map((group) => {
-                const languages = group.versions.map((v) => v.language);
-                const mixedStatus = new Set(group.versions.map((v) => v.status)).size > 1;
-
-                const languageChips = group.versions.map((v) => (
-                  <button
-                    key={v.id ?? v.language}
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setPreviewing(v);
-                    }}
-                    title={`${v.language} · ${statusStyle(v.status).label}`}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 hover:border-slate-300 hover:bg-white cursor-pointer"
-                  >
-                    {mixedStatus && <span className={`w-1.5 h-1.5 rounded-full ${statusStyle(v.status).dot}`} />}
-                    {languageLabel(v.language, languages)}
-                  </button>
-                ));
-
-                return (
-                  <div
-                    key={group.name}
-                    onClick={() => setPreviewing(group.versions[0])}
-                    className={`grid grid-cols-[minmax(0,1fr)_auto] ${GRID_COLUMNS} gap-x-4 gap-y-2 items-center px-6 py-4 md:py-5 border-b border-slate-100 last:border-0 last:rounded-b-xl hover:bg-[#3440a8]/[0.04] cursor-pointer transition-colors`}
-                  >
-                    <div className="min-w-0">
-                      <p className="text-[15px] text-slate-900 font-mono truncate" title={group.name}>
-                        {group.name}
-                      </p>
-                      {/* Small screens: the other columns fold under the name */}
-                      <div className="md:hidden mt-2 flex flex-wrap items-center gap-1.5">
-                        <CategoryPill category={group.category} />
-                        <StatusPill status={group.status} />
-                        {languageChips}
-                      </div>
-                    </div>
-
-                    <span className="hidden md:block">
-                      <CategoryPill category={group.category} />
-                    </span>
-                    <span className="hidden md:flex flex-wrap gap-1.5">{languageChips}</span>
-                    <span className="hidden md:block">
-                      <StatusPill status={group.status} />
-                    </span>
-
-                    <div className="flex justify-end">
-                      <RowMenu
-                        group={group}
-                        onPreview={setPreviewing}
-                        onEdit={onEdit}
-                        onDuplicate={onDuplicate}
-                        onDelete={setDeleting}
-                      />
-                    </div>
-                  </div>
-                );
-              })
             )}
-          </div>
+          />
 
           {/* ── Rejections ── */}
           {rejected.length > 0 && (

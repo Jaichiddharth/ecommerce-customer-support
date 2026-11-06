@@ -5,7 +5,7 @@ import { Inbox, X } from 'lucide-react';
 import { EmptyState } from '@/components/ui/states';
 import { DataTable, TableFilters, createColumnHelper, useServerTable, type FilterDef } from '@/components/ui/data-table';
 import { flowsApi, type FlowOption, type FlowSubmission } from './wa-api';
-import { StatusBadge, formatDate, formatValue, iconBtn } from './wa-ui';
+import { StatusBadge, formatDate, iconBtn } from './wa-ui';
 
 const col = createColumnHelper<FlowSubmission>();
 
@@ -83,7 +83,7 @@ export function SubmissionsPage({ flowFilter, onOpenFlow }: { flowFilter?: numbe
       id: 'answers',
       header: 'Answers',
       meta: { className: 'text-slate-500 max-w-[260px] truncate' },
-      cell: ({ row: { original: r } }) => Object.entries(r.response).slice(0, 3).map(([k, v]) => `${k}: ${formatValue(v)}`).join(' · '),
+      cell: ({ row: { original: r } }) => (r.answers ?? []).slice(0, 3).map((a) => `${a.label}: ${a.value}`).join(' · '),
     }),
     col.display({
       id: 'via',
@@ -138,12 +138,12 @@ export function SubmissionsPage({ flowFilter, onOpenFlow }: { flowFilter?: numbe
               <button className={iconBtn} onClick={() => setSelected(null)}><X className="w-4 h-4" /></button>
             </header>
             <div className="px-4 py-3 space-y-3 text-[12px]">
-              <dl className="space-y-2">
-                {Object.entries(selected.response).length === 0 && <p className="text-slate-400">No answers in this response.</p>}
-                {Object.entries(selected.response).map(([k, v]) => (
-                  <div key={k}>
-                    <dt className="text-[10px] font-mono text-slate-400">{k}</dt>
-                    <dd className="text-slate-800 break-words">{formatValue(v)}</dd>
+              <dl className="space-y-2.5">
+                {(selected.answers ?? []).length === 0 && <p className="text-slate-400">No answers in this response.</p>}
+                {(selected.answers ?? []).map((a) => (
+                  <div key={a.key}>
+                    <dt className="text-[11px] text-slate-500" title={a.key}>{a.label}</dt>
+                    <dd className="text-[13px] font-medium text-slate-800 break-words whitespace-pre-wrap">{a.value}</dd>
                   </div>
                 ))}
               </dl>

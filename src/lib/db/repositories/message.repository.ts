@@ -10,16 +10,34 @@ import {
   normalizeMessageStatus,
   opensServiceWindow,
 } from "../schema";
-import { eq, and, asc, desc, ne, sql, getTableColumns } from "drizzle-orm";
+import { eq, and, asc, desc, ne, sql, getTableColumns, inArray } from "drizzle-orm";
 import { messageReactionRepository } from "./message-reaction.repository";
 import { conversationRepository } from "./conversation.repository";
 import { createLogger } from "../../logger";
 
 const log = createLogger("MessageRepository");
 
+/** The message a reply answers, as the thread quotes it above the reply */
+export interface ReplyPreview {
+  id: number;
+  senderType: string;
+  senderName: string | null;
+  /** Message text, shortened */
+  text: string | null;
+  mediaType: string | null;
+  templateName: string | null;
+  /** Set when the quoted message is itself a Flow (form) response */
+  flowName: string | null;
+  isFlowResponse: boolean;
+}
+
+const REPLY_PREVIEW_TEXT_LENGTH = 160;
+
 export type MessageWithReactions = Message & {
   senderName?: string | null; // Name of the agent (users.name) who sent it; null for customer messages
   reactions?: MessageReaction[];
+  /** Quoted message, when this one replies to another (inbox thread pages only) */
+  repliedTo?: ReplyPreview | null;
 };
 
 export interface CreateMessageData {
@@ -245,7 +263,38 @@ export class MessageRepository {
 
     const hasMore = rows.length > options.limit;
     const page = rows.slice(0, options.limit).reverse();
-    return { messages: await this.attachReactions(page, organizationId), hasMore };
+    const [withReactions, previews] = await Promise.all([
+      this.attachReactions(page, organizationId),
+      this.findReplyPreviews(page.map((m) => m.repliedToId).filter((id): id is number => id != null), organizationId),
+    ]);
+    return {
+      messages: withReactions.map((m) => (m.repliedToId ? { ...m, repliedTo: previews.get(m.repliedToId) ?? null } : m)),
+      hasMore,
+    };
+  }
+
+  /**
+   * Short previews of the messages that replies point at, so the thread can quote them even when the
+   * quoted message is in an older batch that isn't loaded yet.
+   */
+  async findReplyPreviews(ids: number[], organizationId: number): Promise<Map<number, ReplyPreview>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Map();
+    const rows = await db
+      .select({
+        id: messages.id,
+        senderType: messages.senderType,
+        senderName: users.name,
+        text: sql<string | null>`left(${messages.textContent}, ${REPLY_PREVIEW_TEXT_LENGTH})`,
+        mediaType: messages.mediaType,
+        templateName: sql<string | null>`${messages.metadata}->'template'->>'name'`,
+        flowName: sql<string | null>`${messages.metadata}->'flowResponse'->>'flowName'`,
+        isFlowResponse: sql<boolean>`(${messages.metadata} -> 'flowResponse') is not null`,
+      })
+      .from(messages)
+      .leftJoin(users, eq(messages.senderId, users.id))
+      .where(and(eq(messages.organizationId, organizationId), inArray(messages.id, unique)));
+    return new Map(rows.map((r) => [r.id, { ...r, senderType: String(r.senderType), isFlowResponse: Boolean(r.isFlowResponse) }]));
   }
 
   private async attachReactions<T extends Message>(

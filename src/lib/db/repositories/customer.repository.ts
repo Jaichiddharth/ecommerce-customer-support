@@ -56,12 +56,19 @@ const lastActiveAt = sql<Date | null>`(select max(${tickets.lastMessageAt}) from
 /** The contact has a ticket, i.e. a conversation the inbox can open */
 const hasConversation = sql<boolean>`exists(select 1 from ${tickets} where ${tickets.customerId} = ${customers.id})`;
 
+/** Columns the Contacts page can sort by */
+export const CONTACT_SORT_KEYS = ["name", "lastActiveAt", "createdAt"] as const;
+export type ContactSortKey = (typeof CONTACT_SORT_KEYS)[number];
+
 export interface ContactListFilter {
     channelId: number;
     consent?: "opted_out";
     search?: string;
     /** Only contacts with a message in the last N days */
     activeWithinDays?: number;
+    /** Defaults to most recently active first */
+    sortBy?: ContactSortKey;
+    sortOrder?: "asc" | "desc";
     limit: number;
     offset: number;
 }
@@ -384,13 +391,22 @@ export class CustomerRepository {
                 : undefined
         );
 
+        // Fixed SQL per allowlisted key; contacts without messages always sort last by activity
+        const dir = filter.sortOrder === "asc" ? sql`ASC` : sql`DESC`;
+        const primaryOrder =
+            filter.sortBy === "name"
+                ? sql`lower(${customers.name}) ${dir}`
+                : filter.sortBy === "createdAt"
+                  ? sql`${customers.createdAt} ${dir}`
+                  : sql`${lastActiveAt} ${dir} NULLS LAST`;
+
         const [rows, [{ total }]] = await Promise.all([
             db
                 .select({ ...withChannelColumns, lastActiveAt, hasConversation })
                 .from(customers)
                 .innerJoin(channels, onLiveChannel)
                 .where(where)
-                .orderBy(sql`${lastActiveAt} DESC NULLS LAST`, desc(customers.createdAt), desc(customers.id))
+                .orderBy(primaryOrder, desc(customers.createdAt), desc(customers.id))
                 .limit(filter.limit)
                 .offset(filter.offset),
             db

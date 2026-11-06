@@ -188,8 +188,14 @@ const variableKeys = (text?: string): string[] => {
 
 const isNamed = (key: string) => !/^\d+$/.test(key);
 
-/** Button types an agent can send from the inbox; others (catalog, flow, OTP…) need extra setup */
-const SENDABLE_BUTTON_TYPES = ['QUICK_REPLY', 'URL', 'PHONE_NUMBER', 'COPY_CODE'];
+/**
+ * Button types an agent can send from the inbox; others (catalog, OTP…) need extra setup.
+ * FLOW: the server swaps in a tracked flow_token when the template is one of ours (see flow-send.service).
+ */
+const SENDABLE_BUTTON_TYPES = ['QUICK_REPLY', 'URL', 'PHONE_NUMBER', 'COPY_CODE', 'FLOW'];
+
+/** WhatsApp's "no token" value; responses carrying it are stored but not linked to a send */
+export const UNTRACKED_FLOW_TOKEN = 'unused';
 
 export type TemplateSendFieldKind = 'header_text' | 'header_media' | 'body' | 'button_url' | 'coupon_code';
 
@@ -358,6 +364,17 @@ export function buildTemplateSendComponents(
       });
     }
   }
+
+  // Flow buttons take no agent input; the server replaces this token with a tracked one when it can
+  (component(tpl, 'BUTTONS')?.buttons ?? []).forEach((btn, index) => {
+    if (btn.type !== 'FLOW') return;
+    components.push({
+      type: 'button',
+      sub_type: 'flow',
+      index: String(index),
+      parameters: [{ type: 'action', action: { flow_token: UNTRACKED_FLOW_TOKEN } }],
+    });
+  });
 
   return components;
 }

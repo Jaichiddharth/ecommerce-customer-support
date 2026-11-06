@@ -108,6 +108,18 @@ export interface MessageReactionItem {
   createdAt?: string | Date;
 }
 
+/** The quoted message above a reply (see message.repository `ReplyPreview`) */
+export interface ReplyPreview {
+  id: number | string;
+  senderType: string;
+  senderName: string | null;
+  text: string | null;
+  mediaType: string | null;
+  templateName: string | null;
+  flowName: string | null;
+  isFlowResponse: boolean;
+}
+
 export interface Message {
   id: string;
   sender: 'customer' | 'agent' | 'bot';
@@ -130,6 +142,17 @@ export interface Message {
   aiAction?: string | null;
   /** Set on the team-only note that records a WhatsApp consent change (opt-out / opt-in) */
   consent?: ConsentChange | null;
+  /** A template message's buttons (QUICK_REPLY, URL, FLOW…), as WhatsApp shows them to the customer */
+  templateButtons?: Array<{ type: string; text: string }>;
+  /** The message this one replies to (WhatsApp reply / Flow response to a template) */
+  repliedToId?: string | null;
+  /** Server preview of that message, for when it isn't loaded in the thread */
+  repliedTo?: ReplyPreview | null;
+  /** A customer's WhatsApp Flow (form) response, answers labelled with the Flow's questions */
+  flowResponse?: {
+    flowName: string | null;
+    answers: Array<{ key: string; label: string; value: string }>;
+  } | null;
   reactions?: MessageReactionItem[];
   createdAt?: string | Date;
   templateCard?: {
@@ -140,10 +163,6 @@ export interface Message {
     eta?: string;
     courierInfo?: string;
   };
-  templateButtons?: Array<{
-    text: string;
-    actionType: 'url' | 'quick_reply' | 'call';
-  }>;
   cardData?: Record<string, unknown>;
 }
 
