@@ -4,6 +4,8 @@ import { withAuth, AuthenticatedRequest, assertPagePermission, hasPermission } f
 import { organizationRepository } from "@/lib/db/repositories";
 import { AppError } from "@/lib/errors";
 import { readFormData, readJson } from "@/lib/api/handler";
+import { whatsappFlowSendService } from "@/lib/services/whatsapp-flows";
+import { sanitizeTemplateButtons } from "@/lib/db/schema";
 
 export const POST = withAuth(async (req: AuthenticatedRequest) => {
   assertPagePermission(req.user, "inbox", "update");
@@ -22,6 +24,7 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
   let templateName: string | undefined = undefined;
   let languageCode: string | undefined = undefined;
   let components: any = undefined;
+  let templateButtons: any = undefined;
   let mediaFile: Buffer | undefined = undefined;
   let mimeType: string | undefined = undefined;
   let filename: string | undefined = undefined;
@@ -60,6 +63,7 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
     templateName = body.templateName;
     languageCode = body.languageCode;
     components = body.components;
+    templateButtons = sanitizeTemplateButtons(body.templateButtons);
     mimeType = body.mimeType;
     filename = body.filename;
   }
@@ -82,7 +86,27 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
     }
   }
 
-  const result = await channels.whatsapp.sendMessage({
+  // A template with a Flow button: when it's one of our Flow templates, send it tracked (flow_token +
+  // execution) so the customer's response is linked to this send; otherwise it goes out untracked below
+  const hasFlowButton =
+    Array.isArray(components) && components.some((c: any) => c?.type === "button" && c?.sub_type === "flow");
+  const flowResult =
+    templateName && languageCode && hasFlowButton && channelId && customerId
+      ? await whatsappFlowSendService.sendTemplateFromInbox({
+          organizationId: orgId,
+          customerId: Number(customerId),
+          channelId: Number(channelId),
+          templateName: String(templateName),
+          languageCode: String(languageCode),
+          components,
+          text: text ? String(text) : undefined,
+          templateButtons,
+          userId: req.user.id,
+          senderName: req.user.name,
+        })
+      : null;
+
+  const result = flowResult ?? await channels.whatsapp.sendMessage({
     organizationId: orgId,
     channelId: channelId ? Number(channelId) : undefined,
     phoneNumberId: phoneNumberId ? String(phoneNumberId) : undefined,
@@ -100,6 +124,7 @@ export const POST = withAuth(async (req: AuthenticatedRequest) => {
     templateName,
     languageCode,
     components,
+    templateButtons,
   });
 
   return NextResponse.json({

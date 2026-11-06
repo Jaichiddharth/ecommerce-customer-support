@@ -105,6 +105,8 @@ export interface FlowSubmission {
   customerId: number;
   metaMessageId: string;
   response: Record<string, unknown>;
+  /** `response` labelled with the Flow's questions and option titles, in the Flow's order */
+  answers: Array<{ key: string; label: string; value: string }>;
   processingStatus: string;
   automationRunId: number | null;
   lastError: string | null;

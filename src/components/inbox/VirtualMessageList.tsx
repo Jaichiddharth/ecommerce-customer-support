@@ -20,6 +20,8 @@ interface VirtualMessageListProps<T extends { id: string }> {
   onLoadOlder: () => void;
   /** A newly appended item that should scroll the thread down even when reading history (e.g. the agent's own send) */
   shouldScrollToNewItem?: (item: T) => boolean;
+  /** Scrolls the item with this id into the middle of the view; a new `nonce` repeats the same request */
+  scrollRequest?: { id: string; nonce: number } | null;
 }
 
 /**
@@ -35,6 +37,7 @@ export function VirtualMessageList<T extends { id: string }>({
   isLoadingOlder,
   onLoadOlder,
   shouldScrollToNewItem,
+  scrollRequest,
 }: VirtualMessageListProps<T>) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -74,6 +77,16 @@ export function VirtualMessageList<T extends { id: string }>({
 
     prevRef.current = { firstId, lastId, scrollHeight: el.scrollHeight };
   }, [items, totalSize, shouldScrollToNewItem]);
+
+  // Jump to a message (e.g. the one a reply quotes); row 0 is the header
+  useEffect(() => {
+    if (!scrollRequest) return;
+    const index = items.findIndex((m) => m.id === scrollRequest.id);
+    if (index === -1) return;
+    isAtBottomRef.current = false;
+    virtualizer.scrollToIndex(index + 1, { align: 'center' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a new request scrolls, not new items
+  }, [scrollRequest]);
 
   const maybeLoadOlder = useCallback(() => {
     const el = scrollRef.current;
