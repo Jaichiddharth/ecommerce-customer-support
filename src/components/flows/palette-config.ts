@@ -120,36 +120,6 @@ export const PALETTE_ITEMS: PaletteItem[] = [
 
   // ── Flow Controls ─────────────────────────────────────────────────────────
   {
-    type: 'flow_delay',
-    label: 'Delay',
-    category: 'flow-controls',
-    description: 'Wait before continuing',
-    icon: 'Clock',
-    color: '#f3e8ff',
-    textColor: '#7e22ce',
-    borderColor: '#d8b4fe',
-  },
-  {
-    type: 'flow_branch',
-    label: 'Branch',
-    category: 'flow-controls',
-    description: 'Split into multiple paths',
-    icon: 'Shuffle',
-    color: '#f3e8ff',
-    textColor: '#7e22ce',
-    borderColor: '#d8b4fe',
-  },
-  {
-    type: 'flow_wait_flow_submission',
-    label: 'Wait for Flow Submission',
-    category: 'flow-controls',
-    description: 'Pause until the customer submits the Flow',
-    icon: 'Hourglass',
-    color: '#f3e8ff',
-    textColor: '#7e22ce',
-    borderColor: '#d8b4fe',
-  },
-  {
     type: 'flow_end',
     label: 'End Workflow',
     category: 'flow-controls',

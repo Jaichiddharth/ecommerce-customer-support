@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ListFilter, Plus, Search, User, Lock } from 'lucide-react';
 import { ErrorState } from '@/components/ui/states';
 import type { ApiError } from '@/lib/api/api-error';
@@ -10,7 +11,9 @@ import {
   InboxConversation,
   ListTab,
   conversationChannelType,
+  formatHandle,
   formatListTime,
+  formatPhone,
   getInitials,
   lastMessagePreview,
 } from './inbox-types';
@@ -40,14 +43,59 @@ const TABS: { key: ListTab; label: string }[] = [
   { key: 'mine', label: 'Mine' },
 ];
 
-export const Avatar: React.FC<{ name: string; src?: string | null; size?: 'md' | 'lg' }> = ({ name, src, size = 'md' }) => {
+interface AvatarProps {
+  name: string;
+  src?: string | null;
+  size?: 'md' | 'lg';
+  /** Shown with the name in the hover card; the first one present is used (phone, then handle, then email) */
+  phone?: string | null;
+  handle?: string | null;
+  email?: string | null;
+}
+
+/** Contact avatar; hovering it shows the contact's name and number in a card that the scrolling list can't clip */
+export const Avatar: React.FC<AvatarProps> = ({ name, src, size = 'md', phone, handle, email }) => {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [cardAt, setCardAt] = useState<{ top: number; left: number } | null>(null);
   const dims = size === 'lg' ? 'w-10 h-10 text-[13px]' : 'w-9 h-9 text-xs';
-  if (src) {
-    return <img src={src} alt={name} className={`${dims} rounded-full object-cover shrink-0`} />;
-  }
+  const identity = formatPhone(phone) || formatHandle(handle) || email || '';
+
+  const show = () => {
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+    // Below the avatar, kept inside the viewport
+    setCardAt({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - 248)) });
+  };
+  const hide = () => setCardAt(null);
+
+  // A fixed card doesn't follow scrolling: hide it when anything scrolls
+  useEffect(() => {
+    if (!cardAt) return;
+    window.addEventListener('scroll', hide, true);
+    return () => window.removeEventListener('scroll', hide, true);
+  }, [cardAt]);
+
   return (
-    <span className={`${dims} rounded-full bg-[#fce8f0] text-[#b4366b] font-semibold flex items-center justify-center shrink-0`}>
-      {getInitials(name)}
+    <span ref={ref} onMouseEnter={show} onMouseLeave={hide} className="shrink-0 inline-flex">
+      {src ? (
+        <img src={src} alt={name} className={`${dims} rounded-full object-cover`} />
+      ) : (
+        <span className={`${dims} rounded-full bg-[#fce8f0] text-[#b4366b] font-semibold flex items-center justify-center`}>
+          {getInitials(name)}
+        </span>
+      )}
+      {cardAt &&
+        createPortal(
+          <span
+            role="tooltip"
+            style={{ top: cardAt.top, left: cardAt.left }}
+            className="fixed z-[100] max-w-[240px] px-3 py-2 rounded-lg bg-slate-900 text-white shadow-lg pointer-events-none"
+          >
+            <span className="block text-[12.5px] font-semibold leading-snug break-words">{name}</span>
+            {identity && <span className="block mt-0.5 text-[12px] font-mono text-slate-300 whitespace-nowrap">{identity}</span>}
+          </span>,
+          document.body
+        )}
     </span>
   );
 };
@@ -193,7 +241,13 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                   selected ? 'bg-[#eef0fb] border-l-[#3440a8]' : 'border-l-transparent hover:bg-slate-50'
                 }`}
               >
-                <Avatar name={conv.customer.name} src={conv.customer.avatarUrl} />
+                <Avatar
+                  name={conv.customer.name}
+                  src={conv.customer.avatarUrl}
+                  phone={conv.customer.phone}
+                  handle={conv.customer.handle}
+                  email={conv.customer.email}
+                />
                 <span className="min-w-0">
                   <span className="flex items-center justify-between gap-2">
                     <span className="font-bold text-[13px] text-slate-950 truncate">{conv.customer.name}</span>

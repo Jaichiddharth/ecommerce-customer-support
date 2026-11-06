@@ -32,7 +32,7 @@ export interface TemplateComponent {
     body_text_named_params?: Array<{ param_name: string; example: string }>;
   };
   buttons?: Array<{
-    type: 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER' | 'COPY_CODE' | 'OTP';
+    type: 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER' | 'COPY_CODE' | 'OTP' | 'FLOW';
     text: string;
     url?: string;
     phone_number?: string;

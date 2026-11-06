@@ -114,6 +114,8 @@ export type SubmissionWithRefs = WhatsAppFlowSubmissionRow & {
   templateId: number | null;
   templateName: string | null;
   automationNodeId: string | null;
+  /** The sent version's editor model, to label the answers; null when the response wasn't matched */
+  flowDefinition: WhatsAppFlowVersionRow["definition"] | null;
 };
 
 /** Persistence for WhatsApp Flows, versions, templates, executions and submissions. Org-scoped except Meta-id webhook lookups. */
@@ -572,6 +574,7 @@ export class WhatsAppFlowRepository {
           customerPhone: customers.phone,
           flowName: whatsappFlows.name,
           versionNumber: whatsappFlowVersions.versionNumber,
+          flowDefinition: whatsappFlowVersions.definition,
           templateId: whatsappFlowExecutions.templateId,
           templateName: whatsappTemplates.name,
           automationNodeId: whatsappFlowExecutions.automationNodeId,
@@ -596,6 +599,7 @@ export class WhatsAppFlowRepository {
         customerPhone: r.customerPhone,
         flowName: r.flowName,
         versionNumber: r.versionNumber,
+        flowDefinition: r.flowDefinition,
         templateId: r.templateId,
         templateName: r.templateName,
         automationNodeId: r.automationNodeId,

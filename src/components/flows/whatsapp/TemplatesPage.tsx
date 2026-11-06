@@ -184,6 +184,7 @@ export function TemplatesPage({ flowFilter, onOpenFlow }: { flowFilter?: number;
         {...table.tableProps}
         columns={columns}
         getRowId={(t) => t.id}
+        paginationPosition="bottom"
         rowClassName={(t) => `hover:bg-slate-50/60 align-top ${busyId === t.id ? 'opacity-60' : ''}`}
         errorTitle="Couldn't load templates"
         loadingLabel="Loading templates…"

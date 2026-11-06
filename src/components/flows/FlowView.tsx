@@ -28,7 +28,7 @@ import { FlowPalette } from './FlowPalette';
 import { ConfigPanel } from './ConfigPanel';
 import { PALETTE_ITEMS } from './palette-config';
 import type { AutomationNodeData, WorkflowGraph } from './flow-types';
-import { Save, RotateCcw, Download, Upload, Maximize2, Zap, Power, Loader2, ArrowLeft, AlertTriangle } from 'lucide-react';
+import { Save, RotateCcw, Download, Upload, Maximize2, Power, Loader2, ArrowLeft, AlertTriangle } from 'lucide-react';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
 import apiClient from '@/lib/api/client';
 import { notifyError } from '@/lib/api/notify';
@@ -39,8 +39,7 @@ import { AutomationIssuesPanel, type IssuesIntent } from './AutomationIssuesPane
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-let nodeIdCounter = 100;
-const newId = () => `node_${++nodeIdCounter}`;
+const newId = () => `node_${crypto.randomUUID()}`;
 
 const defaultEdgeOptions = {
   animated: false,
@@ -623,7 +622,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
               className={`flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-60 ${
                 isActive
                   ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
-                  : 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'
+                  : 'text-red-500 bg-red-50 border-red-200 hover:bg-red-100'
               }`}
               title={isActive ? 'Running on incoming messages. Click to pause.' : 'Validate, save and start running this automation'}
             >
@@ -757,16 +756,6 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
                 </div>
               </Panel>
 
-              {/* Node / edge count */}
-              <Panel position="bottom-left">
-                <div className="bg-white/80 backdrop-blur-sm border border-slate-200 rounded-xl px-3 py-1.5 flex items-center gap-2 text-[11px] text-slate-500 shadow-sm mb-10">
-                  <Zap className="w-3 h-3 text-[#3440a8]" />
-                  <span>
-                    <strong className="text-slate-700">{nodes.length}</strong> nodes ·{' '}
-                    <strong className="text-slate-700">{edges.length}</strong> connections
-                  </span>
-                </div>
-              </Panel>
             </ReactFlow>
           </div>
 

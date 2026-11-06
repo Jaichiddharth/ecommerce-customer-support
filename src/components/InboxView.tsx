@@ -57,7 +57,9 @@ import { VirtualMessageList } from './inbox/VirtualMessageList';
 import { InboxTopBar } from './inbox/InboxTopBar';
 import { ProductBrowser, type ShareProductArgs } from './shopify/ProductBrowser';
 import { useShopifyStore } from './shopify/useShopifyStore';
-import { TemplateComposer, forgetCachedTemplates, type TemplateDraft } from './inbox/TemplateComposer';
+import { TemplateButtonIcon, TemplateComposer, forgetCachedTemplates, type TemplateDraft } from './inbox/TemplateComposer';
+import { FlowResponseCard } from './inbox/FlowResponseCard';
+import { ReplyQuote, quoteFromMessage, quoteFromPreview } from './inbox/ReplyQuote';
 import {
   buildTemplateSendComponents,
   getTemplateSendFields,
@@ -216,6 +218,12 @@ const mapApiMessage = (m: any, channel: string): Message => {
     isInternalNote: Boolean(m.isInternalNote),
     aiAction: m.metadata?.aiAction ?? null,
     consent: m.metadata?.consent ?? null,
+    templateButtons: Array.isArray(m.metadata?.template?.buttons) ? m.metadata.template.buttons : undefined,
+    repliedToId: m.repliedToId != null ? String(m.repliedToId) : null,
+    repliedTo: m.repliedTo ?? null,
+    flowResponse: Array.isArray(m.metadata?.flowResponse?.answers)
+      ? { flowName: m.metadata.flowResponse.flowName ?? null, answers: m.metadata.flowResponse.answers }
+      : null,
     reactions: m.reactions || [],
   };
 };
@@ -343,6 +351,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   );
   const activeChannelType = activeConv ? conversationChannelType(activeConv) : 'whatsapp';
   const activeMessages = activeConv ? messagesMap[convKeyFor(activeConv.customer.id)] || [] : [];
+  // Reply quotes: jumping to the quoted message, which flashes so the eye finds it
+  const [scrollRequest, setScrollRequest] = useState<{ id: string; nonce: number } | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+  }, []);
   const isChannelDisconnected = activeConv?.channel?.status === 'disconnected';
   /** The customer opted out (STOP): nothing can be sent to them, not even templates, until they reply START */
   const isCustomerOptedOut = activeChannelType === 'whatsapp' && Boolean(activeConv?.customer.isOptedOut);
@@ -1283,6 +1298,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     // Until the stored message arrives, show the header from the approved sample
     const mediaField = getTemplateSendFields(template).find((f) => f.kind === 'header_media');
     const headerPreview = mediaField?.example;
+    // WhatsApp shows the approved buttons to the customer; keep them so the thread shows them too
+    const templateButtons = (template.components?.find((c) => c.type === 'BUTTONS')?.buttons ?? []).map((b) => ({
+      type: b.type,
+      text: b.text,
+    }));
 
     upsertMessage(convId, {
       id: tempId,
@@ -1297,6 +1317,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       type: 'template',
       mediaType: mediaField?.mediaFormat?.toLowerCase() ?? 'template',
       mediaUrl: headerPreview,
+      templateButtons,
     });
     setIsSending(true);
 
@@ -1321,8 +1342,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         templateName: template.name,
         languageCode: template.language,
         components: buildTemplateSendComponents(template, sendValues),
-        // Stored as the message text so the thread shows what the customer received
+        // Stored with the message so the thread shows what the customer received
         text,
+        templateButtons,
       });
       if (res.data?.persisted === false) {
         notifyWarning('Template delivered, but not saved', res.data?.warning);
@@ -1622,18 +1644,51 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       );
     }
 
+    // The message this one answers: the loaded one when available (it's current), else the server's preview
+    const customerName = activeConv?.customer.name || 'Customer';
+    const quotedLocal = msg.repliedToId ? activeMessages.find((m) => m.id === msg.repliedToId) : undefined;
+    const quote = msg.repliedTo
+      ? quoteFromPreview(msg.repliedTo, customerName)
+      : quotedLocal
+        ? quoteFromMessage(quotedLocal, customerName)
+        : null;
+    const isHighlighted = highlightedMessageId === msg.id;
+
     return (
       <React.Fragment key={msg.id}>
         {daySeparator}
         <div className={`group flex flex-col ${isCustomer ? 'items-start' : 'items-end'}`}>
-          <div className={`max-w-[78%] text-[13px] leading-relaxed ${bubbleClass}`}>
+          <div
+            className={`max-w-[78%] text-[13px] leading-relaxed transition-shadow duration-500 ${bubbleClass} ${
+              isHighlighted ? 'ring-2 ring-[#3440a8]/50 ring-offset-2' : ''
+            }`}
+          >
             {label && (
               <p className={`text-[10px] font-semibold tracking-wider mb-1 ${isNote ? 'text-amber-700' : 'text-[#3440a8]'}`}>
                 {label}
               </p>
             )}
+            {quote && <ReplyQuote quote={quote} isCustomer={isCustomer} onClick={() => jumpToMessage(quote.id)} />}
             {renderMedia(msg, senderName)}
-            {!isPlaceholderText(msg.text) && <p className="whitespace-pre-wrap break-words">{renderMessageWithLinks(msg.text)}</p>}
+            {msg.flowResponse ? (
+              <FlowResponseCard response={msg.flowResponse} />
+            ) : (
+              !isPlaceholderText(msg.text) && <p className="whitespace-pre-wrap break-words">{renderMessageWithLinks(msg.text)}</p>
+            )}
+            {msg.templateButtons && msg.templateButtons.length > 0 && (
+              // Display only: the customer taps these in WhatsApp
+              <div className="mt-2 flex flex-col gap-1">
+                {msg.templateButtons.map((btn, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-center gap-1.5 rounded-lg border border-[#d9ddf5] bg-white/80 py-1.5 text-[12px] font-medium text-[#3440a8]"
+                  >
+                    <TemplateButtonIcon type={btn.type} />
+                    <span className="truncate">{btn.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-slate-400">
               <span>{msg.timestamp}</span>
               {!isCustomer && !isNote && renderMessageStatusIndicator(msg.status, msg.errorCode, msg.errorMessage)}
@@ -1643,6 +1698,18 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         </div>
       </React.Fragment>
     );
+  };
+
+  /** Scrolls to a quoted message and briefly highlights it */
+  const jumpToMessage = (id: string) => {
+    if (!activeMessages.some((m) => m.id === id)) {
+      gooeyToast.info('That message is further up', { description: 'Scroll up to load earlier messages.' });
+      return;
+    }
+    setScrollRequest({ id, nonce: Date.now() });
+    setHighlightedMessageId(id);
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => setHighlightedMessageId(null), 1600);
   };
 
   // Virtualized thread wiring
@@ -1773,7 +1840,14 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                 {/* Chat header */}
                 <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 shrink-0">
                   <div className="flex items-center gap-3 min-w-0">
-                    <Avatar name={activeConv.customer.name} src={activeConv.customer.avatarUrl} size="lg" />
+                    <Avatar
+                      name={activeConv.customer.name}
+                      src={activeConv.customer.avatarUrl}
+                      phone={activeConv.customer.phone}
+                      handle={activeConv.customer.handle}
+                      email={activeConv.customer.email}
+                      size="lg"
+                    />
                     <div className="min-w-0">
                       {/* The name truncates first; badges never wrap, so the header keeps one line */}
                       <div className="flex items-center gap-2 min-w-0">
@@ -1940,6 +2014,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                     isLoadingOlder={isLoadingOlder}
                     onLoadOlder={handleLoadOlder}
                     shouldScrollToNewItem={isOwnNewMessage}
+                    scrollRequest={scrollRequest}
                     header={
                       <div className="space-y-3 pb-3">
                         {isLoadingOlder ? (
