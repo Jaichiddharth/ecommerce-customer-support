@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { X, Save, Trash2 } from 'lucide-react';
 import type { AutomationNodeData } from './flow-types';
-import { SendWhatsAppFlowFields, WaitForFlowSubmissionFields } from './whatsapp/AutomationFlowFields';
+import { SendWhatsAppFlowFields } from './whatsapp/AutomationFlowFields';
 import { nodeConfigIssues } from '@/lib/automation/validate';
 
 interface ConfigPanelProps {
@@ -15,9 +15,7 @@ interface ConfigPanelProps {
 }
 
 /** Values the form shows before the user touches them, so saving untouched stores what was shown. */
-const FIELD_DEFAULTS: Record<string, Record<string, unknown>> = {
-  flow_delay: { delayAmount: 5, delayUnit: 'minutes' },
-};
+const FIELD_DEFAULTS: Record<string, Record<string, unknown>> = {};
 
 export function ConfigPanel({ nodeId, data, onUpdate, onClose, onDelete }: ConfigPanelProps) {
   const [local, setLocal] = useState<Record<string, unknown>>(() => {
@@ -258,38 +256,8 @@ function TypeFields({
         </>
       );
 
-    case 'flow_delay':
-      return (
-        <div className="flex gap-2">
-          <Field label="Duration">
-            <input
-              type="number"
-              min={1}
-              value={Number(local.delayAmount ?? 5)}
-              onChange={(e) => set('delayAmount', Number(e.target.value))}
-              className={inputCls}
-            />
-          </Field>
-          <Field label="Unit">
-            <select
-              value={String(local.delayUnit ?? 'minutes')}
-              onChange={(e) => set('delayUnit', e.target.value)}
-              className={inputCls}
-            >
-              <option value="seconds">Seconds</option>
-              <option value="minutes">Minutes</option>
-              <option value="hours">Hours</option>
-              <option value="days">Days</option>
-            </select>
-          </Field>
-        </div>
-      );
-
     case 'action_send_whatsapp_flow':
       return <SendWhatsAppFlowFields local={local} set={set} inputCls={inputCls} Field={Field} />;
-
-    case 'flow_wait_flow_submission':
-      return <WaitForFlowSubmissionFields local={local} set={set} inputCls={inputCls} Field={Field} />;
 
     default:
       return (

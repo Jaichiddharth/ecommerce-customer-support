@@ -45,10 +45,7 @@ export interface ActionNodeData extends BaseNodeData {
 }
 
 export interface FlowControlNodeData extends BaseNodeData {
-  controlType?: 'delay' | 'branch' | 'end';
-  delayAmount?: number;
-  delayUnit?: 'seconds' | 'minutes' | 'hours' | 'days';
-  branches?: string[];
+  controlType?: 'end';
 }
 
 export type AutomationNodeData =

@@ -41,7 +41,6 @@ const log = createLogger("Automation");
 
 const MAX_STEPS_PER_TICK = 50;
 const MAX_LOG = 40;
-const DEFAULT_FLOW_WAIT_HOURS = 24;
 
 /** Lease of a running run; renewed while a long pass is still executing. */
 const LEASE_MS = 10 * 60_000;
@@ -64,7 +63,6 @@ const REPLAY_AFTER_MS = 2 * 60_000;
 const REPLAY_MAX_AGE_MS = 60 * 60_000;
 
 export const SEND_FLOW_NODE = "action_send_whatsapp_flow";
-export const WAIT_FLOW_NODE = "flow_wait_flow_submission";
 
 type StepResult =
   | { kind: "next"; handle?: string } // follow the outgoing edge (optionally a specific handle)
@@ -548,9 +546,6 @@ export class AutomationEngine {
       case "trigger_incoming_message":
       case "trigger_keyword":
       case "trigger_conversation_event":
-      case "flow_branch": // single-path runtime: follows the first branch
-        return { kind: "next" };
-
       case "condition_if_else": {
         const ok = compare(attributeValue(String(d.attribute ?? ""), x), String(d.operator ?? ""), String(d.value ?? ""));
         return { kind: "next", handle: ok ? "true" : "false" };
@@ -644,37 +639,6 @@ export class AutomationEngine {
         );
         x.run.context = { ...x.run.context, lastFlowExecutionId: execution.id };
         return { kind: "next" };
-      }
-
-      case WAIT_FLOW_NODE: {
-        const executionId = x.run.context.lastFlowExecutionId;
-        if (!executionId) throw new Error("Wait for Flow Submission needs a Send WhatsApp Flow step before it.");
-        // The customer may have answered before the run reached this node
-        const existing = await whatsappFlowRepository.findSubmissionByExecution(executionId);
-        if (existing) {
-          x.run.context = { ...x.run.context, flow: existing.response };
-          return { kind: "next" };
-        }
-        const execution = await whatsappFlowRepository.findExecution(executionId, x.run.organizationId);
-        if (execution?.status === WaFlowExecutionStatus.FAILED) throw new Error("The Flow could not be sent.");
-        const hours = Math.max(Number(d.timeoutHours) || DEFAULT_FLOW_WAIT_HOURS, 1);
-        return {
-          kind: "wait",
-          run: {
-            waitingFor: { kind: "flow_submission", executionId, nodeId: node.id },
-            wakeAt: new Date(Date.now() + hours * 60 * 60 * 1000),
-          },
-        };
-      }
-
-      case "flow_delay": {
-        const amount = Math.max(Number(d.delayAmount) || 0, 0);
-        const unitMs = { seconds: 1e3, minutes: 6e4, hours: 36e5, days: 864e5 }[String(d.delayUnit ?? "minutes")] ?? 6e4;
-        if (!amount) return { kind: "next" };
-        return {
-          kind: "wait",
-          run: { waitingFor: { kind: "delay", nodeId: node.id }, wakeAt: new Date(Date.now() + amount * unitMs) },
-        };
       }
 
       case "flow_end":
