@@ -5,6 +5,7 @@ import { readJson } from "@/lib/api/handler";
 import { publish } from "@/lib/realtime";
 
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
+  assertRole(req.user.role, ["OWNER", "ADMIN"]);
   assertPagePermission(req.user, 'settings', 'read');
 
   const orgId = req.user.organizationId;
@@ -29,10 +30,17 @@ export const PATCH = withAuth(async (req: AuthenticatedRequest) => {
   assertPagePermission(req.user, 'settings', 'update');
 
   const orgId = req.user.organizationId;
+  const isOwner = req.user.role.toUpperCase() === "OWNER";
   const body = (await readJson(req)) ?? {};
   const { permissions, reset } = body;
 
   if (reset === true || permissions === null) {
+    if (!isOwner) {
+      return NextResponse.json(
+        { success: false, message: "Only the Workspace Owner can reset role permissions to defaults" },
+        { status: 403 }
+      );
+    }
     await organizationRepository.updatePermissions(orgId, null as any);
     publish(orgId, { type: "permissions.updated" });
     return NextResponse.json({
@@ -46,10 +54,19 @@ export const PATCH = withAuth(async (req: AuthenticatedRequest) => {
     return NextResponse.json({ success: false, message: "Invalid permissions object" }, { status: 400 });
   }
 
+  const org = await organizationRepository.findById(orgId);
+  const storedPermissions = (org?.rolePermissions as Record<string, Record<string, boolean>>) || {};
+
+  // If actor is not Owner, keep current ADMIN role permissions intact (Admins cannot change Admin role permissions)
+  const adminPermissionsToUse = isOwner
+    ? (permissions.ADMIN || storedPermissions.ADMIN || DEFAULT_ROLE_PERMISSIONS.ADMIN)
+    : (storedPermissions.ADMIN || DEFAULT_ROLE_PERMISSIONS.ADMIN);
+
   // Ensure OWNER always stays 100% true
   const sanitized = {
     ...permissions,
     OWNER: DEFAULT_ROLE_PERMISSIONS.OWNER,
+    ADMIN: adminPermissionsToUse,
   };
 
   await organizationRepository.updatePermissions(orgId, sanitized);

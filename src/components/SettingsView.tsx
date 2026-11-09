@@ -39,6 +39,7 @@ import { Channel, STATUS_META, fmtDate, needsReconnect, useDisconnectChannel } f
 import { WhatsAppNumberSection } from './settings/WhatsAppNumberSection';
 import { TeamRolesSection } from './settings/TeamRolesSection';
 import { ConsentPrivacySection } from './settings/ConsentPrivacySection';
+import { RoutingHoursSection } from './settings/RoutingHoursSection';
 
 interface DetailField {
   icon: React.ReactNode;
@@ -394,7 +395,7 @@ const SECTIONS: { key: Section; label: string; subtitle: string; icon: LucideIco
   { key: 'channels', label: 'Channels', subtitle: 'Connect the messaging accounts your team replies from and manage the ones already connected', icon: Layers },
   { key: 'whatsapp', label: 'WhatsApp number', subtitle: 'Your connected number, its health at Meta and the business profile customers see', icon: Phone },
   { key: 'team', label: 'Team & roles', subtitle: 'Invite teammates, assign roles and control who can reply.', icon: Users },
-  { key: 'routing', label: 'Routing & hours', subtitle: 'Assign conversations automatically and set business hours and away messages.', icon: Route, soon: true },
+  { key: 'routing', label: 'Routing & hours', subtitle: 'Assign conversations automatically and set business hours and away messages.', icon: Route },
   { key: 'consent', label: 'Consent & privacy', subtitle: 'Opt-out keywords, confirmation messages and data retention.', icon: ShieldCheck },
   { key: 'languages', label: 'Languages', subtitle: 'The languages your AI agent and templates reply in.', icon: Languages, soon: true },
   { key: 'billing', label: 'Billing & usage', subtitle: 'Your plan, seats, AI resolutions and invoices.', icon: CreditCard, soon: true },
@@ -444,11 +445,33 @@ function useSettingsTopBar() {
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }) => {
-  const { hasPermission, can } = useAuth();
+  const { hasPermission, can, dbUser } = useAuth();
   const canManageBilling = hasPermission('manage_billing_and_integrations');
   const canReadSettings = can('settings', 'read');
+
+  // Agent and Viewer roles cannot access Team & roles
+  const userRole = (dbUser?.role || '').toUpperCase();
+  const isAgentOrViewer = userRole === 'AGENT' || userRole === 'VIEWER';
+
+  const visibleSections = React.useMemo(() => {
+    return SECTIONS.filter((s) => {
+      if (s.key === 'team' && isAgentOrViewer) {
+        return false;
+      }
+      return true;
+    });
+  }, [isAgentOrViewer]);
+
   const [activeSection, setActiveSection] = useState<Section>('whatsapp');
-  const active = SECTIONS.find((s) => s.key === activeSection)!;
+
+  // If role is Agent or Viewer and active section was team, fallback to whatsapp
+  useEffect(() => {
+    if (isAgentOrViewer && activeSection === 'team') {
+      setActiveSection('whatsapp');
+    }
+  }, [isAgentOrViewer, activeSection]);
+
+  const active = visibleSections.find((s) => s.key === activeSection) || visibleSections[0] || SECTIONS[0];
   const topBar = useSettingsTopBar();
 
   if (!canReadSettings) {
@@ -497,7 +520,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
         <aside className="w-[220px] shrink-0 border-r border-slate-200 bg-white flex flex-col pt-6">
           <p className="px-5 mb-3 text-[11px] font-bold text-slate-400 uppercase tracking-widest">Settings</p>
           <nav className="px-3 space-y-0.5">
-            {SECTIONS.map(({ key, label, soon }) => {
+            {visibleSections.map(({ key, label, soon }) => {
               const isActive = activeSection === key;
               const isRestricted = key === 'billing' && !canManageBilling;
               return (
@@ -546,11 +569,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
                 </>
               )}
               {activeSection === 'whatsapp' && <WhatsAppNumberSection onOpenChannels={() => setActiveSection('channels')} />}
-              {activeSection === 'team' && <TeamRolesSection />}
+              {activeSection === 'team' && !isAgentOrViewer && <TeamRolesSection />}
+              {activeSection === 'routing' && <RoutingHoursSection />}
+              {activeSection === 'consent' && <ConsentPrivacySection />}
             </>
           )}
-          {activeSection === 'whatsapp' && <WhatsAppNumberSection onOpenChannels={() => setActiveSection('channels')} />}
-          {activeSection === 'consent' && <ConsentPrivacySection />}
         </main>
       </div>
     </div>
