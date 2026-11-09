@@ -1,290 +1,220 @@
 'use client';
 
 import React, { memo } from 'react';
-import { Handle, Position, NodeProps, useReactFlow } from '@xyflow/react';
-import {
-  MessageCircle, Hash, Bell, GitBranch, Search, UserCheck,
-  Send, FileText, UserPlus, PenLine, StopCircle,
-  Settings2, Trash2, MessageSquareText, AlertTriangle,
-} from 'lucide-react';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { AlertTriangle, Pencil, Plus, Square, Trash2 } from 'lucide-react';
 import type { AutomationNodeData } from './flow-types';
+import { PALETTE_ITEMS, themeOf } from './palette-config';
+import { NodeTypeIcon } from './node-icons';
+import { nodeSummary } from './node-options';
+import { END_SIZE, NODE_HEIGHT, NODE_WIDTH, sourceHandlesOf, type BranchHandle } from './graph-ops';
+import { useBuilder } from './builder-context';
+import { nodeConfigIssues } from '@/lib/automation/validate';
 
-// ─── Icon resolver ────────────────────────────────────────────────────────────
-
-const TYPE_ICON: Record<string, React.FC<{ className?: string }>> = {
-  trigger_incoming_message: MessageCircle,
-  trigger_keyword: Hash,
-  trigger_conversation_event: Bell,
-  condition_if_else: GitBranch,
-  condition_keyword_match: Search,
-  condition_contact_attribute: UserCheck,
-  action_send_message: Send,
-  action_send_template: FileText,
-  action_assign_conversation: UserPlus,
-  action_update_contact: PenLine,
-  flow_end: StopCircle,
-  action_send_whatsapp_flow: MessageSquareText,
-};
-
-// ─── Node colour tokens ───────────────────────────────────────────────────────
-
-interface NodeTheme {
-  bg: string;
-  border: string;
-  icon: string;
-  badge: string;
-  badgeText: string;
-  categoryLabel: string;
+/** UI-only fields FlowView adds to each node's data before rendering (never saved). */
+export interface NodeUiData {
+  /** Issues to flag on the card (shown once the user has tried to save/activate). */
+  _issues?: string[];
+  /** The step open in the properties panel. */
+  _active?: boolean;
+  /** Outputs with nothing connected yet. */
+  _free?: (BranchHandle | null)[];
 }
 
-const NODE_THEMES: Record<string, NodeTheme> = {
-  trigger_incoming_message:   { bg: '#eff6ff', border: '#bfdbfe', icon: '#1d4ed8', badge: '#dbeafe', badgeText: '#1e40af', categoryLabel: 'Trigger' },
-  trigger_keyword:            { bg: '#eff6ff', border: '#bfdbfe', icon: '#1d4ed8', badge: '#dbeafe', badgeText: '#1e40af', categoryLabel: 'Trigger' },
-  trigger_conversation_event: { bg: '#eff6ff', border: '#bfdbfe', icon: '#1d4ed8', badge: '#dbeafe', badgeText: '#1e40af', categoryLabel: 'Trigger' },
-  condition_if_else:          { bg: '#fefce8', border: '#fde047', icon: '#a16207', badge: '#fef9c3', badgeText: '#92400e', categoryLabel: 'Condition' },
-  condition_keyword_match:    { bg: '#fefce8', border: '#fde047', icon: '#a16207', badge: '#fef9c3', badgeText: '#92400e', categoryLabel: 'Condition' },
-  condition_contact_attribute:{ bg: '#fefce8', border: '#fde047', icon: '#a16207', badge: '#fef9c3', badgeText: '#92400e', categoryLabel: 'Condition' },
-  action_send_message:        { bg: '#f0fdf4', border: '#86efac', icon: '#15803d', badge: '#dcfce7', badgeText: '#166534', categoryLabel: 'Action' },
-  action_send_template:       { bg: '#f0fdf4', border: '#86efac', icon: '#15803d', badge: '#dcfce7', badgeText: '#166534', categoryLabel: 'Action' },
-  action_assign_conversation: { bg: '#f0fdf4', border: '#86efac', icon: '#15803d', badge: '#dcfce7', badgeText: '#166534', categoryLabel: 'Action' },
-  action_update_contact:      { bg: '#f0fdf4', border: '#86efac', icon: '#15803d', badge: '#dcfce7', badgeText: '#166534', categoryLabel: 'Action' },
-  flow_end:                   { bg: '#fff1f2', border: '#fca5a5', icon: '#b91c1c', badge: '#fee2e2', badgeText: '#991b1b', categoryLabel: 'Flow Control' },
-  action_send_whatsapp_flow:  { bg: '#f0fdf4', border: '#86efac', icon: '#15803d', badge: '#dcfce7', badgeText: '#166534', categoryLabel: 'Action' },
+type Props = NodeProps & { data: AutomationNodeData & NodeUiData };
+
+export const BRANCH_META: Record<BranchHandle, { label: string; left: string; color: string; soft: string }> = {
+  true: { label: 'True', left: '30%', color: '#16a34a', soft: '#ecfdf3' },
+  false: { label: 'False', left: '70%', color: '#dc2626', soft: '#fef2f2' },
 };
 
-const DEFAULT_THEME: NodeTheme = {
-  bg: '#f8fafc', border: '#e2e8f0', icon: '#475569', badge: '#f1f5f9', badgeText: '#334155', categoryLabel: 'Node',
-};
+const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 
-// ─── Node action bar (delete + configure) ────────────────────────────────────
+function AddButton({ nodeId, handle, style }: { nodeId: string; handle: string | null; style: React.CSSProperties }) {
+  const { openPicker } = useBuilder();
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        stop(e);
+        openPicker({ kind: 'append', sourceId: nodeId, handle }, { x: e.clientX, y: e.clientY });
+      }}
+      onMouseDown={stop}
+      className="af-add nodrag nopan absolute -translate-x-1/2 w-5 h-5 rounded-full bg-white border border-slate-400 text-slate-600 flex items-center justify-center hover:border-[#3440a8] hover:text-white hover:bg-[#3440a8] transition-colors"
+      style={style}
+      title="Add a step here"
+      aria-label="Add a step here"
+    >
+      <Plus className="w-3 h-3" strokeWidth={2.5} />
+    </button>
+  );
+}
 
-function NodeActions({ nodeId, onConfigure }: { nodeId: string; onConfigure: () => void }) {
-  const { deleteElements } = useReactFlow();
-
-  const deleteNode = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    deleteElements({ nodes: [{ id: nodeId }] });
-  };
-
-  const configure = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onConfigure();
-  };
-
+/** Edit / delete, shown above the step on hover or while it's selected. */
+function NodeToolbar({ id, visible, compact }: { id: string; visible: boolean; compact?: boolean }) {
+  const { openNode, deleteNode } = useBuilder();
   return (
     <div
-      className="absolute -top-9 right-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10"
-      onClick={(e) => e.stopPropagation()}
+      className={`nodrag absolute -top-8 flex items-center gap-1 transition-opacity duration-150 ${
+        compact ? 'left-1/2 -translate-x-1/2' : 'right-0'
+      } ${visible ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+      onClick={stop}
     >
+      {!compact && (
+        <button
+          type="button"
+          onClick={(e) => { stop(e); openNode(id); }}
+          className="h-6 px-2 rounded-md bg-white border border-slate-200 flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-[#3440a8] hover:border-[#3440a8]/40 shadow-sm transition-colors"
+          title="Edit step"
+        >
+          <Pencil className="w-3 h-3" />
+          Edit
+        </button>
+      )}
       <button
-        onClick={configure}
-        className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-[#3440a8] hover:border-[#3440a8]/30 shadow-sm transition-colors"
-        title="Configure node"
+        type="button"
+        onClick={(e) => { stop(e); deleteNode(id); }}
+        className="w-6 h-6 rounded-md bg-white border border-slate-200 flex items-center justify-center text-slate-400 hover:text-red-600 hover:border-red-200 shadow-sm transition-colors"
+        title="Delete step"
+        aria-label="Delete step"
       >
-        <Settings2 className="w-3.5 h-3.5" />
-      </button>
-      <button
-        onClick={deleteNode}
-        className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-400 hover:text-red-500 hover:border-red-200 shadow-sm transition-colors"
-        title="Delete node"
-      >
-        <Trash2 className="w-3.5 h-3.5" />
+        <Trash2 className="w-3 h-3" />
       </button>
     </div>
   );
 }
 
-// ─── Generic node frame ───────────────────────────────────────────────────────
-
-interface GenericNodeProps extends NodeProps {
-  data: AutomationNodeData;
-  onConfigure?: (id: string) => void;
-}
-
-function GenericNode({ id, data, selected, onConfigure }: GenericNodeProps) {
-  const theme = NODE_THEMES[data.type] ?? DEFAULT_THEME;
-  const Icon = TYPE_ICON[data.type] ?? MessageCircle;
-  const issues = (data as { _issues?: string[] })._issues ?? [];
-  const borderColor = issues.length ? '#f87171' : selected ? theme.icon : theme.border;
-
+/** End of a path: a small stop marker, like a flowchart terminator. */
+function EndNode({ id, data, selected }: Props) {
+  const highlighted = selected || data._active;
+  const issues = data._issues ?? [];
   return (
-    <div
-      className="relative group"
-      style={{ minWidth: 220 }}
-    >
-      <NodeActions nodeId={id} onConfigure={() => onConfigure?.(id)} />
-
-      {/* Input handle – all nodes except triggers accept inputs */}
-      {!data.type.startsWith('trigger_') && (
-        <Handle
-          type="target"
-          position={Position.Top}
-          className="!w-3 !h-3 !rounded-full !border-2 !border-white"
-          style={{ backgroundColor: theme.icon, top: -6 }}
-        />
-      )}
-
-      {/* Node card */}
+    <div className="af-node group relative" style={{ width: END_SIZE, height: END_SIZE }} title={data.label || 'End'}>
+      <NodeToolbar id={id} visible={!!highlighted} compact />
+      <Handle type="target" position={Position.Top} className="af-handle af-handle-end" style={{ top: -4 }} />
       <div
-        className="rounded-2xl border-2 shadow-sm transition-all duration-150"
+        className="w-full h-full rounded-full flex items-center justify-center text-white transition-shadow"
         style={{
-          backgroundColor: theme.bg,
-          borderColor,
-          boxShadow: selected
-            ? `0 0 0 3px ${theme.icon}25, 0 4px 12px ${theme.icon}20`
-            : '0 2px 8px rgba(0,0,0,0.07)',
+          backgroundColor: issues.length ? '#dc2626' : '#be123c',
+          boxShadow: highlighted ? '0 0 0 3px #fff, 0 0 0 5px #3440a8' : '0 0 0 3px #fff, 0 1px 3px 3px rgba(15,23,42,0.12)',
         }}
       >
-        {/* Top bar */}
-        <div
-          className="px-3 py-2.5 flex items-center gap-2.5 border-b"
-          style={{ borderColor: theme.border }}
-        >
-          <div
-            className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
-            style={{ backgroundColor: theme.badge, color: theme.icon }}
-          >
-            <Icon className="w-4 h-4" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-[12px] font-bold text-slate-800 truncate leading-tight">{data.label}</p>
-            <span
-              className="inline-block text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full mt-0.5"
-              style={{ backgroundColor: theme.badge, color: theme.badgeText }}
-            >
-              {theme.categoryLabel}
-            </span>
-          </div>
-          {issues.length > 0 ? (
-            <span
-              className="flex items-center gap-0.5 text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 rounded-full px-1.5 py-0.5 shrink-0"
-              title={issues.join('\n')}
-            >
-              <AlertTriangle className="w-3 h-3" />
-              {issues.length}
-            </span>
-          ) : data.configured ? (
-            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" title="Configured" />
-          ) : null}
-        </div>
-
-        {/* Body preview */}
-        <NodeBody data={data} theme={theme} />
+        <Square className="w-3 h-3 fill-current" />
       </div>
-
-      {/* Output handle(s) */}
-      {data.type === 'condition_if_else' ? (
-        <>
-          <Handle
-            type="source"
-            position={Position.Bottom}
-            id="true"
-            style={{ left: '30%', backgroundColor: '#16a34a', bottom: -6 }}
-            className="!w-3 !h-3 !rounded-full !border-2 !border-white"
-          />
-          <Handle
-            type="source"
-            position={Position.Bottom}
-            id="false"
-            style={{ left: '70%', backgroundColor: '#dc2626', bottom: -6 }}
-            className="!w-3 !h-3 !rounded-full !border-2 !border-white"
-          />
-          {/* Labels */}
-          <div className="absolute -bottom-6 left-0 right-0 flex justify-around pointer-events-none select-none">
-            <span className="text-[9px] font-bold text-emerald-600">TRUE</span>
-            <span className="text-[9px] font-bold text-red-500">FALSE</span>
-          </div>
-        </>
-      ) : data.type !== 'flow_end' ? (
-        <Handle
-          type="source"
-          position={Position.Bottom}
-          style={{ backgroundColor: theme.icon, bottom: -6 }}
-          className="!w-3 !h-3 !rounded-full !border-2 !border-white"
-        />
-      ) : null}
+      <span className="absolute left-full top-1/2 -translate-y-1/2 ml-2 text-[10.5px] font-medium text-slate-400 whitespace-nowrap select-none pointer-events-none">
+        End
+      </span>
     </div>
   );
 }
 
-// ─── Node body content ────────────────────────────────────────────────────────
+function StepNode({ id, data, selected }: Props) {
+  const theme = themeOf(data.type);
+  const issues = data._issues ?? [];
+  const needsSetup = nodeConfigIssues(data.type, data).length > 0;
+  const summary = nodeSummary(data);
+  const isTrigger = data.type.startsWith('trigger_');
+  const handles = sourceHandlesOf(data.type);
+  const free = new Set(data._free ?? []);
+  const highlighted = selected || data._active;
+  const hasError = issues.length > 0;
 
-function NodeBody({ data, theme }: { data: AutomationNodeData; theme: NodeTheme }) {
-  const previewText = getPreviewText(data);
+  const borderColor = hasError ? '#f87171' : highlighted ? '#3440a8' : '#d5dae3';
+  const shadow = hasError
+    ? '0 0 0 3px rgba(248,113,113,0.18)'
+    : highlighted
+      ? '0 0 0 3px rgba(52,64,168,0.16), 0 6px 16px -6px rgba(15,23,42,0.2)'
+      : undefined;
 
   return (
-    <div className="px-3 py-2.5">
-      {previewText ? (
-        <p
-          className="text-[11px] leading-relaxed line-clamp-2"
-          style={{ color: theme.badgeText }}
+    <div className="af-node group relative" style={{ width: NODE_WIDTH }}>
+      <NodeToolbar id={id} visible={!!highlighted} />
+
+      {!isTrigger && <Handle type="target" position={Position.Top} className="af-handle" style={{ top: -4 }} />}
+
+      <div
+        className="flex items-center gap-2.5 px-2.5 rounded-lg bg-white border transition-[box-shadow,border-color] duration-150 shadow-[0_1px_2px_rgba(15,23,42,0.08)] group-hover:shadow-[0_4px_12px_-4px_rgba(15,23,42,0.22)]"
+        style={{ height: NODE_HEIGHT, borderColor, boxShadow: shadow }}
+      >
+        <div
+          className={`w-8 h-8 flex items-center justify-center shrink-0 text-white ${isTrigger ? 'rounded-full' : 'rounded-lg'}`}
+          style={{ backgroundColor: theme.accent }}
+          title={theme.singular}
         >
-          {previewText}
-        </p>
-      ) : (
-        <p className="text-[11px] text-slate-400 italic">Click configure to set up this node…</p>
-      )}
+          <NodeTypeIcon type={data.type} className="w-4 h-4" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-[12.5px] font-semibold text-slate-800 truncate leading-tight" title={data.label}>
+            {data.label || 'Untitled step'}
+          </p>
+          {hasError ? (
+            <p className="text-[11px] text-red-600 truncate leading-tight mt-0.5" title={issues.join('\n')}>
+              {issues[0]}
+            </p>
+          ) : needsSetup ? (
+            <p className="text-[11px] text-amber-700 truncate leading-tight mt-0.5">Needs setup · click to configure</p>
+          ) : (
+            <p className="text-[11px] text-slate-500 truncate leading-tight mt-0.5" title={summary}>
+              {isTrigger ? `Start · ${summary}` : summary || theme.singular}
+            </p>
+          )}
+        </div>
+        {hasError && (
+          <span
+            className="inline-flex items-center gap-0.5 text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 rounded-full px-1.5 py-px shrink-0"
+            title={issues.join('\n')}
+          >
+            <AlertTriangle className="w-3 h-3" />
+            {issues.length}
+          </span>
+        )}
+        {!hasError && needsSetup && <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" title="Needs setup" />}
+      </div>
+
+      {/* Outputs. Connected True/False paths are labelled on their connector; free ones here. */}
+      {handles.map((h) => {
+        if (h === null) {
+          return (
+            <React.Fragment key="out">
+              <Handle type="source" position={Position.Bottom} className="af-handle" style={{ bottom: -4 }} />
+              {free.has(null) && <AddButton nodeId={id} handle={null} style={{ left: '50%', top: 'calc(100% + 18px)' }} />}
+            </React.Fragment>
+          );
+        }
+        const b = BRANCH_META[h];
+        return (
+          <React.Fragment key={h}>
+            <Handle
+              type="source"
+              id={h}
+              position={Position.Bottom}
+              className="af-handle"
+              style={{ left: b.left, bottom: -4, backgroundColor: b.color }}
+            />
+            {free.has(h) && (
+              <>
+                <span
+                  className="absolute -translate-x-1/2 text-[10px] font-semibold px-2 py-px rounded border bg-white pointer-events-none select-none"
+                  style={{ left: b.left, top: 'calc(100% + 12px)', color: b.color, borderColor: `${b.color}55` }}
+                >
+                  {b.label}
+                </span>
+                <AddButton nodeId={id} handle={h} style={{ left: b.left, top: 'calc(100% + 38px)' }} />
+              </>
+            )}
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 }
 
-function getPreviewText(data: AutomationNodeData): string {
-  const d = data as Record<string, unknown>;
-  switch (data.type) {
-    case 'trigger_keyword':
-      return d.keywords ? `Keywords: ${(d.keywords as string[]).join(', ')}` : '';
-    case 'trigger_conversation_event':
-      return d.event ? `Event: ${d.event}` : '';
-    case 'condition_if_else':
-      return d.attribute && d.operator && d.value
-        ? `${d.attribute} ${d.operator} "${d.value}"`
-        : '';
-    case 'condition_keyword_match':
-      return d.keywords ? `Match: ${(d.keywords as string[]).join(', ')}` : '';
-    case 'condition_contact_attribute':
-      return d.attribute ? `Check: ${d.attribute}` : '';
-    case 'action_send_message':
-      return d.messageContent ? String(d.messageContent).slice(0, 60) : '';
-    case 'action_send_template':
-      return d.templateId ? `Template: ${d.templateId}` : '';
-    case 'action_assign_conversation':
-      return d.assignTo ? `Assign to: ${d.assignTo}` : '';
-    case 'action_update_contact':
-      return d.updateField ? `Set ${d.updateField} = ${d.updateValue || '…'}` : '';
-    case 'flow_end':
-      return 'End of workflow';
-    case 'action_send_whatsapp_flow':
-      return d.flowName
-        ? `${d.flowName}${d.sendMethod === 'interactive' ? ' · interactive' : d.templateName ? ` · ${d.templateName}` : ''}`
-        : '';
-    default:
-      return '';
-  }
+function AutomationNodeView(props: Props) {
+  return props.data.type === 'flow_end' ? <EndNode {...props} /> : <StepNode {...props} />;
 }
 
-// ─── Memoised exports keyed by node type ─────────────────────────────────────
-
-// We export a nodeTypes map for React Flow.
-// All node types share GenericNode; we pass the onConfigure callback via data.
-
-type NodePropsWithConfigure = NodeProps & { data: AutomationNodeData & { _onConfigure?: (id: string) => void } };
-
-const MemoNode = memo((props: NodePropsWithConfigure) => (
-  <GenericNode {...props} onConfigure={props.data._onConfigure} />
-));
+const MemoNode = memo(AutomationNodeView);
 MemoNode.displayName = 'AutomationNode';
 
-export const NODE_TYPES = {
-  trigger_incoming_message:    MemoNode,
-  trigger_keyword:             MemoNode,
-  trigger_conversation_event:  MemoNode,
-  condition_if_else:           MemoNode,
-  condition_keyword_match:     MemoNode,
-  condition_contact_attribute: MemoNode,
-  action_send_message:         MemoNode,
-  action_send_template:        MemoNode,
-  action_assign_conversation:  MemoNode,
-  action_update_contact:       MemoNode,
-  flow_end:                    MemoNode,
-  action_send_whatsapp_flow:   MemoNode,
-} as const;
+/** React Flow node types: every step type renders with the same component. */
+export const NODE_TYPES = Object.fromEntries(PALETTE_ITEMS.map((i) => [i.type, MemoNode]));

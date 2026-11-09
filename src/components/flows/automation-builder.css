@@ -1,0 +1,82 @@
+/* Automation Builder canvas polish (scoped to .af-canvas so other React Flow canvases are untouched). */
+
+.af-canvas .react-flow__pane {
+  cursor: default;
+}
+.af-canvas .react-flow__pane.dragging {
+  cursor: grabbing;
+}
+
+/* Nodes: React Flow's own wrapper should not draw anything; the card handles states */
+.af-canvas .react-flow__node {
+  border-radius: 12px;
+}
+.af-canvas .react-flow__node:focus-visible {
+  outline: 2px solid #3440a8;
+  outline-offset: 3px;
+}
+
+/* Connection handles */
+.af-canvas .af-handle {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  border: 2px solid #fff;
+  background: #94a3b8;
+  box-shadow: 0 0 0 1px #cbd5e1;
+  transition: scale 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+.af-canvas .af-node:hover .af-handle,
+.af-canvas .af-handle.connectingfrom {
+  scale: 1.25;
+}
+.af-canvas .af-handle:hover {
+  background: #3440a8;
+  box-shadow: 0 0 0 4px rgba(52, 64, 168, 0.18);
+}
+/* While dragging a new connection: valid targets light up */
+.af-canvas .react-flow__handle.connectionindicator.valid,
+.af-canvas .af-handle.valid {
+  background: #16a34a;
+  box-shadow: 0 0 0 5px rgba(22, 163, 74, 0.2);
+  scale: 1.4;
+}
+
+/* Edges */
+.af-canvas .react-flow__edge.selected .react-flow__edge-path {
+  filter: drop-shadow(0 0 3px rgba(52, 64, 168, 0.35));
+}
+.af-canvas .react-flow__connectionline path {
+  stroke: #3440a8;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+/* Hide the "+" buttons while a step is being dragged so they don't get in the way */
+.af-canvas.af-dragging .af-add {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Entrance animations */
+@keyframes af-pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.af-pop-in {
+  animation: af-pop-in 140ms ease-out;
+}
+@keyframes af-slide-in {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: none; }
+}
+.af-slide-in {
+  animation: af-slide-in 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .af-pop-in,
+  .af-slide-in {
+    animation: none;
+  }
+}
