@@ -330,8 +330,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
           {canManageBillingAndIntegrations && (
             <div className="px-3 py-2 shrink-0">
               <div className="p-3 rounded-xl bg-[#f4f6fa] border border-slate-100">
-                <div className="text-[12px] font-semibold text-slate-800 leading-tight">
-                  {planName} · {seatsLimit} seats
+                <div className="flex items-center justify-between gap-1 text-[12px] font-semibold text-slate-800 leading-tight">
+                  <span>{planName} · {seatsLimit} seats</span>
+                  {dbUser?.organizationTrial && (
+                    <span className="text-[10px] font-bold text-amber-700 bg-amber-100/80 px-1.5 py-0.5 rounded">
+                      {dbUser.organizationTrial.isExpired ? 'Expired' : `${dbUser.organizationTrial.daysLeft}d left`}
+                    </span>
+                  )}
                 </div>
                 <div className="text-[11px] text-slate-500 mt-1 leading-tight">
                   AI resolutions 214 / 300

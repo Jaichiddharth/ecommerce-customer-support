@@ -5,6 +5,7 @@ import { verifyFirebaseToken, hasPermission, UserRole, PermissionKey } from "@/l
 import { apiHandler } from "@/lib/api/handler";
 import { createLogger, setRequestContext } from "@/lib/logger";
 import { organizationRepository } from "@/lib/db/repositories/organization.repository";
+import { calculateWorkspaceTrial } from "@/lib/trial";
 
 const log = createLogger("auth.sync");
 
@@ -71,6 +72,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       organizationSlug: organization?.slug ?? null,
       organizationPlan: organization?.plan ?? null,
       organizationSeats: organization?.maxSeats ?? null,
+      organizationTrial: calculateWorkspaceTrial(organization),
       name: user.name,
       email: user.email,
       role: user.role,
