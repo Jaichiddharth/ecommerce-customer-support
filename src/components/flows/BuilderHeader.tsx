@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowLeft, Check, ChevronDown, Download, Loader2, MoreHorizontal, Pause, Play, Plus, Redo2,
+  AlertTriangle, ArrowLeft, Check, Download, Loader2, MoreHorizontal, Pause, Play, Redo2,
   RotateCcw, Save, Undo2, Upload,
 } from 'lucide-react';
 
@@ -23,7 +23,6 @@ interface Props {
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
-  onAddStep: (anchor: { x: number; y: number }) => void;
   onSave: () => void;
   onActivate: () => void;
   /** Why Activate is unavailable (unsaved, unsaved changes, issues); null when it can be used. */
@@ -33,8 +32,6 @@ interface Props {
   onExport: () => void;
   onImport: (file: File) => void;
   onDiscard: () => void;
-  layoutMode: 'auto' | 'free';
-  onLayoutModeChange: (mode: 'auto' | 'free') => void;
 }
 
 const iconBtn =
@@ -136,34 +133,11 @@ export function BuilderHeader(p: Props) {
 
       {/* Editing tools */}
       <div className="flex items-center gap-0.5">
-        <label className="relative hidden md:inline-flex items-center mr-1.5" title="Auto-Layout arranges steps for you; Free-Form lets you drag them anywhere">
-          <span className="sr-only">Canvas layout</span>
-          <select
-            value={p.layoutMode}
-            onChange={(e) => p.onLayoutModeChange(e.target.value as 'auto' | 'free')}
-            className="appearance-none h-8 pl-3 pr-8 rounded-lg border border-slate-300 bg-white text-[12px] font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#3440a8]/20 focus:border-[#3440a8]/50 cursor-pointer"
-          >
-            <option value="auto">Auto-Layout</option>
-            <option value="free">Free-Form</option>
-          </select>
-          <ChevronDown className="w-3.5 h-3.5 text-slate-500 absolute right-2.5 pointer-events-none" />
-        </label>
         <button type="button" className={iconBtn} onClick={p.onUndo} disabled={!p.canUndo} title="Undo (Ctrl+Z)" aria-label="Undo">
           <Undo2 className="w-4 h-4" />
         </button>
         <button type="button" className={iconBtn} onClick={p.onRedo} disabled={!p.canRedo} title="Redo (Ctrl+Shift+Z)" aria-label="Redo">
           <Redo2 className="w-4 h-4" />
-        </button>
-        <div className="w-px h-6 bg-slate-200 mx-1.5" />
-        <button
-          type="button"
-          onClick={(e) => {
-            const r = e.currentTarget.getBoundingClientRect();
-            p.onAddStep({ x: r.left - 14, y: r.bottom + 30 });
-          }}
-          className="hidden sm:inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[12px] font-semibold text-[#3440a8] hover:bg-[#3440a8]/[0.07] transition-colors"
-        >
-          <Plus className="w-4 h-4" /> Add step
         </button>
         {p.issueCount > 0 && (
           <button

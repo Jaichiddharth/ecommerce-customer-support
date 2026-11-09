@@ -32,7 +32,6 @@ import { CanvasControls } from './CanvasControls';
 import { DRAG_TYPE } from './NodeCatalogList';
 import { BuilderContext, type BuilderActions, type PickerRequest } from './builder-context';
 import { themeOf } from './palette-config';
-import { autoLayout } from './auto-layout';
 import {
   NODE_WIDTH, appendAfter, createNode, freeHandles, insertOnEdge, newEdgeId, styleEdge,
 } from './graph-ops';
@@ -54,10 +53,6 @@ const SERVER_ID_KEY = 'unocx_flow_automation_id';
 
 /** Undo steps kept in memory. */
 const HISTORY_LIMIT = 50;
-
-export type LayoutMode = 'auto' | 'free';
-/** This browser's preferred canvas mode (a viewing preference, not part of the automation). */
-const LAYOUT_KEY = 'unocx_automation_layout';
 
 /** Strips React Flow UI state (and the builder's `_` render fields) so only the graph the runtime needs is sent. */
 const toServerGraph = (nodes: Node[], edges: Edge[]) => ({
@@ -239,30 +234,14 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
   const [picker, setPicker] = useState<{ request: PickerRequest; anchor: { x: number; y: number } } | null>(null);
   const [dragging, setDragging] = useState(false);
 
-  const [layoutMode, setLayoutMode] = useState<LayoutMode>('auto');
-
-  // Restore this browser's canvas mode
-  useEffect(() => {
-    try {
-      if (localStorage.getItem(LAYOUT_KEY) === 'free') setLayoutMode('free');
-    } catch { /* storage unavailable: keep Auto-Layout */ }
-  }, []);
-
-  /**
-   * Nodes as shown and saved. Auto-Layout positions every step from its connections; Free-Form uses
-   * the positions the user dragged them to.
-   */
-  const displayNodes = useMemo(
-    () => (layoutMode === 'auto' ? autoLayout(nodes, edges) : nodes),
-    [layoutMode, nodes, edges],
-  );
-  const displayRef = useRef(displayNodes);
-  useEffect(() => { displayRef.current = displayNodes; }, [displayNodes]);
+  // The canvas is free-form: steps are shown and saved where the user placed them
+  const nodesRef = useRef(nodes);
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
 
   // ── Validation: checked live, enforced on Save / Activate ──────────────
   const clientIssues = useMemo(
-    () => validateAutomation({ name, nodes: displayNodes, edges }),
-    [name, displayNodes, edges],
+    () => validateAutomation({ name, nodes: nodes, edges }),
+    [name, nodes, edges],
   );
   /** Issues only the server can detect (Flow not published, template not approved), from the last attempt. */
   const [serverIssues, setServerIssues] = useState<AutomationIssue[]>([]);
@@ -302,7 +281,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
           ? {
               name: name.trim(),
               description: description.trim() || null,
-              graph: toServerGraph(displayNodes, edges),
+              graph: toServerGraph(nodes, edges),
               ...(mode === 'save' ? {} : { isActive: mode === 'activate' }),
             }
           : { isActive: false };
@@ -316,7 +295,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
         }
         setIsActive(!!saved?.isActive);
         if (saveGraph) {
-          lastSaved.current = { nodes: displayNodes, edges };
+          lastSaved.current = { nodes: nodes, edges };
           setIsDirty(false);
           setIssuesOpen(false);
         }
@@ -338,7 +317,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
         setSyncing(false);
       }
     },
-    [displayNodes, edges, serverId, name, description, onCreated, clientIssues.length, showIssues],
+    [nodes, edges, serverId, name, description, onCreated, clientIssues.length, showIssues],
   );
 
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -451,7 +430,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
   const ensureVisible = useCallback(
     (id: string) => {
       const rect = wrapperRef.current?.getBoundingClientRect();
-      const node = displayRef.current.find((n) => n.id === id);
+      const node = nodesRef.current.find((n) => n.id === id);
       if (!rect || !node) return;
       const tl = flowToScreenPosition(node.position);
       const br = flowToScreenPosition({ x: node.position.x + NODE_WIDTH, y: node.position.y + 120 });
@@ -467,7 +446,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
     (node: Node) => {
       const data = node.data as AutomationNodeData;
       setSelectedNodeId(nodeConfigIssues(data.type, data).length ? node.id : null);
-      // After the next render, when Auto-Layout has placed it
+      // After the next render, when the step is on the canvas
       setTimeout(() => ensureVisible(node.id), 60);
     },
     [ensureVisible],
@@ -621,14 +600,14 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
 
   // ── Import / export ────────────────────────────────────────────────────
   const onExport = useCallback(() => {
-    const blob = new Blob([JSON.stringify(toServerGraph(displayNodes, edges), null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(toServerGraph(nodes, edges), null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${name.trim().replace(/[^\w-]+/g, '-').toLowerCase() || 'automation'}.json`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [displayNodes, edges, name]);
+  }, [nodes, edges, name]);
 
   const onImport = useCallback(
     (file: File) => {
@@ -695,7 +674,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
 
   const enrichedNodes = useMemo(
     () =>
-      displayNodes.map((n) => ({
+      nodes.map((n) => ({
         ...n,
         data: {
           ...n.data,
@@ -704,7 +683,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
           _free: freeHandles(n, edges),
         },
       })),
-    [displayNodes, edges, issuesByNode, selectedNodeId],
+    [nodes, edges, issuesByNode, selectedNodeId],
   );
 
   const actions = useMemo<BuilderActions>(
@@ -719,33 +698,11 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
 
-  const changeLayoutMode = useCallback(
-    (mode: LayoutMode) => {
-      if (mode === layoutMode) return;
-      // Free-Form starts from the tidy layout, so nothing jumps
-      if (mode === 'free') setNodes(displayRef.current);
-      setLayoutMode(mode);
-      try { localStorage.setItem(LAYOUT_KEY, mode); } catch { /* ignore */ }
-      setTimeout(() => fitView({ padding: 0.25, maxZoom: 1, duration: 300 }), 60);
-    },
-    [layoutMode, setNodes, fitView],
-  );
-
-  /**
-   * Steps can always be dragged. Dragging one while Auto-Layout is on switches to Free-Form, starting
-   * from the current arrangement (the commit is queued before React Flow's drag updates, so nothing jumps).
-   */
+  /** Steps can be dragged anywhere on the canvas; each drag is one undo step. */
   const onNodeDragStart = useCallback(() => {
     snapshot();
     setDragging(true);
-    if (layoutMode !== 'auto') return;
-    setNodes(displayRef.current);
-    setLayoutMode('free');
-    try { localStorage.setItem(LAYOUT_KEY, 'free'); } catch { /* ignore */ }
-    gooeyToast.info('Switched to Free-Form', {
-      description: 'Drag steps anywhere. Choose Auto-Layout in the toolbar to tidy up again.',
-    });
-  }, [snapshot, layoutMode, setNodes]);
+  }, [snapshot]);
 
   return (
     <BuilderContext.Provider value={actions}>
@@ -766,7 +723,6 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
           canRedo={history.future.length > 0}
           onUndo={undo}
           onRedo={redo}
-          onAddStep={(anchor) => setPicker({ request: { kind: 'free' }, anchor })}
           onSave={onSave}
           onActivate={onActivate}
           activateBlockedReason={activateBlockedReason}
@@ -775,8 +731,6 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
           onExport={onExport}
           onImport={onImport}
           onDiscard={onDiscard}
-          layoutMode={layoutMode}
-          onLayoutModeChange={changeLayoutMode}
         />
 
         <div className="flex-1 flex overflow-hidden relative">
@@ -825,7 +779,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
               deleteKeyCode={['Delete', 'Backspace']}
               multiSelectionKeyCode="Shift"
               connectionRadius={40}
-              snapToGrid={layoutMode === 'free'}
+              snapToGrid
               snapGrid={[16, 16]}
               proOptions={{ hideAttribution: true }}
             >
