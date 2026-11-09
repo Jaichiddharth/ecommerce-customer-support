@@ -30,6 +30,7 @@ import {
   Store,
   Globe,
   Users,
+  Clock,
 } from 'lucide-react';
 import { gooeyToast } from 'goey-toast';
 import axios from 'axios';
@@ -49,6 +50,15 @@ interface InvitationData {
   inviterEmail: string | null;
   expiresAt: string;
   accountExists: boolean;
+  trial?: {
+    isTrial: boolean;
+    totalDays: number;
+    daysLeft: number;
+    currentDay: number;
+    isExpired: boolean;
+    trialEndsAt: string;
+    formattedExpiresAt: string;
+  } | null;
 }
 
 export default function AcceptInvitePage({ params }: { params: Promise<{ token: string }> }) {
@@ -570,6 +580,23 @@ export default function AcceptInvitePage({ params }: { params: Promise<{ token: 
             </p>
 
             {/* Scope / permissions breakdown card */}
+            {invitation.trial && (
+              <div className="p-3 bg-white/10 backdrop-blur-xs border border-white/15 rounded-xl flex items-center justify-between text-xs text-indigo-100">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-amber-300 shrink-0" />
+                  <div>
+                    <span className="font-semibold block text-white">Workspace 7-Day Trial</span>
+                    <span className="text-[11px] text-indigo-200">
+                      Shared with workspace · {invitation.trial.isExpired ? 'Expired' : `Day ${invitation.trial.currentDay} of ${invitation.trial.totalDays}`}
+                    </span>
+                  </div>
+                </div>
+                <span className="px-2.5 py-1 bg-amber-400/20 text-amber-200 rounded-lg font-bold text-xs">
+                  {invitation.trial.isExpired ? 'Expired' : `${invitation.trial.daysLeft}d left`}
+                </span>
+              </div>
+            )}
+
             <div className="bg-white/10 backdrop-blur-xs rounded-2xl p-5 border border-white/10 space-y-3.5 mt-6 text-xs text-indigo-50">
               <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
                 <span className="text-indigo-200 font-medium">Assigned Role</span>
