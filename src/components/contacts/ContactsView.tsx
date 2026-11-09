@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, Download, Loader2, MessageSquare, Plus, Search, ShieldOff, Users, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Download, MessageSquare, Plus, ShieldOff, Users } from 'lucide-react';
 import { AddContactModal } from './AddContactModal';
 import { apiClient } from '@/lib/api/client';
-import { ErrorState, EmptyState } from '@/components/ui/states';
+import { EmptyState } from '@/components/ui/states';
+import { DataTable, createColumnHelper, useServerTable, type FilterDef } from '@/components/ui/data-table';
 import { ChannelIcon } from '@/components/inbox/ChannelIcon';
 import { ConsentBadge } from '@/components/inbox/ConsentStatus';
 import { formatHandle, formatPhone, getInitials } from '@/components/inbox/inbox-types';
@@ -14,7 +15,6 @@ import {
   CONTACTS_PAGE_SIZE,
   type ContactActivityWindow,
   type ContactChannelSummary,
-  type ContactConsentFilter,
   type ContactListItem,
   type ContactListResponse,
 } from '@/types/contacts';
@@ -24,11 +24,6 @@ const ACTIVITY_LABELS: Record<ContactActivityWindow, string> = {
   7: '7 days',
   30: '30 days',
   90: '90 days',
-};
-
-const CONSENT_LABELS: Record<ContactConsentFilter, string> = {
-  any: 'Any',
-  opted_out: 'Opted-out',
 };
 
 /** Consent (STOP / START) is tracked for WhatsApp numbers only */
@@ -55,6 +50,9 @@ const formatLastActive = (iso: string | null) => {
   return then.toLocaleDateString([], { day: 'numeric', month: 'short', year: days > 300 ? 'numeric' : undefined });
 };
 
+const formatAdded = (iso: string) =>
+  new Date(iso).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+
 const nf = new Intl.NumberFormat('en-IN');
 
 /** Quotes a CSV field and stops spreadsheets from running it as a formula */
@@ -78,7 +76,7 @@ const csvDate = (iso: string | null) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-/** Same columns as the table: name, identity, opted out, last active */
+/** Name, identity, opted out, last active */
 const exportCsv = (rows: ContactListItem[]) => {
   const identityHeader = rows.every((c) => c.phone) ? 'Phone' : 'Phone / handle / email';
   const header = ['Name', identityHeader, 'Opted out', 'Last active'];
@@ -100,37 +98,22 @@ const exportCsv = (rows: ContactListItem[]) => {
   URL.revokeObjectURL(url);
 };
 
-/** A labelled native select styled like the filter pills */
-const FilterSelect = <T extends string | number>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: T;
-  options: Array<{ value: T; label: string }>;
-  onChange: (value: T) => void;
-}) => (
-  <label className="relative flex items-center">
-    <select
-      value={String(value)}
-      onChange={(e) => {
-        const picked = options.find((o) => String(o.value) === e.target.value);
-        if (picked) onChange(picked.value);
-      }}
-      aria-label={label}
-      className="appearance-none pl-3.5 pr-9 py-2.5 text-sm bg-white border border-slate-200 rounded-xl text-slate-700 cursor-pointer hover:bg-slate-50 focus:outline-none focus:border-[#3440a8]"
-    >
-      {options.map((o) => (
-        <option key={String(o.value)} value={String(o.value)}>
-          {label}: {o.label}
-        </option>
-      ))}
-    </select>
-    <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 pointer-events-none" />
-  </label>
-);
+const col = createColumnHelper<ContactListItem>();
+
+/** Shared-table filters; keys are the /api/contacts query params */
+const buildFilters = (contactCount: number): FilterDef[] => [
+  { type: 'search', key: 'q', placeholder: `Search ${nf.format(contactCount)} contacts` },
+  { type: 'select', key: 'consent', label: 'Consent', allLabel: 'Any', options: [{ value: 'opted_out', label: 'Opted out' }] },
+  {
+    type: 'select',
+    key: 'activeDays',
+    label: 'Last active',
+    allLabel: ACTIVITY_LABELS[0],
+    options: CONTACT_ACTIVITY_WINDOWS.filter((d) => d !== 0).map((d) => ({ value: String(d), label: ACTIVITY_LABELS[d] })),
+  },
+];
+
+const checkboxCls = 'w-4 h-4 accent-[#3440a8] cursor-pointer align-middle';
 
 interface ContactsViewProps {
   /** Opens the contact's chat in the inbox; only offered for contacts with a ticket */
@@ -140,80 +123,47 @@ interface ContactsViewProps {
 export const ContactsView: React.FC<ContactsViewProps> = ({ onOpenConversation }) => {
   // The channel the user picked; null until then, and the server lists the first channel
   const [channelId, setChannelId] = useState<number | null>(null);
-  const [consent, setConsent] = useState<ContactConsentFilter>('any');
-  const [activeDays, setActiveDays] = useState<ContactActivityWindow>(0);
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-
-  const [data, setData] = useState<ContactListResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<unknown>(null);
+  // From the latest response: every live channel with its counts, and the channel listed
+  const [channels, setChannels] = useState<ContactChannelSummary[]>([]);
+  const [listedChannelId, setListedChannelId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Map<number, ContactListItem>>(new Map());
   const [showAddContact, setShowAddContact] = useState(false);
-  const requestRef = useRef(0);
+  // The table ignores out-of-order responses; the channel summaries must follow the same response
+  const requestSeq = useRef(0);
 
-  // Search as you type, without a request per keystroke
-  useEffect(() => {
-    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
-    return () => clearTimeout(t);
-  }, [searchInput]);
+  const currentChannel = channels.find((c) => c.id === listedChannelId) ?? null;
 
-  // A new filter starts from the first page with nothing selected
-  useEffect(() => {
-    setPage(1);
-    setSelected(new Map());
-  }, [channelId, consent, activeDays, search]);
-
-  const fetchContacts = useCallback(
-    async ({ silent = false } = {}) => {
-      const requestId = ++requestRef.current;
-      if (!silent) setIsLoading(true);
-      try {
-        const res = await apiClient.get<ContactListResponse>('/api/contacts', {
-          params: {
-            channelId: channelId ?? undefined,
-            consent,
-            activeDays,
-            q: search || undefined,
-            page,
-            pageSize: CONTACTS_PAGE_SIZE,
-          },
-        });
-        if (requestId !== requestRef.current) return;
-        setData(res.data);
-        setLoadError(null);
+  const table = useServerTable<ContactListItem>({
+    filters: buildFilters(currentChannel?.total ?? 0),
+    defaultSort: { sortBy: 'lastActiveAt', sortOrder: 'desc' },
+    defaultLimit: CONTACTS_PAGE_SIZE,
+    baseParams: { channelId: channelId ?? undefined },
+    fetcher: async (query) => {
+      const seq = ++requestSeq.current;
+      const { data } = await apiClient.get<ContactListResponse>('/api/contacts', { params: query });
+      if (seq === requestSeq.current) {
+        setChannels(data.channels);
+        setListedChannelId(data.channelId);
         // The picked channel was disconnected: fall back to the first channel
-        if (channelId !== null && !res.data.channels.some((c) => c.id === channelId)) setChannelId(null);
-        // Past the last page (contacts left the filter since): go to the new last page
-        else if (page > 1 && res.data.contacts.length === 0 && res.data.total > 0) {
-          setPage(Math.ceil(res.data.total / CONTACTS_PAGE_SIZE));
-        }
-      } catch (err) {
-        if (requestId !== requestRef.current) return;
-        if (!silent) setLoadError(err);
-      } finally {
-        if (requestId === requestRef.current) setIsLoading(false);
+        if (channelId !== null && !data.channels.some((c) => c.id === channelId)) setChannelId(null);
       }
+      return { items: data.contacts, pagination: data.pagination };
     },
-    [channelId, consent, activeDays, search, page]
-  );
+  });
 
+  // A new channel or filter starts with nothing selected
+  const filterKey = JSON.stringify(table.filterValues);
   useEffect(() => {
-    fetchContacts();
-  }, [fetchContacts]);
+    setSelected(new Map());
+  }, [channelId, filterKey]);
 
   // A customer replied STOP / START (or a teammate changed it): refresh the statuses and counts
-  useRealtime({ onCustomerConsent: () => fetchContacts({ silent: true }) });
+  useRealtime({ onCustomerConsent: () => table.reload() });
 
-  const channels = data?.channels ?? [];
-  const contacts = data?.contacts ?? [];
-  const total = data?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(total / CONTACTS_PAGE_SIZE));
-  // The server lists the first channel until one is picked
-  const currentChannel = channels.find((c) => c.id === data?.channelId) ?? null;
+  const contacts = table.rows;
+  const loaded = table.pagination !== null;
   const optedOutCount = currentChannel?.optedOut ?? 0;
-  const isFiltered = consent !== 'any' || activeDays !== 0 || Boolean(search);
+  const showingOptedOut = table.filterValues.consent === 'opted_out';
 
   const pageAllSelected = contacts.length > 0 && contacts.every((c) => selected.has(c.id));
   const togglePage = () =>
@@ -230,8 +180,96 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ onOpenConversation }
       return next;
     });
 
-  const firstShown = total === 0 ? 0 : (page - 1) * CONTACTS_PAGE_SIZE + 1;
-  const lastShown = Math.min(total, page * CONTACTS_PAGE_SIZE);
+  const isOptedOut = (c: ContactListItem) => tracksConsent(c.channel.type) && c.isOptedOut;
+
+  const columns = [
+    col.display({
+      id: 'select',
+      header: () => (
+        <input
+          type="checkbox"
+          checked={pageAllSelected}
+          onChange={togglePage}
+          aria-label="Select all on this page"
+          className={checkboxCls}
+        />
+      ),
+      meta: { className: 'w-10', headerClassName: 'w-10' },
+      cell: ({ row: { original: c } }) => (
+        <span onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={selected.has(c.id)}
+            onChange={() => toggleOne(c)}
+            aria-label={`Select ${c.name}`}
+            className={checkboxCls}
+          />
+        </span>
+      ),
+    }),
+    col.accessor('name', {
+      header: 'Contact',
+      enableSorting: true,
+      cell: ({ row: { original: c } }) => (
+        <div className="flex items-center gap-2.5 min-w-0">
+          {c.avatarUrl ? (
+            <img src={c.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" />
+          ) : (
+            <span className="w-8 h-8 rounded-full bg-[#fde8ef] text-[#c0365f] text-[11px] font-semibold flex items-center justify-center shrink-0">
+              {getInitials(c.name)}
+            </span>
+          )}
+          <span className="font-semibold text-slate-800 truncate max-w-[220px]">{c.name}</span>
+        </div>
+      ),
+    }),
+    col.display({
+      id: 'identity',
+      header: 'Identity',
+      meta: { className: 'font-mono text-slate-700 whitespace-nowrap' },
+      cell: ({ row: { original: c } }) => identityOf(c),
+    }),
+    col.display({
+      id: 'consent',
+      header: 'Consent',
+      cell: ({ row: { original: c } }) => (isOptedOut(c) ? <ConsentBadge isOptedOut /> : null),
+    }),
+    col.accessor('lastActiveAt', {
+      header: 'Last active',
+      enableSorting: true,
+      sortDescFirst: true,
+      meta: { align: 'right', className: 'text-slate-600 whitespace-nowrap' },
+      cell: ({ getValue }) => {
+        const iso = getValue();
+        return <span title={iso ? new Date(iso).toLocaleString() : undefined}>{formatLastActive(iso)}</span>;
+      },
+    }),
+    col.accessor('createdAt', {
+      header: 'Added',
+      enableSorting: true,
+      sortDescFirst: true,
+      meta: { align: 'right', className: 'text-slate-500 whitespace-nowrap' },
+      cell: ({ getValue }) => formatAdded(getValue()),
+    }),
+    col.display({
+      id: 'chat',
+      header: () => <span className="sr-only">Chat</span>,
+      meta: { align: 'right', className: 'whitespace-nowrap' },
+      cell: ({ row: { original: c } }) => (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenConversation(c.id);
+          }}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-[11px] font-semibold text-[#3440a8] hover:bg-[#eef0fb] cursor-pointer"
+        >
+          <MessageSquare className="w-3.5 h-3.5" />
+          Open chat
+        </button>
+      ),
+    }),
+  ];
 
   return (
     <div className="h-full flex flex-col bg-slate-50">
@@ -240,7 +278,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ onOpenConversation }
         <button
           type="button"
           onClick={() => setShowAddContact(true)}
-          disabled={!data}
+          disabled={!loaded}
           className="px-4 py-2.5 text-sm font-semibold rounded-xl bg-[#3440a8] hover:bg-[#2b358d] text-white transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Plus className="w-4 h-4" />
@@ -256,14 +294,14 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ onOpenConversation }
         onAdded={(addedTo) => {
           // Show the number the contact was added to; the new contact (with its new conversation) lists at the top
           if (addedTo !== currentChannel?.id) setChannelId(addedTo);
-          else fetchContacts({ silent: true });
+          else table.reload();
         }}
       />
 
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-4 pt-6 pb-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-4 pt-6 pb-10 space-y-4">
           {/* ── Channel tabs ── */}
-          {data && channels.length > 0 && (
+          {channels.length > 0 && (
             <nav className="flex gap-2.5 overflow-x-auto pb-1" aria-label="Channels">
               {channels.map((ch) => {
                 const active = ch.id === currentChannel?.id;
@@ -273,8 +311,9 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ onOpenConversation }
                     type="button"
                     onClick={() => setChannelId(ch.id)}
                     aria-pressed={active}
-                    className={`shrink-0 min-w-[200px] text-left px-3.5 py-3 rounded-xl border transition-colors cursor-pointer ${active ? 'border-[#3440a8] bg-[#eef0fb]' : 'border-slate-200 bg-white hover:bg-slate-50'
-                      }`}
+                    className={`shrink-0 min-w-[200px] text-left px-3.5 py-3 rounded-xl border transition-colors cursor-pointer ${
+                      active ? 'border-[#3440a8] bg-[#eef0fb]' : 'border-slate-200 bg-white hover:bg-slate-50'
+                    }`}
                   >
                     <div className="flex items-center gap-2.5">
                       <ChannelIcon type={ch.type} size="md" />
@@ -299,8 +338,8 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ onOpenConversation }
           )}
 
           {/* ── Opted-out notice ── */}
-          {currentChannel && optedOutCount > 0 && consent !== 'opted_out' && (
-            <div className="mt-4 px-4 py-3 rounded-xl border border-red-200 bg-red-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          {currentChannel && optedOutCount > 0 && !showingOptedOut && (
+            <div className="px-4 py-3 rounded-xl border border-red-200 bg-red-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <p className="text-[13px] text-red-800 flex items-start gap-2">
                 <ShieldOff className="w-4 h-4 mt-0.5 shrink-0" />
                 <span>
@@ -311,7 +350,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ onOpenConversation }
               </p>
               <button
                 type="button"
-                onClick={() => setConsent('opted_out')}
+                onClick={() => table.setFilter('consent', 'opted_out')}
                 className="shrink-0 text-[13px] font-semibold text-red-700 hover:underline cursor-pointer text-left"
               >
                 Show opted-out
@@ -319,215 +358,54 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ onOpenConversation }
             </div>
           )}
 
-          {/* ── Filters ── */}
-          <div className="mt-4 flex flex-wrap items-center gap-2.5">
-            <div className="relative w-full sm:w-80">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                placeholder={`Search ${nf.format(currentChannel?.total ?? 0)} contacts`}
-                className="w-full pl-10 pr-9 py-2.5 text-sm bg-white border border-slate-200 rounded-xl text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#3440a8]"
-              />
-              {searchInput && (
-                <button
-                  type="button"
-                  onClick={() => setSearchInput('')}
-                  title="Clear search"
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-400 hover:text-slate-700 cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-            <FilterSelect
-              label="Consent"
-              value={consent}
-              onChange={setConsent}
-              options={(Object.keys(CONSENT_LABELS) as ContactConsentFilter[]).map((v) => ({ value: v, label: CONSENT_LABELS[v] }))}
-            />
-            <FilterSelect
-              label="Last active"
-              value={activeDays}
-              onChange={setActiveDays}
-              options={CONTACT_ACTIVITY_WINDOWS.map((v) => ({ value: v, label: ACTIVITY_LABELS[v] }))}
-            />
-            {isFiltered && (
-              <button
-                type="button"
-                onClick={() => {
-                  setConsent('any');
-                  setActiveDays(0);
-                  setSearchInput('');
-                }}
-                className="text-[13px] font-semibold text-[#3440a8] hover:underline cursor-pointer px-1"
-              >
-                Clear filters
-              </button>
-            )}
-          </div>
-
-          {/* ── Bulk actions ── */}
-          {selected.size > 0 && (
-            <div className="mt-4 px-4 py-2.5 rounded-xl bg-[#eef0fb] flex items-center gap-5 text-[13px]">
-              <span className="font-semibold text-[#3440a8]">{nf.format(selected.size)} selected</span>
-              <button
-                type="button"
-                onClick={() => exportCsv([...selected.values()])}
-                className="inline-flex items-center gap-1.5 font-semibold text-[#3440a8] hover:underline cursor-pointer"
-              >
-                <Download className="w-4 h-4" />
-                Export CSV
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelected(new Map())}
-                className="ml-auto text-slate-600 hover:text-slate-900 cursor-pointer"
-              >
-                Clear selection
-              </button>
-            </div>
-          )}
-
-          {/* ── Table ── */}
-          <div className="mt-4 bg-white rounded-xl border border-slate-200 overflow-hidden">
-            {loadError && !data ? (
-              <ErrorState error={loadError} title="Couldn't load contacts" onRetry={() => fetchContacts()} retrying={isLoading} />
-            ) : !data && isLoading ? (
-              <div className="py-20 flex items-center justify-center text-slate-400">
-                <Loader2 className="w-5 h-5 animate-spin" />
-              </div>
-            ) : contacts.length === 0 ? (
+          {/* ── Table (shared TanStack DataTable: filters, sorting and pagination run on the server) ── */}
+          <DataTable
+            {...table.tableProps}
+            columns={columns}
+            getRowId={(c) => c.id}
+            paginationPosition="bottom"
+            onRowClick={(c) => onOpenConversation(c.id)}
+            rowClassName={(c) =>
+              isOptedOut(c)
+                ? 'bg-red-50/40 hover:bg-red-50/70 shadow-[inset_3px_0_0_#f87171]'
+                : selected.has(c.id)
+                  ? 'bg-[#eef0fb]/60 hover:bg-[#eef0fb]'
+                  : 'hover:bg-slate-50/60'
+            }
+            errorTitle="Couldn't load contacts"
+            loadingLabel="Loading contacts…"
+            toolbar={
+              selected.size > 0 ? (
+                <div className="ml-auto flex items-center gap-4 h-[34px] px-3 rounded-lg bg-[#eef0fb] text-[12px]">
+                  <span className="font-semibold text-[#3440a8]">{nf.format(selected.size)} selected</span>
+                  <button
+                    type="button"
+                    onClick={() => exportCsv([...selected.values()])}
+                    className="inline-flex items-center gap-1.5 font-semibold text-[#3440a8] hover:underline cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Export CSV
+                  </button>
+                  <button type="button" onClick={() => setSelected(new Map())} className="text-slate-600 hover:text-slate-900 cursor-pointer">
+                    Clear selection
+                  </button>
+                </div>
+              ) : undefined
+            }
+            emptyState={(filtered) => (
               <EmptyState
                 icon={<Users className="w-6 h-6" />}
-                title={isFiltered ? 'No contacts match these filters' : channels.length === 0 ? 'No channels connected' : 'No contacts yet'}
+                title={filtered ? 'No contacts match these filters' : channels.length === 0 ? 'No channels connected' : 'No contacts yet'}
                 description={
-                  isFiltered
+                  filtered
                     ? 'Try a different search, consent or last active filter.'
                     : channels.length === 0
                       ? 'Connect a WhatsApp number or another channel in Settings to start collecting contacts.'
                       : 'Contacts appear here when customers message you on this channel.'
                 }
               />
-            ) : (
-              <div className={`overflow-x-auto transition-opacity ${isLoading ? 'opacity-60' : ''}`}>
-                <table className="w-full min-w-[760px] text-sm">
-                  <thead>
-                    <tr className="bg-slate-50/80 border-b border-slate-200 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                      <th className="w-12 pl-5 py-3.5">
-                        <input
-                          type="checkbox"
-                          checked={pageAllSelected}
-                          onChange={togglePage}
-                          aria-label="Select all on this page"
-                          className="w-4 h-4 accent-[#3440a8] cursor-pointer align-middle"
-                        />
-                      </th>
-                      <th className="px-4 py-3.5">Contact</th>
-                      <th className="px-4 py-3.5">Identity</th>
-                      <th className="px-4 py-3.5">Consent</th>
-                      <th className="px-4 py-3.5 text-right">Last active</th>
-                      <th className="px-4 py-3.5 pr-6 text-right">
-                        <span className="sr-only">Chat</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {contacts.map((c) => {
-                      const optedOut = tracksConsent(c.channel.type) && c.isOptedOut;
-                      return (
-                        <tr
-                          key={c.id}
-                          onClick={() => onOpenConversation(c.id)}
-                          title={`Open chat with ${c.name}`}
-                          className={`border-b border-slate-100 last:border-b-0 cursor-pointer ${optedOut ? 'bg-red-50/40 hover:bg-red-50/70' : 'hover:bg-slate-50/70'
-                            }`}
-                        >
-                          <td
-                            onClick={(e) => e.stopPropagation()}
-                            className={`pl-5 py-3.5 ${optedOut ? 'border-l-[3px] border-l-red-400' : 'border-l-[3px] border-l-transparent'}`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selected.has(c.id)}
-                              onChange={() => toggleOne(c)}
-                              aria-label={`Select ${c.name}`}
-                              className="w-4 h-4 accent-[#3440a8] cursor-pointer align-middle"
-                            />
-                          </td>
-                          <td className="px-4 py-3.5">
-                            <div className="flex items-center gap-3 min-w-0">
-                              {c.avatarUrl ? (
-                                <img src={c.avatarUrl} alt="" className="w-9 h-9 rounded-full object-cover shrink-0" />
-                              ) : (
-                                <span className="w-9 h-9 rounded-full bg-[#fde8ef] text-[#c0365f] text-xs font-semibold flex items-center justify-center shrink-0">
-                                  {getInitials(c.name)}
-                                </span>
-                              )}
-                              <span className="font-medium text-slate-900 truncate max-w-[220px]">{c.name}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3.5 font-mono text-[13px] text-slate-700 whitespace-nowrap">{identityOf(c)}</td>
-                          <td className="px-4 py-3.5">
-                            {optedOut && <ConsentBadge isOptedOut />}
-                          </td>
-                          <td className="px-4 py-3.5 text-right text-slate-600 whitespace-nowrap" title={c.lastActiveAt ? new Date(c.lastActiveAt).toLocaleString() : undefined}>
-                            {formatLastActive(c.lastActiveAt)}
-                          </td>
-                          <td className="px-4 py-3.5 pr-6 text-right whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onOpenConversation(c.id);
-                              }}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-[12px] font-semibold text-[#3440a8] hover:bg-[#eef0fb] cursor-pointer"
-                            >
-                              <MessageSquare className="w-3.5 h-3.5" />
-                              Open chat
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
             )}
-          </div>
-
-          {/* ── Pagination ── */}
-          {data && total > 0 && (
-            <div className="mt-4 flex items-center justify-between gap-4 text-[13px] text-slate-500">
-              <span>
-                Showing {nf.format(firstShown)}–{nf.format(lastShown)} of {nf.format(total)}
-              </span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page <= 1 || isLoading}
-                  title="Previous page"
-                  className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                <span className="px-2 text-slate-600">
-                  Page {nf.format(page)} of {nf.format(pageCount)}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
-                  disabled={page >= pageCount || isLoading}
-                  title="Next page"
-                  className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )}
+          />
         </div>
       </div>
     </div>

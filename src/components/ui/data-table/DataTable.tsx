@@ -42,6 +42,8 @@ export interface DataTableProps<T> {
   initialPageSize?: number;
   /** 'always' (default for server tables) or 'auto' (default for client tables: only when there is more than one page). */
   showPagination?: 'always' | 'auto';
+  /** Where the pagination bar goes: above and below the rows (default), or only below. */
+  paginationPosition?: 'both' | 'bottom';
   pageSizeOptions?: readonly number[];
 
   loading?: boolean;
@@ -97,6 +99,7 @@ export function DataTable<T>({
   initialSort,
   initialPageSize = DEFAULT_PAGE_SIZE,
   showPagination = server ? 'always' : 'auto',
+  paginationPosition = 'both',
   pageSizeOptions = PAGE_SIZE_OPTIONS,
   loading = false,
   error = null,
@@ -120,9 +123,13 @@ export function DataTable<T>({
   const [clientPagination, setClientPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: initialPageSize });
 
   const sorting: SortingState = server ? toSorting(server.sort) : clientSorting;
+  // Client mode: when the data shrinks (e.g. the owner filtered it), stay on the last page that still exists
+  const clientLastPage = Math.max(0, Math.ceil(data.length / clientPagination.pageSize) - 1);
   const pagination: PaginationState = server
     ? { pageIndex: (server.pagination?.page ?? 1) - 1, pageSize: server.pagination?.limit ?? initialPageSize }
-    : clientPagination;
+    : clientPagination.pageIndex > clientLastPage
+      ? { ...clientPagination, pageIndex: clientLastPage }
+      : clientPagination;
 
   const table = useReactTable<T>({
     data,
@@ -175,7 +182,7 @@ export function DataTable<T>({
   const pagerVisible = hasRows && (showPagination === 'always' || table.getPageCount() > 1);
 
   const pager = (position: 'top' | 'bottom') =>
-    pagerVisible ? <TablePagination table={table} position={position} pageSizeOptions={pageSizeOptions} loading={refreshing} /> : null;
+    pagerVisible && (position === 'bottom' || paginationPosition === 'both') ?<TablePagination table={table} position={position} pageSizeOptions={pageSizeOptions} loading={refreshing} /> : null;
 
   let body: React.ReactNode;
   if (error) {

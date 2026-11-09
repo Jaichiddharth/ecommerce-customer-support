@@ -27,11 +27,38 @@ export interface SharedShopifyProduct {
 }
 
 /** Extra data attached to a message, e.g. which action the AI agent performed */
+/** A template button as shown in the thread (display only; WhatsApp sends the approved button itself) */
+export interface TemplateMessageButton {
+  type: string; // QUICK_REPLY | URL | PHONE_NUMBER | COPY_CODE | FLOW | …
+  text: string;
+}
+
+/** Keeps only well-formed buttons, within WhatsApp's limits (10 buttons, 25 characters each) */
+export const sanitizeTemplateButtons = (buttons: unknown): TemplateMessageButton[] =>
+  (Array.isArray(buttons) ? buttons : [])
+    .filter((b) => b && typeof b.type === "string" && typeof b.text === "string" && b.text.trim())
+    .slice(0, 10)
+    .map((b) => ({ type: String(b.type).slice(0, 20), text: String(b.text).trim().slice(0, 25) }));
+
 export interface MessageMetadata {
   aiAction?: string; // e.g. 'catalog lookup'
   shopifyProduct?: SharedShopifyProduct; // Set when an agent shares a Shopify product
-  /** Set on template messages; `headerFormat` tells the UI how to show the header media in `mediaUrl` */
-  template?: { name: string; language: string; headerFormat?: "image" | "video" | "document" };
+  /**
+   * Set on template messages; `headerFormat` tells the UI how to show the header media in `mediaUrl`.
+   * `buttons` are the template's approved buttons (WhatsApp shows them to the customer), kept so the thread can too.
+   */
+  template?: {
+    name: string;
+    language: string;
+    headerFormat?: "image" | "video" | "document";
+    buttons?: TemplateMessageButton[];
+  };
+  /** Set on an inbound WhatsApp Flow response: the answers labelled with the Flow's questions (display only) */
+  flowResponse?: {
+    flowId: number | null;
+    flowName: string | null;
+    answers: Array<{ key: string; label: string; value: string }>;
+  };
   /** Set on the team-only system note that records a WhatsApp consent change (the consent log) */
   consent?: ConsentChange;
   /** Set on the automatic reply confirming an opt-out / opt-in to the customer */

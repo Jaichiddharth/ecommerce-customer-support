@@ -31,77 +31,77 @@ interface GraphEdge {
 /** Triggers the runtime starts runs from. */
 const RUNNABLE_TRIGGERS = new Set(["trigger_incoming_message", "trigger_keyword"]);
 const SEND_FLOW = "action_send_whatsapp_flow";
-const WAIT_FLOW = "flow_wait_flow_submission";
 
 const text = (d: Record<string, unknown>, key: string) => String(d[key] ?? "").trim();
 
-/** Field-level checks for one step (what its config panel must have before it can be saved). */
-export function nodeConfigIssues(type: string, d: Record<string, unknown>): string[] {
-  const out: string[] = [];
+/** One field-level problem; `field` is the node data key the message is about. */
+export interface NodeFieldIssue {
+  field: string;
+  message: string;
+}
+
+/** Field-level checks for one step, keyed by the data field each one is about (for inline form errors). */
+export function nodeConfigFieldIssues(type: string, d: Record<string, unknown>): NodeFieldIssue[] {
+  const out: NodeFieldIssue[] = [];
+  const push = (field: string, message: string) => out.push({ field, message });
   switch (type) {
     case "trigger_incoming_message":
-    case "flow_branch":
     case "flow_end":
       break;
 
     case "trigger_keyword":
     case "condition_keyword_match":
-      if (!normalizeKeywords(d.keywords).length) out.push("Add at least one keyword.");
+      if (!normalizeKeywords(d.keywords).length) push("keywords", "Add at least one keyword.");
       break;
 
     case "trigger_conversation_event":
-      if (!text(d, "event")) out.push("Choose the conversation event.");
+      if (!text(d, "event")) push("event", "Choose the conversation event.");
       break;
 
     case "condition_if_else":
     case "condition_contact_attribute":
-      if (!text(d, "attribute")) out.push("Choose the attribute to check.");
-      if (!text(d, "operator")) out.push("Choose an operator.");
-      else if (d.operator !== "is_empty" && !text(d, "value")) out.push("Enter the value to compare with.");
+      if (!text(d, "attribute")) push("attribute", "Choose the attribute to check.");
+      if (!text(d, "operator")) push("operator", "Choose an operator.");
+      else if (d.operator !== "is_empty" && !text(d, "value")) push("value", "Enter the value to compare with.");
       break;
 
     case "action_send_message":
-      if (!text(d, "messageContent")) out.push("Enter the message to send.");
+      if (!text(d, "messageContent")) push("messageContent", "Enter the message to send.");
       break;
 
     case "action_send_template":
-      if (!text(d, "templateId")) out.push("Enter the template to send.");
+      if (!text(d, "templateId")) push("templateId", "Enter the template to send.");
       break;
 
     case "action_assign_conversation":
-      if (!text(d, "assignTo")) out.push("Choose who the conversation is assigned to.");
+      if (!text(d, "assignTo")) push("assignTo", "Choose who the conversation is assigned to.");
       break;
 
     case "action_update_contact":
-      if (!text(d, "updateField")) out.push("Choose the contact field to update.");
-      else if (!text(d, "updateValue")) out.push("Enter the new value.");
+      if (!text(d, "updateField")) push("updateField", "Choose the contact field to update.");
+      else if (!text(d, "updateValue")) push("updateValue", "Enter the new value.");
       break;
 
     case SEND_FLOW:
       if (!d.flowId) {
-        out.push("Choose a published WhatsApp Flow.");
+        push("flowId", "Choose a published WhatsApp Flow.");
       } else if (d.sendMethod === "interactive") {
-        if (!text(d, "flowBody")) out.push("Enter the message text.");
-        if (!text(d, "flowCta")) out.push("Enter the button text.");
+        if (!text(d, "flowBody")) push("flowBody", "Enter the message text.");
+        if (!text(d, "flowCta")) push("flowCta", "Enter the button text.");
       } else if (!d.templateId) {
-        out.push("Choose an approved template that opens this Flow.");
+        push("templateId", "Choose an approved template that opens this Flow.");
       }
       break;
 
-    case "flow_delay": {
-      const amount = Number(d.delayAmount);
-      if (!Number.isFinite(amount) || amount < 1) out.push("Set how long to wait (at least 1).");
-      break;
-    }
-
-    case WAIT_FLOW:
-      if (d.timeoutHours !== undefined && !(Number(d.timeoutHours) >= 1)) out.push("Set a timeout of at least 1 hour.");
-      break;
-
     default:
-      out.push(`Unknown step type "${type}".`);
+      push("type", `Unknown step type "${type}".`);
   }
   return out;
+}
+
+/** Field-level checks for one step (what its config panel must have before it can be saved). */
+export function nodeConfigIssues(type: string, d: Record<string, unknown>): string[] {
+  return nodeConfigFieldIssues(type, d).map((i) => i.message);
 }
 
 /**
@@ -185,22 +185,6 @@ export function validateAutomation(input: { name?: string; nodes: GraphNode[]; e
 
     if (loopTargets.has(n.id)) add(n, "Is part of a loop, so the automation would never finish. Remove a connection to break it.");
 
-    if (type === WAIT_FLOW) {
-      const upstream = new Set<string>();
-      const stack = [n.id];
-      while (stack.length) {
-        const cur = stack.pop()!;
-        for (const e of incoming.get(cur) ?? []) {
-          if (!upstream.has(e.source)) {
-            upstream.add(e.source);
-            stack.push(e.source);
-          }
-        }
-      }
-      if (![...upstream].some((id) => typeOf(byId.get(id)!) === SEND_FLOW)) {
-        add(n, "Place it after a Send WhatsApp Flow step.");
-      }
-    }
   }
 
   return issues;

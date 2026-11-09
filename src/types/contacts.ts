@@ -5,6 +5,8 @@
  * numbers is two rows, each with its own consent. The page lists one channel at a time.
  */
 
+import type { PaginationMeta } from '@/lib/listing';
+
 /** Only opt-outs are marked; everyone else is a normal contact */
 export type ContactConsentFilter = 'any' | 'opted_out';
 
@@ -48,6 +50,8 @@ export interface ContactListResponse {
   contacts: ContactListItem[];
   /** Contacts matching the filters, across all pages */
   total: number;
+  /** Shared listing pagination (same shape as every other listing) */
+  pagination: PaginationMeta;
   page: number;
   pageSize: number;
   channels: ContactChannelSummary[];

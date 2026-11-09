@@ -10,7 +10,16 @@ import type {
   UpdateTemplatePayload,
 } from "../../meta/whatsapp/template.service";
 import { encryptToken, decryptToken } from "../../security/crypto";
-import { Channel, ChannelStatus, Message, MessageStatus, type Customer, type MessageMetadata } from "../../db/schema";
+import {
+  Channel,
+  ChannelStatus,
+  Message,
+  MessageStatus,
+  sanitizeTemplateButtons,
+  type Customer,
+  type MessageMetadata,
+  type TemplateMessageButton,
+} from "../../db/schema";
 import { publish } from "@/lib/realtime";
 import { AppError, toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
@@ -727,6 +736,8 @@ export class WhatsAppService {
     templateName?: string;
     languageCode?: string;
     components?: Array<Record<string, unknown>>;
+    /** The template's buttons, stored so the thread shows them like the customer sees them (display only) */
+    templateButtons?: TemplateMessageButton[];
     metadata?: MessageMetadata | null;
     /**
      * Already-loaded rows the caller holds (automation engine, Flow sends), so the send path doesn't
@@ -966,12 +977,14 @@ export class WhatsAppService {
         const headerFormat = headerParam?.[0]?.type as 'image' | 'video' | 'document' | undefined;
         const headerMediaId = headerFormat ? headerParam?.[0]?.[headerFormat]?.id : undefined;
         if (headerMediaId) storedMediaUrl = `whatsapp-media:${headerMediaId}`;
+        const templateButtons = sanitizeTemplateButtons(params.templateButtons);
         storedMetadata = {
           ...storedMetadata,
           template: {
             name: params.templateName,
             language: params.languageCode || 'en_US',
             ...(headerMediaId ? { headerFormat } : {}),
+            ...(templateButtons.length ? { buttons: templateButtons } : {}),
           },
         };
       } else if (params.type === 'interactive' && params.interactiveFlow) {

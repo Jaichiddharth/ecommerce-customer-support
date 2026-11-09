@@ -1,36 +1,31 @@
-import { PaletteItem } from './flow-types';
+import type { CategoryTheme, NodeCategory, PaletteItem } from './flow-types';
 
+/** Every step type the builder can place (and the runtime understands). */
 export const PALETTE_ITEMS: PaletteItem[] = [
   // ── Triggers ──────────────────────────────────────────────────────────────
   {
     type: 'trigger_incoming_message',
     label: 'Incoming Message',
     category: 'triggers',
-    description: 'Fires when a new message arrives',
+    description: 'Starts when a customer sends any message.',
     icon: 'MessageCircle',
-    color: '#dbeafe',
-    textColor: '#1d4ed8',
-    borderColor: '#93c5fd',
+    keywords: ['start', 'inbound', 'receive'],
   },
   {
     type: 'trigger_keyword',
     label: 'Keyword Trigger',
     category: 'triggers',
-    description: 'Fires when a keyword is matched',
+    description: 'Starts when a message contains one of your keywords.',
     icon: 'Hash',
-    color: '#dbeafe',
-    textColor: '#1d4ed8',
-    borderColor: '#93c5fd',
+    keywords: ['start', 'word', 'phrase'],
   },
   {
     type: 'trigger_conversation_event',
     label: 'Conversation Event',
     category: 'triggers',
-    description: 'Fires on conversation lifecycle events',
+    description: 'Starts on a conversation event, like opened or assigned.',
     icon: 'Bell',
-    color: '#dbeafe',
-    textColor: '#1d4ed8',
-    borderColor: '#93c5fd',
+    keywords: ['start', 'opened', 'closed', 'assigned'],
   },
 
   // ── Conditions ────────────────────────────────────────────────────────────
@@ -38,31 +33,25 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     type: 'condition_if_else',
     label: 'If / Else',
     category: 'conditions',
-    description: 'Branch on a boolean condition',
+    description: 'Splits into a True and a False path based on a rule.',
     icon: 'GitBranch',
-    color: '#fef9c3',
-    textColor: '#a16207',
-    borderColor: '#fde047',
+    keywords: ['branch', 'decision', 'split'],
   },
   {
     type: 'condition_keyword_match',
     label: 'Keyword Match',
     category: 'conditions',
-    description: 'Check if message contains keywords',
+    description: 'Continues only when the message contains a keyword.',
     icon: 'Search',
-    color: '#fef9c3',
-    textColor: '#a16207',
-    borderColor: '#fde047',
+    keywords: ['filter', 'word'],
   },
   {
     type: 'condition_contact_attribute',
     label: 'Contact Attribute',
     category: 'conditions',
-    description: 'Filter by contact field value',
+    description: 'Continues only when a contact field matches a value.',
     icon: 'UserCheck',
-    color: '#fef9c3',
-    textColor: '#a16207',
-    borderColor: '#fde047',
+    keywords: ['filter', 'field', 'tag'],
   },
 
   // ── Actions ───────────────────────────────────────────────────────────────
@@ -70,123 +59,86 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     type: 'action_send_message',
     label: 'Send Message',
     category: 'actions',
-    description: 'Send a plain text message',
+    description: 'Replies with a plain text message.',
     icon: 'Send',
-    color: '#dcfce7',
-    textColor: '#15803d',
-    borderColor: '#86efac',
+    keywords: ['reply', 'text'],
   },
   {
     type: 'action_send_template',
     label: 'Send Template',
     category: 'actions',
-    description: 'Send a WhatsApp template message',
+    description: 'Sends an approved WhatsApp template message.',
     icon: 'FileText',
-    color: '#dcfce7',
-    textColor: '#15803d',
-    borderColor: '#86efac',
+    keywords: ['whatsapp', 'hsm'],
+  },
+  {
+    type: 'action_send_whatsapp_flow',
+    label: 'Send WhatsApp Flow',
+    category: 'actions',
+    description: 'Sends a published WhatsApp Flow form to the contact.',
+    icon: 'MessageSquareText',
+    keywords: ['form', 'whatsapp'],
   },
   {
     type: 'action_assign_conversation',
     label: 'Assign Conversation',
     category: 'actions',
-    description: 'Assign to an agent or team',
+    description: 'Hands the conversation to an agent, team or bot.',
     icon: 'UserPlus',
-    color: '#dcfce7',
-    textColor: '#15803d',
-    borderColor: '#86efac',
+    keywords: ['route', 'agent', 'team'],
   },
   {
     type: 'action_update_contact',
     label: 'Update Contact',
     category: 'actions',
-    description: 'Update a contact attribute',
+    description: 'Sets a field on the contact, like a tag or email.',
     icon: 'PenLine',
-    color: '#dcfce7',
-    textColor: '#15803d',
-    borderColor: '#86efac',
-  },
-
-  {
-    type: 'action_send_whatsapp_flow',
-    label: 'Send WhatsApp Flow',
-    category: 'actions',
-    description: 'Send a published WhatsApp Flow form',
-    icon: 'MessageSquareText',
-    color: '#dcfce7',
-    textColor: '#15803d',
-    borderColor: '#86efac',
+    keywords: ['field', 'tag', 'crm'],
   },
 
   // ── Flow Controls ─────────────────────────────────────────────────────────
   {
-    type: 'flow_delay',
-    label: 'Delay',
-    category: 'flow-controls',
-    description: 'Wait before continuing',
-    icon: 'Clock',
-    color: '#f3e8ff',
-    textColor: '#7e22ce',
-    borderColor: '#d8b4fe',
-  },
-  {
-    type: 'flow_branch',
-    label: 'Branch',
-    category: 'flow-controls',
-    description: 'Split into multiple paths',
-    icon: 'Shuffle',
-    color: '#f3e8ff',
-    textColor: '#7e22ce',
-    borderColor: '#d8b4fe',
-  },
-  {
-    type: 'flow_wait_flow_submission',
-    label: 'Wait for Flow Submission',
-    category: 'flow-controls',
-    description: 'Pause until the customer submits the Flow',
-    icon: 'Hourglass',
-    color: '#f3e8ff',
-    textColor: '#7e22ce',
-    borderColor: '#d8b4fe',
-  },
-  {
     type: 'flow_end',
     label: 'End Workflow',
     category: 'flow-controls',
-    description: 'Terminate the automation',
+    description: 'Stops the automation on this path.',
     icon: 'StopCircle',
-    color: '#fee2e2',
-    textColor: '#b91c1c',
-    borderColor: '#fca5a5',
+    keywords: ['stop', 'finish', 'terminate'],
   },
 ];
 
-export const CATEGORY_META: Record<
-  string,
-  { label: string; color: string; textColor: string; borderColor: string }
-> = {
-  triggers: {
-    label: 'Triggers',
-    color: '#dbeafe',
-    textColor: '#1d4ed8',
-    borderColor: '#93c5fd',
-  },
-  conditions: {
-    label: 'Conditions',
-    color: '#fef9c3',
-    textColor: '#a16207',
-    borderColor: '#fde047',
-  },
-  actions: {
-    label: 'Actions',
-    color: '#dcfce7',
-    textColor: '#15803d',
-    borderColor: '#86efac',
-  },
-  'flow-controls': {
-    label: 'Flow Controls',
-    color: '#f3e8ff',
-    textColor: '#7e22ce',
-    borderColor: '#d8b4fe',
-  },
+export const CATEGORY_ORDER: NodeCategory[] = ['triggers', 'conditions', 'actions', 'flow-controls'];
+
+export const CATEGORY_META: Record<NodeCategory, CategoryTheme> = {
+  triggers: { label: 'Triggers', singular: 'Trigger', accent: '#3440a8', soft: '#eef0fb', text: '#2a3490' },
+  conditions: { label: 'Conditions', singular: 'Condition', accent: '#d97706', soft: '#fef3e2', text: '#a14f04' },
+  actions: { label: 'Actions', singular: 'Action', accent: '#0d9488', soft: '#e6f6f4', text: '#0f6b63' },
+  'flow-controls': { label: 'Flow Controls', singular: 'Flow Control', accent: '#e11d48', soft: '#fdecef', text: '#be123c' },
 };
+
+const FALLBACK_THEME: CategoryTheme = { label: 'Steps', singular: 'Step', accent: '#64748b', soft: '#f1f5f9', text: '#334155' };
+
+export const getPaletteItem = (type: string) => PALETTE_ITEMS.find((i) => i.type === type);
+
+export function categoryOf(type: string): NodeCategory | null {
+  const item = getPaletteItem(type);
+  if (item) return item.category;
+  if (type.startsWith('trigger_')) return 'triggers';
+  if (type.startsWith('condition_')) return 'conditions';
+  if (type.startsWith('action_')) return 'actions';
+  if (type.startsWith('flow_')) return 'flow-controls';
+  return null;
+}
+
+export function themeOf(type: string): CategoryTheme {
+  const cat = categoryOf(type);
+  return cat ? CATEGORY_META[cat] : FALLBACK_THEME;
+}
+
+/** Case-insensitive match on name, description and keywords. */
+export function matchesSearch(item: PaletteItem, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return [item.label, item.description, CATEGORY_META[item.category].label, ...(item.keywords ?? [])]
+    .some((s) => s.toLowerCase().includes(q));
+}

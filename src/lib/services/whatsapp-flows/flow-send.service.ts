@@ -5,6 +5,7 @@ import {
   WaFlowExecutionStatus,
   type Channel,
   type Customer,
+  type TemplateMessageButton,
   type WaFlowVersionStatusValue,
   type WhatsAppFlowExecutionRow,
 } from "../../db/schema";
@@ -38,11 +39,36 @@ export interface SendFlowInput {
   /** How long to wait for a response before the execution counts as expired. */
   expiresInHours?: number;
   userId?: number | null;
+  senderName?: string | null;
   automationRunId?: number | null;
   automationNodeId?: string | null;
+  /** Preferred number to send from (inbox: the open conversation's); used when it is on the Flow's WABA. */
+  channelId?: number | null;
+  /** `template` only: the template's other components (header/body variables). Any flow button in it is replaced. */
+  components?: Array<Record<string, unknown>>;
+  /** Stored as the message text in the thread instead of the default "📋 Flow · template" label. */
+  text?: string;
+  /** `template` only: buttons shown on the thread bubble; defaults to the template's Flow button. */
+  templateButtons?: TemplateMessageButton[];
   /** Rows the caller already loaded (automation engine): the contact and the org's live WhatsApp channels. */
   preloaded?: { customer?: Customer; connections?: Channel[] };
 }
+
+export interface SendFlowTemplateFromInboxInput {
+  organizationId: number;
+  customerId: number;
+  /** The conversation's channel; its WABA identifies the template. */
+  channelId: number;
+  templateName: string;
+  languageCode: string;
+  components?: Array<Record<string, unknown>>;
+  text?: string;
+  templateButtons?: TemplateMessageButton[];
+  userId: number;
+  senderName?: string | null;
+}
+
+const isFlowButtonComponent = (c: Record<string, unknown>) => c?.type === "button" && c?.sub_type === "flow";
 
 export interface SendFlowTestInput {
   organizationId: number;
@@ -63,6 +89,38 @@ export class WhatsAppFlowSendService {
    * - interactive: only within 24h of the customer's last message (WhatsApp customer service window).
    */
   async send(input: SendFlowInput): Promise<WhatsAppFlowExecutionRow> {
+    return (await this.deliver(input)).execution;
+  }
+
+  /**
+   * Inbox template send: when the chosen template is one of our Flow templates, sends it through the
+   * tracked path (execution + flow_token) so the customer's response is linked back to this send.
+   * Returns null when the template isn't a tracked Flow template; the caller then sends it as usual.
+   */
+  async sendTemplateFromInbox(input: SendFlowTemplateFromInboxInput) {
+    const { organizationId } = input;
+    const channel = await channelRepository.findById(input.channelId, organizationId);
+    if (!channel?.wabaId) return null;
+    const template = await whatsappFlowRepository.findTemplateByName(channel.wabaId, input.templateName, input.languageCode);
+    if (!template || template.organizationId !== organizationId || !template.flowId) return null;
+
+    const { execution, result } = await this.deliver({
+      organizationId,
+      customerId: input.customerId,
+      flowId: template.flowId,
+      method: "template",
+      templateId: template.id,
+      channelId: input.channelId,
+      components: input.components,
+      text: input.text,
+      templateButtons: input.templateButtons,
+      userId: input.userId,
+      senderName: input.senderName,
+    });
+    return { ...result, flowExecutionId: execution.id };
+  }
+
+  private async deliver(input: SendFlowInput) {
     const { organizationId } = input;
     const flow = await whatsappFlowRepository.findFlow(input.flowId, organizationId);
     if (!flow || flow.archivedAt) throw AppError.notFound("WhatsApp Flow not found.");
@@ -114,13 +172,14 @@ export class WhatsAppFlowSendService {
     }
 
     // A Flow (and its templates) live on one WABA: send from a number on that WABA,
-    // preferring the number the customer already talks to
-    const customerChannel = customer.channelId
-      ? input.preloaded?.connections?.find((c) => c.id === customer.channelId) ??
-        (await channelRepository.findById(customer.channelId, organizationId))
+    // preferring the caller's number, else the number the customer already talks to
+    const preferredChannelId = input.channelId ?? customer.channelId;
+    const preferredChannel = preferredChannelId
+      ? input.preloaded?.connections?.find((c) => c.id === preferredChannelId) ??
+        (await channelRepository.findById(preferredChannelId, organizationId))
       : null;
     const sendChannelId =
-      customerChannel?.wabaId === version.wabaId ? customerChannel.id : template?.channelId ?? null;
+      preferredChannel?.wabaId === version.wabaId ? preferredChannel.id : template?.channelId ?? null;
     if (!sendChannelId) {
       throw new AppError("CONFLICT", {
         message: "This contact's WhatsApp number is on a different WhatsApp Business Account than the Flow.",
@@ -153,12 +212,16 @@ export class WhatsAppFlowSendService {
               customerId: customer.id,
               channelId: sendChannelId,
               senderId: input.userId ?? null,
+              senderName: input.senderName ?? null,
               to: customer.phone,
               type: "template",
               templateName: template!.name,
               languageCode: template!.language,
-              text: `${label} · template ${template!.name}`,
+              text: input.text?.trim() || `${label} · template ${template!.name}`,
+              templateButtons:
+                input.templateButtons ?? (template!.flowButton ? [{ type: "FLOW", text: template!.flowButton.text }] : []),
               components: [
+                ...(input.components ?? []).filter((c) => !isFlowButtonComponent(c)),
                 {
                   type: "button",
                   sub_type: "flow",
@@ -174,9 +237,10 @@ export class WhatsAppFlowSendService {
               customerId: customer.id,
               channelId: sendChannelId,
               senderId: input.userId ?? null,
+              senderName: input.senderName ?? null,
               to: customer.phone,
               type: "interactive",
-              text: `${label} · ${input.bodyText!.trim()}`,
+              text: input.text?.trim() || `${label} · ${input.bodyText!.trim()}`,
               interactiveFlow: {
                 flowId: version.metaFlowId,
                 flowToken: execution.flowToken,
@@ -200,7 +264,7 @@ export class WhatsAppFlowSendService {
         expiresAt: new Date(now.getTime() + hours * 60 * 60 * 1000),
       });
       log.info("WhatsApp Flow sent", { executionId: execution.id, flowId: flow.id, method: input.method, wamid });
-      return sent!;
+      return { execution: sent!, result };
     } catch (err) {
       const appErr = toAppError(err);
       await whatsappFlowRepository.updateExecution(execution.id, { status: WaFlowExecutionStatus.FAILED, lastError: appErr.message });

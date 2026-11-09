@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ExternalLink, FileText, Film, Phone, RefreshCw, Reply, Search, Copy } from 'lucide-react';
+import { ArrowLeft, ClipboardList, ExternalLink, FileText, Film, Phone, RefreshCw, Reply, Search, Copy } from 'lucide-react';
 import apiClient from '@/lib/api/client';
 import { toApiError } from '@/lib/api/api-error';
 import { WhatsAppTemplate } from '@/types/templates';
@@ -50,10 +50,12 @@ const highlightUnfilled = (text: string) =>
 
 const bodyOf = (tpl: WhatsAppTemplate) => tpl.components?.find((c) => c.type === 'BODY')?.text ?? '';
 
-const ButtonIcon: React.FC<{ type: string }> = ({ type }) => {
+/** Icon for a template button type, as on the WhatsApp bubble */
+export const TemplateButtonIcon: React.FC<{ type: string }> = ({ type }) => {
   if (type === 'URL') return <ExternalLink className="h-3 w-3" />;
   if (type === 'PHONE_NUMBER') return <Phone className="h-3 w-3" />;
   if (type === 'COPY_CODE') return <Copy className="h-3 w-3" />;
+  if (type === 'FLOW') return <ClipboardList className="h-3 w-3" />;
   return <Reply className="h-3 w-3" />;
 };
 
@@ -268,7 +270,7 @@ export const TemplateComposer: React.FC<TemplateComposerProps> = ({
                       key={i}
                       className="flex items-center justify-center gap-1.5 rounded-lg bg-white py-1.5 text-[12px] font-medium text-[#00a884] shadow-sm"
                     >
-                      <ButtonIcon type={btn.type} />
+                      <TemplateButtonIcon type={btn.type} />
                       <span className="truncate">{btn.text}</span>
                     </div>
                   ))}

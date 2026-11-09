@@ -4,6 +4,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { flowsApi, templatesApi, type PublishedFlowOption, type WaTemplate } from './wa-api';
 
+/** Field wrapper the host form provides; `name` lets it show that field's validation error. */
+export type FieldLikeProps = { label: string; children: React.ReactNode; name?: string; required?: boolean; hint?: string };
+
 /**
  * Config fields for the Automation Builder's "Send WhatsApp Flow" action.
  * Only published Flows are offered; template delivery only offers APPROVED templates that open
@@ -18,7 +21,7 @@ export function SendWhatsAppFlowFields({
   local: Record<string, unknown>;
   set: (k: string, v: unknown) => void;
   inputCls: string;
-  Field: React.FC<{ label: string; children: React.ReactNode }>;
+  Field: React.FC<FieldLikeProps>;
 }) {
   const [flows, setFlows] = useState<PublishedFlowOption[] | null>(null);
   const [templates, setTemplates] = useState<WaTemplate[]>([]);
@@ -47,7 +50,7 @@ export function SendWhatsAppFlowFields({
 
   return (
     <>
-      <Field label="WhatsApp Flow">
+      <Field label="WhatsApp Flow" name="flowId" required>
         <select
           value={flowId}
           onChange={(e) => {
@@ -67,7 +70,7 @@ export function SendWhatsAppFlowFields({
           : flows.length === 0 && hint('No published Flows yet. Publish one under WhatsApp Flows first.', true)}
       </Field>
 
-      <Field label="Sending method">
+      <Field label="Sending method" required>
         <select value={method} onChange={(e) => set('sendMethod', e.target.value)} className={inputCls}>
           <option value="template">Approved template (any time)</option>
           <option value="interactive">Interactive message (within 24h)</option>
@@ -78,7 +81,7 @@ export function SendWhatsAppFlowFields({
       </Field>
 
       {method === 'template' ? (
-        <Field label="Template">
+        <Field label="Template" name="templateId" required>
           <select
             value={Number(local.templateId) || ''}
             onChange={(e) => {
@@ -97,7 +100,7 @@ export function SendWhatsAppFlowFields({
         </Field>
       ) : (
         <>
-          <Field label="Message text">
+          <Field label="Message text" name="flowBody" required>
             <textarea
               value={String(local.flowBody ?? '')}
               onChange={(e) => set('flowBody', e.target.value)}
@@ -106,7 +109,7 @@ export function SendWhatsAppFlowFields({
               placeholder="Hi {{contact.name}}, please fill in this short form."
             />
           </Field>
-          <Field label="Button text (CTA)">
+          <Field label="Button text (CTA)" name="flowCta" required>
             <input value={String(local.flowCta ?? '')} onChange={(e) => set('flowCta', e.target.value)} maxLength={30} className={inputCls} placeholder="Open form" />
           </Field>
         </>

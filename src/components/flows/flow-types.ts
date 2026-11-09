@@ -7,10 +7,22 @@ export interface PaletteItem {
   label: string;
   category: NodeCategory;
   description: string;
-  icon: string; // lucide icon name
-  color: string; // tailwind bg class
-  textColor: string;
-  borderColor: string;
+  icon: string; // lucide icon name (see node-icons.tsx)
+  /** Extra words the node search matches on. */
+  keywords?: string[];
+}
+
+/** Visual tokens for a node category (subtle, on the Unocx slate + #3440a8 theme). */
+export interface CategoryTheme {
+  label: string;
+  /** Singular, shown on node cards ("Trigger"). */
+  singular: string;
+  /** Solid colour: icon tile, accents. */
+  accent: string;
+  /** Soft tint behind icons / chips. */
+  soft: string;
+  /** Text colour on the soft tint. */
+  text: string;
 }
 
 // ─── Node data payloads ──────────────────────────────────────────────────────
@@ -45,10 +57,7 @@ export interface ActionNodeData extends BaseNodeData {
 }
 
 export interface FlowControlNodeData extends BaseNodeData {
-  controlType?: 'delay' | 'branch' | 'end';
-  delayAmount?: number;
-  delayUnit?: 'seconds' | 'minutes' | 'hours' | 'days';
-  branches?: string[];
+  controlType?: 'end';
 }
 
 export type AutomationNodeData =

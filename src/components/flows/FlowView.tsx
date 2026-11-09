@@ -6,15 +6,13 @@ import {
   ReactFlowProvider,
   Background,
   BackgroundVariant,
-  Controls,
   MiniMap,
   addEdge,
   reconnectEdge,
   useNodesState,
   useEdgesState,
   useReactFlow,
-  MarkerType,
-  Panel,
+  ConnectionLineType,
   type Connection,
   type Node,
   type Edge,
@@ -22,40 +20,48 @@ import {
   type OnReconnect,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import './automation-builder.css';
 
 import { NODE_TYPES } from './AutomationNode';
+import { EDGE_TYPES } from './AutomationEdge';
 import { FlowPalette } from './FlowPalette';
 import { ConfigPanel } from './ConfigPanel';
-import { PALETTE_ITEMS } from './palette-config';
+import { NodePicker } from './NodePicker';
+import { BuilderHeader } from './BuilderHeader';
+import { CanvasControls } from './CanvasControls';
+import { DRAG_TYPE } from './NodeCatalogList';
+import { BuilderContext, type BuilderActions, type PickerRequest } from './builder-context';
+import { themeOf } from './palette-config';
+import {
+  NODE_WIDTH, appendAfter, createNode, freeHandles, insertOnEdge, newEdgeId, styleEdge,
+} from './graph-ops';
 import type { AutomationNodeData, WorkflowGraph } from './flow-types';
-import { Save, RotateCcw, Download, Upload, Maximize2, Zap, Power, Loader2, ArrowLeft, AlertTriangle } from 'lucide-react';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
 import apiClient from '@/lib/api/client';
 import { notifyError } from '@/lib/api/notify';
 import { toApiError } from '@/lib/api/api-error';
 import { gooeyToast } from '@/components/ui/goey-toaster';
-import { validateAutomation, type AutomationIssue } from '@/lib/automation/validate';
+import { nodeConfigIssues, validateAutomation, type AutomationIssue } from '@/lib/automation/validate';
 import { AutomationIssuesPanel, type IssuesIntent } from './AutomationIssuesPanel';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-let nodeIdCounter = 100;
-const newId = () => `node_${++nodeIdCounter}`;
-
-const defaultEdgeOptions = {
-  animated: false,
-  markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#94a3b8' },
-  style: { stroke: '#94a3b8', strokeWidth: 2 },
-};
 
 // Before automations were stored per workspace, the builder kept one graph in this browser.
 // It is only read now so the listing can offer a one-time import (see loadLegacyBrowserAutomation).
 const STORAGE_KEY = 'unocx_flow_graph';
 const SERVER_ID_KEY = 'unocx_flow_automation_id';
 
-/** Strips React Flow UI state so only the graph the runtime needs is sent. */
+/** Undo steps kept in memory. */
+const HISTORY_LIMIT = 50;
+
+/** Strips React Flow UI state (and the builder's `_` render fields) so only the graph the runtime needs is sent. */
 const toServerGraph = (nodes: Node[], edges: Edge[]) => ({
-  nodes: nodes.map(({ id, type, position, data }) => ({ id, type, position, data })),
+  nodes: nodes.map(({ id, type, position, data }) => ({
+    id,
+    type,
+    position,
+    data: Object.fromEntries(Object.entries(data ?? {}).filter(([k]) => !k.startsWith('_'))),
+  })),
   edges: edges.map(({ id, source, target, sourceHandle, targetHandle, label }) => ({
     id, source, target, sourceHandle, targetHandle, label: typeof label === 'string' ? label : undefined,
   })),
@@ -67,13 +73,13 @@ const INITIAL_NODES: Node[] = [
   {
     id: 'n1',
     type: 'trigger_incoming_message',
-    position: { x: 340, y: 60 },
+    position: { x: 352, y: 48 },
     data: { type: 'trigger_incoming_message', label: 'Incoming Message', configured: true },
   },
   {
     id: 'n2',
     type: 'condition_if_else',
-    position: { x: 260, y: 220 },
+    position: { x: 352, y: 208 },
     data: {
       type: 'condition_if_else',
       label: 'Check Keyword',
@@ -86,7 +92,7 @@ const INITIAL_NODES: Node[] = [
   {
     id: 'n3',
     type: 'action_send_message',
-    position: { x: 60, y: 420 },
+    position: { x: 176, y: 400 },
     data: {
       type: 'action_send_message',
       label: 'Send Auto-Reply',
@@ -97,7 +103,7 @@ const INITIAL_NODES: Node[] = [
   {
     id: 'n4',
     type: 'action_assign_conversation',
-    position: { x: 460, y: 420 },
+    position: { x: 528, y: 400 },
     data: {
       type: 'action_assign_conversation',
       label: 'Assign to Support',
@@ -108,46 +114,25 @@ const INITIAL_NODES: Node[] = [
   {
     id: 'n5',
     type: 'flow_end',
-    position: { x: 260, y: 620 },
+    position: { x: 352, y: 576 },
     data: { type: 'flow_end', label: 'End Workflow' },
   },
 ];
 
 const INITIAL_EDGES: Edge[] = [
-  {
-    id: 'e1',
-    source: 'n1',
-    target: 'n2',
-    ...defaultEdgeOptions,
-  },
-  {
-    id: 'e2',
-    source: 'n2',
-    target: 'n3',
-    sourceHandle: 'true',
-    label: 'TRUE',
-    style: { stroke: '#16a34a', strokeWidth: 2 },
-    markerEnd: { type: MarkerType.ArrowClosed, color: '#16a34a' },
-  },
-  {
-    id: 'e3',
-    source: 'n2',
-    target: 'n4',
-    sourceHandle: 'false',
-    label: 'FALSE',
-    style: { stroke: '#dc2626', strokeWidth: 2 },
-    markerEnd: { type: MarkerType.ArrowClosed, color: '#dc2626' },
-  },
-  { id: 'e4', source: 'n3', target: 'n5', ...defaultEdgeOptions },
-  { id: 'e5', source: 'n4', target: 'n5', ...defaultEdgeOptions },
-];
+  { id: 'e1', source: 'n1', target: 'n2' },
+  { id: 'e2', source: 'n2', target: 'n3', sourceHandle: 'true' },
+  { id: 'e3', source: 'n2', target: 'n4', sourceHandle: 'false' },
+  { id: 'e4', source: 'n3', target: 'n5' },
+  { id: 'e5', source: 'n4', target: 'n5' },
+].map(styleEdge);
 
 /** Starting canvas for a new automation: a single trigger to build from. */
 const NEW_AUTOMATION_NODES: Node[] = [
   {
     id: 'n1',
     type: 'trigger_incoming_message',
-    position: { x: 340, y: 80 },
+    position: { x: 352, y: 80 },
     data: { type: 'trigger_incoming_message', label: 'Incoming Message', configured: true },
   },
 ];
@@ -201,6 +186,9 @@ function readServerIssues(raw: unknown): AutomationIssue[] {
   });
 }
 
+const isEditableTarget = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName));
+
 interface LoadedAutomation {
   id: number | null;
   name: string;
@@ -221,6 +209,11 @@ interface FlowViewProps {
   onCreated?: (id: number) => void;
 }
 
+interface Snapshot {
+  nodes: Node[];
+  edges: Edge[];
+}
+
 // ─── Inner component (has access to useReactFlow hook) ────────────────────────
 
 function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation } & Omit<FlowViewProps, 'automationId'>) {
@@ -231,14 +224,25 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
   const lastSaved = useRef({ nodes: initial.nodes, edges: initial.edges });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
   const reconnectSuccessful = useRef(true);
   const [serverId, setServerId] = useState<number | null>(initial.id);
   const [isActive, setIsActive] = useState(initial.isActive);
   const [syncing, setSyncing] = useState(false);
 
+  // ── Layout state ───────────────────────────────────────────────────────
+  const [minimap, setMinimap] = useState(initial.nodes.length > 8);
+  const [picker, setPicker] = useState<{ request: PickerRequest; anchor: { x: number; y: number } } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  // The canvas is free-form: steps are shown and saved where the user placed them
+  const nodesRef = useRef(nodes);
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+
   // ── Validation: checked live, enforced on Save / Activate ──────────────
-  const clientIssues = useMemo(() => validateAutomation({ name, nodes, edges }), [name, nodes, edges]);
+  const clientIssues = useMemo(
+    () => validateAutomation({ name, nodes: nodes, edges }),
+    [name, nodes, edges],
+  );
   /** Issues only the server can detect (Flow not published, template not approved), from the last attempt. */
   const [serverIssues, setServerIssues] = useState<AutomationIssue[]>([]);
   const [issuesOpen, setIssuesOpen] = useState(false);
@@ -291,7 +295,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
         }
         setIsActive(!!saved?.isActive);
         if (saveGraph) {
-          lastSaved.current = { nodes, edges };
+          lastSaved.current = { nodes: nodes, edges };
           setIsDirty(false);
           setIssuesOpen(false);
         }
@@ -317,22 +321,41 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
   );
 
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const { screenToFlowPosition, fitView, deleteElements } = useReactFlow();
+  const { screenToFlowPosition, flowToScreenPosition, fitView, setCenter, getZoom, deleteElements } = useReactFlow();
 
-  // ── Show toast briefly ─────────────────────────────────────────────────
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2500);
-  }, []);
+  // ── Undo / redo (snapshots of the graph taken before each edit) ────────
+  const [history, setHistory] = useState<{ past: Snapshot[]; future: Snapshot[] }>({ past: [], future: [] });
 
-  // ── Mark dirty on graph changes (skip first mount) ─────────────────────
-  const mountedRef = useRef(false);
-  useEffect(() => {
-    if (!mountedRef.current) { mountedRef.current = true; return; }
+  /** Call before changing the graph: records the current state for Undo and marks the automation unsaved. */
+  const snapshot = useCallback(() => {
+    setHistory((h) => ({ past: [...h.past.slice(-(HISTORY_LIMIT - 1)), { nodes, edges }], future: [] }));
     setIsDirty(true);
-  // We intentionally only track node/edge identity, not data:
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes.length, edges.length]);
+  }, [nodes, edges]);
+
+  const restore = useCallback(
+    (s: Snapshot) => {
+      setNodes(s.nodes);
+      setEdges(s.edges);
+      setSelectedNodeId(null);
+      setServerIssues([]);
+      setIsDirty(true);
+    },
+    [setNodes, setEdges],
+  );
+
+  const undo = useCallback(() => {
+    const prev = history.past.at(-1);
+    if (!prev) return;
+    setHistory({ past: history.past.slice(0, -1), future: [{ nodes, edges }, ...history.future] });
+    restore(prev);
+  }, [history, nodes, edges, restore]);
+
+  const redo = useCallback(() => {
+    const [next, ...rest] = history.future;
+    if (!next) return;
+    setHistory({ past: [...history.past, { nodes, edges }], future: rest });
+    restore(next);
+  }, [history, nodes, edges, restore]);
 
   // ── isValidConnection ──────────────────────────────────────────────────
   const isValidConnection = useCallback(
@@ -370,38 +393,22 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
   // ── Connect ────────────────────────────────────────────────────────────
   const onConnect: OnConnect = useCallback(
     (params: Connection) => {
-      let style = defaultEdgeOptions.style;
-      let label: string | undefined;
-      let markerEnd = defaultEdgeOptions.markerEnd;
-
-      if (params.sourceHandle === 'true') {
-        style = { stroke: '#16a34a', strokeWidth: 2 };
-        label = 'TRUE';
-        markerEnd = { type: MarkerType.ArrowClosed, color: '#16a34a', width: 16, height: 16 };
-      } else if (params.sourceHandle === 'false') {
-        style = { stroke: '#dc2626', strokeWidth: 2 };
-        label = 'FALSE';
-        markerEnd = { type: MarkerType.ArrowClosed, color: '#dc2626', width: 16, height: 16 };
-      }
-
-      setEdges((eds) =>
-        addEdge({ ...params, style, label, markerEnd }, eds),
-      );
-      setIsDirty(true);
+      snapshot();
+      setEdges((eds) => addEdge(styleEdge({ ...params, id: newEdgeId() }), eds));
     },
-    [setEdges],
+    [setEdges, snapshot],
   );
 
   // ── Reconnect (retarget an existing edge) ──────────────────────────────
   const onReconnectStart = useCallback(() => {
     reconnectSuccessful.current = false;
-  }, []);
+    snapshot();
+  }, [snapshot]);
 
   const onReconnect: OnReconnect = useCallback(
     (oldEdge: Edge, newConnection: Connection) => {
       reconnectSuccessful.current = true;
-      setEdges((eds) => reconnectEdge(oldEdge, newConnection, eds));
-      setIsDirty(true);
+      setEdges((eds) => reconnectEdge(oldEdge, newConnection, eds).map(styleEdge));
     },
     [setEdges],
   );
@@ -411,69 +418,125 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
       // If drag ended without a valid target, remove the dangling edge
       if (!reconnectSuccessful.current) {
         setEdges((eds) => eds.filter((e) => e.id !== edge.id));
-        setIsDirty(true);
       }
       reconnectSuccessful.current = true;
     },
     [setEdges],
   );
 
-  // ── Drag over ──────────────────────────────────────────────────────────
+  // ── Adding steps ───────────────────────────────────────────────────────
+
+  /** Scrolls a step into view (keeping the zoom) when it is off-screen; uses its laid-out position. */
+  const ensureVisible = useCallback(
+    (id: string) => {
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      const node = nodesRef.current.find((n) => n.id === id);
+      if (!rect || !node) return;
+      const tl = flowToScreenPosition(node.position);
+      const br = flowToScreenPosition({ x: node.position.x + NODE_WIDTH, y: node.position.y + 120 });
+      if (tl.x < rect.left || tl.y < rect.top || br.x > rect.right || br.y > rect.bottom) {
+        setCenter(node.position.x + NODE_WIDTH / 2, node.position.y + 60, { zoom: getZoom(), duration: 300 });
+      }
+    },
+    [flowToScreenPosition, setCenter, getZoom],
+  );
+
+  /** After a step is added: open its settings when it still needs setting up. */
+  const afterAdd = useCallback(
+    (node: Node) => {
+      const data = node.data as AutomationNodeData;
+      setSelectedNodeId(nodeConfigIssues(data.type, data).length ? node.id : null);
+      // After the next render, when the step is on the canvas
+      setTimeout(() => ensureVisible(node.id), 60);
+    },
+    [ensureVisible],
+  );
+
+  /** Free placement: centre of the visible canvas, nudged so repeated adds don't stack exactly. */
+  const addFree = useCallback(
+    (type: string) => {
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      const center = rect
+        ? screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+        : { x: 0, y: 0 };
+      const nudge = (nodes.length % 5) * 24;
+      const node = createNode(type, { x: center.x - NODE_WIDTH / 2 + nudge, y: center.y - 50 + nudge });
+      snapshot();
+      setNodes((nds) => nds.concat(node));
+      afterAdd(node);
+    },
+    [nodes.length, screenToFlowPosition, setNodes, snapshot, afterAdd],
+  );
+
+  const onPick = useCallback(
+    (type: string) => {
+      const req = picker?.request;
+      setPicker(null);
+      if (!req) return;
+      if (req.kind === 'free' || req.kind === 'start') return addFree(type);
+
+      const result =
+        req.kind === 'insert'
+          ? (() => {
+              const edge = edges.find((e) => e.id === req.edgeId);
+              return edge ? insertOnEdge(nodes, edges, edge, type) : null;
+            })()
+          : appendAfter(nodes, edges, req.sourceId, req.handle, type);
+      if (!result) return;
+      snapshot();
+      setNodes(result.nodes);
+      setEdges(result.edges);
+      afterAdd(result.node);
+    },
+    [picker, nodes, edges, addFree, snapshot, setNodes, setEdges, afterAdd],
+  );
+
+  // ── Drag from toolbox ──────────────────────────────────────────────────
   const onDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
   };
 
-  // ── Drop from palette ──────────────────────────────────────────────────
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      const type = e.dataTransfer.getData('application/reactflow-type');
-      const label = e.dataTransfer.getData('application/reactflow-label');
+      const type = e.dataTransfer.getData(DRAG_TYPE);
       if (!type) return;
-
-      const bounds = wrapperRef.current?.getBoundingClientRect();
-      if (!bounds) return;
-
-      const position = screenToFlowPosition({
-        x: e.clientX,
-        y: e.clientY,
-      });
-
-      const paletteItem = PALETTE_ITEMS.find((i) => i.type === type);
-      const newNode: Node = {
-        id: newId(),
-        type,
-        position,
-        data: {
-          type,
-          label: label || paletteItem?.label || 'New Node',
-          configured: false,
-        } as AutomationNodeData,
-      };
-
-      setNodes((nds) => nds.concat(newNode));
-      setSelectedNodeId(newNode.id);
+      const at = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      // Drop point is the top-centre of the card
+      const node = createNode(type, { x: at.x - NODE_WIDTH / 2, y: at.y - 20 });
+      snapshot();
+      setNodes((nds) => nds.concat(node));
+      afterAdd(node);
     },
-    [screenToFlowPosition, setNodes],
+    [screenToFlowPosition, setNodes, snapshot, afterAdd],
   );
 
   // ── Update node data ───────────────────────────────────────────────────
   const onUpdateNodeData = useCallback(
     (id: string, updatedData: Partial<AutomationNodeData>) => {
+      snapshot();
       setNodes((nds) =>
         nds.map((n) =>
           n.id === id ? { ...n, data: { ...n.data, ...updatedData } } : n,
         ),
       );
-      setIsDirty(true);
       // The server re-checks this step on the next attempt
       setServerIssues((prev) => prev.filter((i) => i.nodeId !== id));
     },
-    [setNodes],
+    [setNodes, snapshot],
   );
 
-  // ── Delete node ────────────────────────────────────────────────────────
+  // ── Delete (keyboard, node toolbar, properties panel, edge button) ────
+  const onBeforeDelete = useCallback(
+    async ({ nodes: removed }: { nodes: Node[]; edges: Edge[] }) => {
+      snapshot();
+      if (removed.some((n) => n.id === selectedNodeId)) setSelectedNodeId(null);
+      return true;
+    },
+    [snapshot, selectedNodeId],
+  );
+
   const onDeleteNode = useCallback(
     (id: string) => {
       deleteElements({ nodes: [{ id }] });
@@ -486,16 +549,25 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
   const onSave = useCallback(async () => {
     if (syncing) return;
     if (clientIssues.length) return showIssues('save');
-    if (await syncToServer('save')) showToast('Automation saved');
-  }, [syncing, clientIssues.length, showIssues, showToast, syncToServer]);
+    if (await syncToServer('save')) gooeyToast.success('Automation saved');
+  }, [syncing, clientIssues.length, showIssues, syncToServer]);
+
+  /** Activation is only offered for a saved automation with no unsaved changes and no issues. */
+  const canActivate = serverId !== null && !isDirty && issues.length === 0;
+  const activateBlockedReason = serverId === null
+    ? 'Save this automation first'
+    : isDirty
+      ? 'Save your changes first'
+      : issues.length
+        ? `Fix ${issues.length} ${issues.length === 1 ? 'issue' : 'issues'} first`
+        : null;
 
   const onActivate = useCallback(async () => {
-    if (syncing) return;
-    if (clientIssues.length) return showIssues('activate');
+    if (syncing || !canActivate) return;
     if (await syncToServer('activate')) {
       gooeyToast.success('Automation activated', { description: 'It now runs on matching incoming messages.' });
     }
-  }, [syncing, clientIssues.length, showIssues, syncToServer]);
+  }, [syncing, canActivate, syncToServer]);
 
   const onPause = useCallback(async () => {
     if (syncing) return;
@@ -516,28 +588,83 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
     [fitView],
   );
 
-  // ── Reset (back to the last saved version) ─────────────────────────────
-  const onReset = useCallback(() => {
+  // ── Discard (back to the last saved version; undoable) ─────────────────
+  const onDiscard = useCallback(() => {
+    snapshot();
     setNodes(lastSaved.current.nodes);
     setEdges(lastSaved.current.edges);
     setSelectedNodeId(null);
     setIsDirty(false);
     setServerIssues([]);
-  }, [setNodes, setEdges]);
+  }, [setNodes, setEdges, snapshot]);
 
-  // ── Keyboard save ──────────────────────────────────────────────────────
-  React.useEffect(() => {
+  // ── Import / export ────────────────────────────────────────────────────
+  const onExport = useCallback(() => {
+    const blob = new Blob([JSON.stringify(toServerGraph(nodes, edges), null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name.trim().replace(/[^\w-]+/g, '-').toLowerCase() || 'automation'}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [nodes, edges, name]);
+
+  const onImport = useCallback(
+    (file: File) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const g = JSON.parse(ev.target?.result as string);
+          if (!Array.isArray(g.nodes)) throw new Error('No steps in this file');
+          snapshot();
+          setNodes(g.nodes);
+          setEdges(Array.isArray(g.edges) ? g.edges.map(styleEdge) : []);
+          setSelectedNodeId(null);
+          requestAnimationFrame(() => fitView({ padding: 0.25, duration: 300 }));
+          gooeyToast.success('Automation imported', { description: 'Review it, then save to keep it.' });
+        } catch {
+          gooeyToast.error("Couldn't import that file", { description: 'Choose a JSON file exported from the Automation Builder.' });
+        }
+      };
+      reader.readAsText(file);
+    },
+    [snapshot, setNodes, setEdges, fitView],
+  );
+
+  // ── Back navigation and leaving the page ───────────────────────────────
+  const onBackClick = useCallback(() => {
+    if (!isDirty || window.confirm('You have unsaved changes. Leave without saving?')) onBack();
+  }, [isDirty, onBack]);
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [isDirty]);
+
+  // ── Keyboard shortcuts ─────────────────────────────────────────────────
+  useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === 's') {
         e.preventDefault();
         onSave();
+      } else if (!isEditableTarget(e.target) && (key === 'z' || key === 'y')) {
+        e.preventDefault();
+        if (key === 'y' || e.shiftKey) redo();
+        else undo();
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onSave]);
+  }, [onSave, undo, redo]);
 
-  // ── Enrich nodes with _onConfigure callback ────────────────────────────
+  // ── Render data ────────────────────────────────────────────────────────
   const issuesByNode = useMemo(() => {
     const map = new Map<string, string[]>();
     if (!markIssues) return map;
@@ -549,159 +676,84 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
     () =>
       nodes.map((n) => ({
         ...n,
-        data: { ...n.data, _onConfigure: setSelectedNodeId, _issues: issuesByNode.get(n.id) },
+        data: {
+          ...n.data,
+          _issues: issuesByNode.get(n.id),
+          _active: n.id === selectedNodeId,
+          _free: freeHandles(n, edges),
+        },
       })),
-    [nodes, issuesByNode],
+    [nodes, edges, issuesByNode, selectedNodeId],
+  );
+
+  const actions = useMemo<BuilderActions>(
+    () => ({
+      openNode: setSelectedNodeId,
+      deleteNode: onDeleteNode,
+      deleteEdge: (id) => deleteElements({ edges: [{ id }] }),
+      openPicker: (request, anchor) => setPicker({ request, anchor }),
+    }),
+    [onDeleteNode, deleteElements],
   );
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
 
+  /** Steps can be dragged anywhere on the canvas; each drag is one undo step. */
+  const onNodeDragStart = useCallback(() => {
+    snapshot();
+    setDragging(true);
+  }, [snapshot]);
+
   return (
-    <div className="flex h-full w-full overflow-hidden">
-      {/* ── Toast ─────────────────────────────────────────────────────────── */}
-      {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-slate-800 text-white text-[12px] font-medium px-4 py-2.5 rounded-xl shadow-xl animate-fade-in-up">
-          <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
-          {toast}
-        </div>
-      )}
+    <BuilderContext.Provider value={actions}>
+      <div className="flex flex-col h-full w-full overflow-hidden bg-white">
+        <BuilderHeader
+          name={name}
+          onNameChange={(v) => { setName(v); setIsDirty(true); }}
+          description={description}
+          onDescriptionChange={(v) => { setDescription(v); setIsDirty(true); }}
+          isNew={serverId === null}
+          isActive={isActive}
+          isDirty={isDirty}
+          syncing={syncing}
+          issueCount={issues.length}
+          issuesOpen={issuesOpen}
+          onToggleIssues={() => (issuesOpen ? setIssuesOpen(false) : showIssues(null))}
+          canUndo={history.past.length > 0}
+          canRedo={history.future.length > 0}
+          onUndo={undo}
+          onRedo={redo}
+          onSave={onSave}
+          onActivate={onActivate}
+          activateBlockedReason={activateBlockedReason}
+          onPause={onPause}
+          onBack={onBackClick}
+          onExport={onExport}
+          onImport={onImport}
+          onDiscard={onDiscard}
+        />
 
-      {/* ── Palette sidebar ───────────────────────────────────────────────── */}
-      <FlowPalette />
+        <div className="flex-1 flex overflow-hidden relative">
+          <FlowPalette />
 
-      {/* ── Canvas column ─────────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top bar */}
-        <div className="h-12 px-4 bg-white border-b border-slate-200 flex items-center gap-3 shrink-0 z-10">
-          <div className="flex items-center gap-2 min-w-0">
-            <button
-              onClick={() => (!isDirty || window.confirm('You have unsaved changes. Leave without saving?')) && onBack()}
-              className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
-              title="Back to automations"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-            <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-300'}`} />
-            <span className="text-[13px] font-semibold text-slate-800 hidden xl:inline">Automation Builder</span>
-            <span className="text-[11px] text-slate-400 hidden xl:inline">/</span>
-            <input
-              value={name}
-              onChange={(e) => { setName(e.target.value); setIsDirty(true); }}
-              placeholder="Automation name"
-              className="w-44 text-[12px] font-semibold text-slate-700 bg-transparent border border-transparent rounded-lg px-2 py-1 hover:border-slate-200 focus:border-[#3440a8]/40 focus:outline-none"
-            />
-            <input
-              value={description}
-              onChange={(e) => { setDescription(e.target.value); setIsDirty(true); }}
-              placeholder="Add a description…"
-              maxLength={500}
-              className="w-56 text-[11px] text-slate-500 bg-transparent border border-transparent rounded-lg px-2 py-1 hover:border-slate-200 focus:border-[#3440a8]/40 focus:outline-none hidden lg:block"
-            />
-            {isDirty && (
-              <span className="text-[10px] font-medium text-amber-500 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md">
-                Unsaved
-              </span>
-            )}
-          </div>
-          <div className="flex-1" />
-          <div className="flex items-center gap-1.5">
-            {issues.length > 0 && (
-              <button
-                onClick={() => (issuesOpen ? setIssuesOpen(false) : showIssues(null))}
-                className="flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-lg border text-red-600 bg-red-50 border-red-200 hover:bg-red-100 transition-colors"
-                title="Show what needs to be fixed before saving or activating"
-              >
-                <AlertTriangle className="w-3.5 h-3.5" />
-                {issues.length} {issues.length === 1 ? 'issue' : 'issues'}
-              </button>
-            )}
-            <button
-              onClick={isActive ? onPause : onActivate}
-              disabled={syncing}
-              className={`flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-60 ${
-                isActive
-                  ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
-                  : 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'
-              }`}
-              title={isActive ? 'Running on incoming messages. Click to pause.' : 'Validate, save and start running this automation'}
-            >
-              {syncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Power className="w-3.5 h-3.5" />}
-              {isActive ? 'Active' : 'Activate'}
-            </button>
-            <button
-              onClick={onSave}
-              disabled={syncing}
-              className="flex items-center gap-1.5 text-[11px] font-semibold text-white bg-[#3440a8] hover:bg-[#2a3490] disabled:opacity-60 px-3 py-1.5 rounded-lg transition-colors"
-            >
-              <Save className="w-3.5 h-3.5" />
-              Save
-            </button>
-            <button
-              onClick={() => {
-                const blob = new Blob(
-                  [JSON.stringify({ nodes, edges }, null, 2)],
-                  { type: 'application/json' },
-                );
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'automation-flow.json';
-                a.click();
-                URL.revokeObjectURL(url);
-              }}
-              className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100 transition-colors"
-              title="Export JSON"
-            >
-              <Download className="w-3.5 h-3.5" />
-            </button>
-            <label
-              className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer"
-              title="Import JSON"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <input
-                type="file"
-                accept=".json"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const reader = new FileReader();
-                  reader.onload = (ev) => {
-                    try {
-                      const g = JSON.parse(ev.target?.result as string);
-                      if (Array.isArray(g.nodes)) setNodes(g.nodes);
-                      if (Array.isArray(g.edges)) setEdges(g.edges);
-                    } catch { /* ignore */ }
-                  };
-                  reader.readAsText(file);
-                }}
-              />
-            </label>
-          </div>
-        </div>
-
-        {/* Canvas + optional config panel */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* ReactFlow canvas */}
+          {/* Canvas */}
           <div
             ref={wrapperRef}
-            className="flex-1 relative"
+            className={`af-canvas flex-1 relative bg-[#f6f7fb] ${dragging ? 'af-dragging' : ''}`}
             onDrop={onDrop}
             onDragOver={onDragOver}
           >
             {issuesOpen && (
               <AutomationIssuesPanel
                 issues={issues}
-                intent={issuesIntent}
+                intent={issuesIntent === 'activate' && !canActivate ? 'save' : issuesIntent}
                 onSelectNode={focusNode}
                 onClose={() => setIssuesOpen(false)}
-                onProceed={issuesIntent === 'activate' ? onActivate : onSave}
+                onProceed={issuesIntent === 'activate' && canActivate ? onActivate : onSave}
                 busy={syncing}
               />
             )}
+
             <ReactFlow
               nodes={enrichedNodes}
               edges={edges}
@@ -712,78 +764,59 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
               onReconnect={onReconnect}
               onReconnectStart={onReconnectStart}
               onReconnectEnd={onReconnectEnd}
+              onBeforeDelete={onBeforeDelete}
+              onNodeDragStart={onNodeDragStart}
+              onNodeDragStop={() => setDragging(false)}
               nodeTypes={NODE_TYPES}
+              edgeTypes={EDGE_TYPES}
+              connectionLineType={ConnectionLineType.SmoothStep}
               onNodeClick={(_, node) => setSelectedNodeId(node.id)}
               onPaneClick={() => setSelectedNodeId(null)}
               fitView
-              fitViewOptions={{ padding: 0.3 }}
-              deleteKeyCode="Delete"
+              fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
+              minZoom={0.2}
+              maxZoom={2}
+              deleteKeyCode={['Delete', 'Backspace']}
               multiSelectionKeyCode="Shift"
               connectionRadius={40}
               snapToGrid
               snapGrid={[16, 16]}
+              proOptions={{ hideAttribution: true }}
             >
-              <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#e2e8f0" />
-              <Controls className="!shadow-sm !border !border-slate-200 !rounded-xl overflow-hidden" />
-              <MiniMap
-                nodeColor={(n) => {
-                  const t = String((n.data as AutomationNodeData).type ?? '');
-                  if (t.startsWith('trigger_')) return '#93c5fd';
-                  if (t.startsWith('condition_')) return '#fde047';
-                  if (t.startsWith('action_')) return '#86efac';
-                  return '#d8b4fe';
-                }}
-                className="!rounded-xl !border !border-slate-200 !shadow-sm"
-              />
-
-              {/* Toolbar */}
-              <Panel position="top-right">
-                <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl shadow-sm px-3 py-2">
-                  <button
-                    onClick={() => fitView({ padding: 0.3, duration: 400 })}
-                    className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 px-2.5 py-1.5 rounded-lg transition-colors"
-                  >
-                    <Maximize2 className="w-3.5 h-3.5" />
-                    Fit
-                  </button>
-                  <div className="w-px h-4 bg-slate-200" />
-                  <button
-                    onClick={onReset}
-                    className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:bg-slate-100 px-2.5 py-1.5 rounded-lg transition-colors"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Reset
-                  </button>
-                </div>
-              </Panel>
-
-              {/* Node / edge count */}
-              <Panel position="bottom-left">
-                <div className="bg-white/80 backdrop-blur-sm border border-slate-200 rounded-xl px-3 py-1.5 flex items-center gap-2 text-[11px] text-slate-500 shadow-sm mb-10">
-                  <Zap className="w-3 h-3 text-[#3440a8]" />
-                  <span>
-                    <strong className="text-slate-700">{nodes.length}</strong> nodes ·{' '}
-                    <strong className="text-slate-700">{edges.length}</strong> connections
-                  </span>
-                </div>
-              </Panel>
+              <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} color="#d5dae6" />
+              <CanvasControls minimap={minimap} onToggleMinimap={() => setMinimap((m) => !m)} />
+              {minimap && (
+                <MiniMap
+                  pannable
+                  zoomable
+                  nodeColor={(n) => themeOf(String((n.data as AutomationNodeData).type ?? '')).accent}
+                  nodeBorderRadius={6}
+                  maskColor="rgba(241,245,249,0.7)"
+                  className="!rounded-xl !border !border-slate-200 !shadow-sm !m-3"
+                />
+              )}
             </ReactFlow>
           </div>
 
-          {/* Config panel */}
+          {/* Properties panel */}
           {selectedNode && (
             <ConfigPanel
               key={selectedNode.id}
               nodeId={selectedNode.id}
               data={selectedNode.data as AutomationNodeData}
+              issues={issuesByNode.get(selectedNode.id)}
               onUpdate={onUpdateNodeData}
               onClose={() => setSelectedNodeId(null)}
               onDelete={onDeleteNode}
             />
           )}
         </div>
+
+        {picker && (
+          <NodePicker request={picker.request} anchor={picker.anchor} onPick={onPick} onClose={() => setPicker(null)} />
+        )}
       </div>
-    </div>
+    </BuilderContext.Provider>
   );
 }
 
@@ -818,12 +851,7 @@ export default function FlowView({ automationId, startFrom = 'blank', onBack, on
         archived: !!a.archivedAt,
         // Saved nodes/edges carry their full builder data, so they open exactly as configured
         nodes: (a.graph?.nodes ?? []) as Node[],
-        edges: ((a.graph?.edges ?? []) as Edge[]).map((e) => ({
-          ...defaultEdgeOptions,
-          ...e,
-          ...(e.sourceHandle === 'true' ? { style: { stroke: '#16a34a', strokeWidth: 2 }, markerEnd: { type: MarkerType.ArrowClosed, color: '#16a34a' } } : {}),
-          ...(e.sourceHandle === 'false' ? { style: { stroke: '#dc2626', strokeWidth: 2 }, markerEnd: { type: MarkerType.ArrowClosed, color: '#dc2626' } } : {}),
-        })),
+        edges: ((a.graph?.edges ?? []) as Edge[]).map(styleEdge),
       });
     } catch (err) {
       setError(err);

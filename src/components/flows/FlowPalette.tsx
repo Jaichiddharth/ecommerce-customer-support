@@ -22,6 +22,15 @@ function NodeIcon({ name, className }: { name: string; className?: string }) {
   return <Icon className={className} />;
 }
 
+// ─── Original toolbox colours (per category) ──────────────────────────────────
+
+const ITEM_COLORS: Record<NodeCategory, { color: string; textColor: string }> = {
+  triggers: { color: '#dbeafe', textColor: '#1d4ed8' },
+  conditions: { color: '#fef9c3', textColor: '#a16207' },
+  actions: { color: '#dcfce7', textColor: '#15803d' },
+  'flow-controls': { color: '#fee2e2', textColor: '#b91c1c' },
+};
+
 // ─── Category header ──────────────────────────────────────────────────────────
 
 function CategoryHeader({ label, onToggle }: { label: string; onToggle: () => void }) {
@@ -60,7 +69,7 @@ function PaletteNodeCard({ item }: { item: PaletteItem }) {
                  hover:border-slate-300 hover:shadow-sm
                  transition-all duration-150"
     >
-      <div style={{ color: item.textColor }}>
+      <div style={{ color: ITEM_COLORS[item.category].textColor }}>
         <NodeIcon name={item.icon} className="w-4 h-4" />
       </div>
       <p className="text-[10px] font-medium text-slate-600 text-center leading-tight line-clamp-2 w-full">
@@ -90,7 +99,7 @@ function PaletteSearchCard({ item }: { item: PaletteItem }) {
     >
       <div
         className="w-6 h-6 rounded-md flex items-center justify-center shrink-0"
-        style={{ backgroundColor: item.color, color: item.textColor }}
+        style={{ backgroundColor: ITEM_COLORS[item.category].color, color: ITEM_COLORS[item.category].textColor }}
       >
         <NodeIcon name={item.icon} className="w-3.5 h-3.5" />
       </div>
