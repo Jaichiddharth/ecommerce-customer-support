@@ -31,7 +31,6 @@ interface GraphEdge {
 /** Triggers the runtime starts runs from. */
 const RUNNABLE_TRIGGERS = new Set(["trigger_incoming_message", "trigger_keyword"]);
 const SEND_FLOW = "action_send_whatsapp_flow";
-const WAIT_FLOW = "flow_wait_flow_submission";
 
 const text = (d: Record<string, unknown>, key: string) => String(d[key] ?? "").trim();
 
@@ -40,7 +39,6 @@ export function nodeConfigIssues(type: string, d: Record<string, unknown>): stri
   const out: string[] = [];
   switch (type) {
     case "trigger_incoming_message":
-    case "flow_branch":
     case "flow_end":
       break;
 
@@ -86,16 +84,6 @@ export function nodeConfigIssues(type: string, d: Record<string, unknown>): stri
       } else if (!d.templateId) {
         out.push("Choose an approved template that opens this Flow.");
       }
-      break;
-
-    case "flow_delay": {
-      const amount = Number(d.delayAmount);
-      if (!Number.isFinite(amount) || amount < 1) out.push("Set how long to wait (at least 1).");
-      break;
-    }
-
-    case WAIT_FLOW:
-      if (d.timeoutHours !== undefined && !(Number(d.timeoutHours) >= 1)) out.push("Set a timeout of at least 1 hour.");
       break;
 
     default:
@@ -185,22 +173,6 @@ export function validateAutomation(input: { name?: string; nodes: GraphNode[]; e
 
     if (loopTargets.has(n.id)) add(n, "Is part of a loop, so the automation would never finish. Remove a connection to break it.");
 
-    if (type === WAIT_FLOW) {
-      const upstream = new Set<string>();
-      const stack = [n.id];
-      while (stack.length) {
-        const cur = stack.pop()!;
-        for (const e of incoming.get(cur) ?? []) {
-          if (!upstream.has(e.source)) {
-            upstream.add(e.source);
-            stack.push(e.source);
-          }
-        }
-      }
-      if (![...upstream].some((id) => typeOf(byId.get(id)!) === SEND_FLOW)) {
-        add(n, "Place it after a Send WhatsApp Flow step.");
-      }
-    }
   }
 
   return issues;

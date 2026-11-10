@@ -98,8 +98,5 @@ export const NODE_TYPE_LABELS: Record<string, string> = {
   action_assign_conversation: 'Assign Conversation',
   action_update_contact: 'Update Contact',
   action_send_whatsapp_flow: 'Send WhatsApp Flow',
-  flow_wait_flow_submission: 'Wait for Flow Submission',
-  flow_delay: 'Delay',
-  flow_branch: 'Branch',
   flow_end: 'End Workflow',
 };
