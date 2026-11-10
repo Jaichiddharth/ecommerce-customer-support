@@ -558,12 +558,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
     });
   }, [isAgentOrViewer]);
 
-  const [activeSection, setActiveSection] = useState<Section>('whatsapp');
+  const [activeSection, setActiveSection] = useState<Section>('channels');
 
-  // If role is Agent or Viewer and active section was team, fallback to whatsapp
+  // If role is Agent or Viewer and active section was team, fall back to channels
   useEffect(() => {
     if (isAgentOrViewer && activeSection === 'team') {
-      setActiveSection('whatsapp');
+      setActiveSection('channels');
     }
   }, [isAgentOrViewer, activeSection]);
 
@@ -669,7 +669,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
               {activeSection === 'consent' && <ConsentPrivacySection />}
             </>
           )}
-          {activeSection === 'consent' && <ConsentPrivacySection />}
         </main>
       </div>
     </div>
