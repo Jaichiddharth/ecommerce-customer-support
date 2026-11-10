@@ -72,7 +72,7 @@ export const Modal: React.FC<ModalProps> = ({
 
   return (
     <div
-      className={`fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4 ${overlayClassName}`}
+      className={`fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto ${overlayClassName}`}
       onClick={(e) => {
         if (closeOnOverlayClick && e.target === e.currentTarget) {
           onClose();
@@ -82,13 +82,13 @@ export const Modal: React.FC<ModalProps> = ({
       <div
         role="dialog"
         aria-modal="true"
-        className={`bg-white rounded-2xl shadow-2xl ${resolvedMaxWidth} w-full p-5 space-y-4 border border-slate-200 animate-in fade-in zoom-in-95 ${className}`}
+        className={`bg-white rounded-2xl shadow-2xl ${resolvedMaxWidth} w-full max-h-[92vh] flex flex-col p-5 space-y-4 border border-slate-200 animate-in fade-in zoom-in-95 ${className}`}
         onClick={(e) => e.stopPropagation()}
       >
         {header !== undefined ? (
           header
         ) : hasHeader ? (
-          <div className={`flex items-center justify-between border-b border-slate-100 pb-3 ${headerClassName}`}>
+          <div className={`flex items-center justify-between border-b border-slate-100 pb-3 shrink-0 ${headerClassName}`}>
             <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
               {icon}
               {title}
@@ -107,11 +107,13 @@ export const Modal: React.FC<ModalProps> = ({
         ) : null}
 
         {bodyClassName ? (
-          <div className={bodyClassName}>
+          <div className={`overflow-y-auto min-h-0 flex-1 ${bodyClassName}`}>
             {children}
           </div>
         ) : (
-          children
+          <div className="overflow-y-auto min-h-0 flex-1">
+            {children}
+          </div>
         )}
       </div>
     </div>

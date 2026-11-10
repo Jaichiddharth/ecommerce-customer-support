@@ -342,30 +342,30 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
   const isAllDelete = WORKSPACE_PAGES.every((p) => effectivePermissions[p.key]?.delete);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3 w-full max-w-full">
       {/* Top Banner & Presets */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
-        <div>
-          <div className="flex items-center gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 border-b border-slate-200 w-full">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center flex-wrap gap-1.5 sm:gap-2">
             <span className="font-bold text-slate-900 text-sm">
               Page Permissions: <span className="text-[#1e2a78]">{member.name}</span>
             </span>
-            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#eef0fb] text-[#1e2a78] uppercase">
+            <span className="px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-[#eef0fb] text-[#1e2a78] uppercase">
               {roleUpper}
             </span>
             {isPermissionsLocked && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-200">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-100 text-amber-900 border border-amber-200">
                 <Lock className="w-3 h-3 text-amber-700" />
                 Locked
               </span>
             )}
             {!isPermissionsLocked && hasCustomPagePermissions(member) && (
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-100 text-purple-700">
+              <span className="px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-purple-100 text-purple-700">
                 Custom Overrides Active
               </span>
             )}
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-[11px] text-slate-500 mt-0.5">
             {isPermissionsLocked
               ? 'Page Create, Read, Update, and Delete permissions are locked in read-only mode for this role.'
               : 'Configure individual Create, Read, Update, and Delete permissions across all pages for this user.'}
@@ -375,25 +375,25 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
         {/* Preset Toolbar */}
         {canManage && (
           canEdit ? (
-            <div className="flex items-center flex-wrap gap-1.5 shrink-0">
+            <div className="flex items-center flex-wrap gap-1 shrink-0">
               <button
                 type="button"
                 onClick={() => applyPreset('all')}
-                className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs"
+                className="px-2 py-1 text-[11px] font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs shrink-0"
               >
                 Grant All
               </button>
               <button
                 type="button"
                 onClick={() => applyPreset('readOnly')}
-                className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs"
+                className="px-2 py-1 text-[11px] font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs shrink-0"
               >
                 Read Only
               </button>
               <button
                 type="button"
                 onClick={() => applyPreset('defaults')}
-                className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
+                className="px-2 py-1 text-[11px] font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1 shrink-0"
               >
                 <RotateCcw className="w-3 h-3 text-slate-500" />
                 Role Defaults
@@ -401,13 +401,13 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
               <button
                 type="button"
                 onClick={() => applyPreset('clear')}
-                className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-red-200 hover:bg-red-50 text-slate-600 hover:text-red-600 rounded-lg cursor-pointer transition-colors shadow-2xs"
+                className="px-2 py-1 text-[11px] font-semibold bg-white border border-slate-200 hover:border-red-200 hover:bg-red-50 text-slate-600 hover:text-red-600 rounded-lg cursor-pointer transition-colors shadow-2xs shrink-0"
               >
                 Clear All
               </button>
             </div>
           ) : (
-            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-600 shadow-2xs">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-600 shadow-2xs shrink-0">
               <Lock className="w-3.5 h-3.5 text-slate-500 stroke-[2.2]" />
               <span>Permissions Locked</span>
             </div>
@@ -416,7 +416,7 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
       </div>
 
       {isTargetOwner && (
-        <div className="p-3.5 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-start gap-2.5 text-xs text-amber-900 shadow-2xs">
+        <div className="p-2.5 sm:p-3 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-start gap-2.5 text-xs text-amber-900 shadow-2xs">
           <div className="w-6 h-6 rounded-lg bg-amber-100 border border-amber-200 flex items-center justify-center shrink-0 text-amber-700 mt-0.5">
             <Lock className="w-3.5 h-3.5 stroke-[2.5]" />
           </div>
@@ -435,7 +435,7 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
       )}
 
       {!isTargetOwner && isPermissionsLocked && (
-        <div className="p-3.5 bg-slate-100 border border-slate-200 rounded-xl flex items-start gap-2.5 text-xs text-slate-800 shadow-2xs">
+        <div className="p-2.5 sm:p-3 bg-slate-100 border border-slate-200 rounded-xl flex items-start gap-2.5 text-xs text-slate-800 shadow-2xs">
           <div className="w-6 h-6 rounded-lg bg-slate-200 flex items-center justify-center shrink-0 text-slate-600 mt-0.5">
             <Lock className="w-3.5 h-3.5 stroke-[2.5]" />
           </div>
@@ -456,16 +456,17 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
       )}
 
       {/* Pages CRUD Matrix Table */}
-      <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white shadow-2xs">
-        <table className="w-full text-left text-sm border-collapse">
-          <thead>
-            <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-              <th className="py-2.5 px-4 font-semibold w-2/5">Page / Module</th>
+      <div className="border border-slate-200 rounded-xl bg-white shadow-2xs overflow-hidden w-full max-w-full">
+        <div className="max-h-[340px] sm:max-h-[420px] overflow-y-auto">
+          <table className="w-full text-left text-xs border-collapse table-auto">
+            <thead className="sticky top-0 bg-slate-50 z-10 shadow-2xs">
+              <tr className="border-b border-slate-200 bg-slate-50 text-[10.5px] font-bold text-slate-600 uppercase tracking-wider">
+              <th className="py-2 px-3 font-semibold">Page / Module</th>
               
               {/* CREATE Column */}
-              <th className="py-2.5 px-3 text-center font-semibold">
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-slate-700 font-bold">CREATE</span>
+              <th className="py-2 px-1 text-center font-semibold w-12 sm:w-16">
+                <div className="flex flex-col items-center gap-0.5">
+                  <span className="text-slate-700 font-bold text-[10px] sm:text-[11px]">CREATE</span>
                   {canManage && (
                     <label className={`inline-flex items-center ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} title={canEdit ? "Toggle all Create permissions" : "Permissions locked"}>
                       <input
@@ -481,9 +482,9 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
               </th>
 
               {/* READ Column */}
-              <th className="py-2.5 px-3 text-center font-semibold">
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-slate-700 font-bold">READ</span>
+              <th className="py-2 px-1 text-center font-semibold w-12 sm:w-16">
+                <div className="flex flex-col items-center gap-0.5">
+                  <span className="text-slate-700 font-bold text-[10px] sm:text-[11px]">READ</span>
                   {canManage && (
                     <label className={`inline-flex items-center ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} title={canEdit ? "Toggle all Read permissions" : "Permissions locked"}>
                       <input
@@ -499,9 +500,9 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
               </th>
 
               {/* UPDATE Column */}
-              <th className="py-2.5 px-3 text-center font-semibold">
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-slate-700 font-bold">UPDATE</span>
+              <th className="py-2 px-1 text-center font-semibold w-12 sm:w-16">
+                <div className="flex flex-col items-center gap-0.5">
+                  <span className="text-slate-700 font-bold text-[10px] sm:text-[11px]">UPDATE</span>
                   {canManage && (
                     <label className={`inline-flex items-center ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} title={canEdit ? "Toggle all Update permissions" : "Permissions locked"}>
                       <input
@@ -517,9 +518,9 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
               </th>
 
               {/* DELETE Column */}
-              <th className="py-2.5 px-3 text-center font-semibold">
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-slate-700 font-bold">DELETE</span>
+              <th className="py-2 px-1 text-center font-semibold w-12 sm:w-16">
+                <div className="flex flex-col items-center gap-0.5">
+                  <span className="text-slate-700 font-bold text-[10px] sm:text-[11px]">DELETE</span>
                   {canManage && (
                     <label className={`inline-flex items-center ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} title={canEdit ? "Toggle all Delete permissions" : "Permissions locked"}>
                       <input
@@ -535,7 +536,7 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
               </th>
 
               {/* Row Toggle */}
-              <th className="py-2.5 px-4 text-center font-semibold text-slate-500">Row</th>
+              <th className="py-2 px-2 text-center font-semibold text-slate-500 w-12 sm:w-14 text-[10px] sm:text-[11px]">Row</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -548,84 +549,84 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
               return (
                 <tr key={page.key} className="hover:bg-slate-50/80 transition-colors">
                   {/* Page / Module info */}
-                  <td className="py-3 px-4">
-                    <div className="flex items-start gap-2.5">
-                      <div className="w-8 h-8 rounded-lg bg-indigo-50/80 border border-indigo-100 flex items-center justify-center shrink-0 mt-0.5 text-[#1e2a78]">
-                        <Icon className="w-4 h-4" />
+                  <td className="py-2 px-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-indigo-50/80 border border-indigo-100 flex items-center justify-center shrink-0 text-[#1e2a78]">
+                        <Icon className="w-3.5 h-3.5" />
                       </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-slate-900 text-xs">{page.label}</span>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-medium">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-semibold text-slate-900 text-xs truncate">{page.label}</span>
+                          <span className="text-[9.5px] px-1 py-0.2 rounded bg-slate-100 text-slate-500 font-medium">
                             {page.category}
                           </span>
                         </div>
-                        <p className="text-[11px] text-slate-400 truncate max-w-sm">{page.description}</p>
+                        <p className="text-[10.5px] text-slate-400 truncate max-w-[200px] sm:max-w-xs">{page.description}</p>
                       </div>
                     </div>
                   </td>
 
                   {/* Create Checkbox */}
-                  <td className="py-3 px-3 text-center">
-                    <label className={`inline-flex items-center justify-center p-1 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                  <td className="py-2 px-1 text-center">
+                    <label className={`inline-flex items-center justify-center p-0.5 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
                       <input
                         type="checkbox"
                         checked={Boolean(perm.create)}
                         disabled={!canEdit || isSaving}
                         onChange={() => toggleCell(page.key, 'create')}
-                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
                       />
                     </label>
                   </td>
 
                   {/* Read Checkbox */}
-                  <td className="py-3 px-3 text-center">
-                    <label className={`inline-flex items-center justify-center p-1 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                  <td className="py-2 px-1 text-center">
+                    <label className={`inline-flex items-center justify-center p-0.5 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
                       <input
                         type="checkbox"
                         checked={Boolean(perm.read)}
                         disabled={!canEdit || isSaving}
                         onChange={() => toggleCell(page.key, 'read')}
-                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
                       />
                     </label>
                   </td>
 
                   {/* Update Checkbox */}
-                  <td className="py-3 px-3 text-center">
-                    <label className={`inline-flex items-center justify-center p-1 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                  <td className="py-2 px-1 text-center">
+                    <label className={`inline-flex items-center justify-center p-0.5 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
                       <input
                         type="checkbox"
                         checked={Boolean(perm.update)}
                         disabled={!canEdit || isSaving}
                         onChange={() => toggleCell(page.key, 'update')}
-                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
                       />
                     </label>
                   </td>
 
                   {/* Delete Checkbox */}
-                  <td className="py-3 px-3 text-center">
-                    <label className={`inline-flex items-center justify-center p-1 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                  <td className="py-2 px-1 text-center">
+                    <label className={`inline-flex items-center justify-center p-0.5 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
                       <input
                         type="checkbox"
                         checked={Boolean(perm.delete)}
                         disabled={!canEdit || isSaving}
                         onChange={() => toggleCell(page.key, 'delete')}
-                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
                       />
                     </label>
                   </td>
 
                   {/* Row toggle button */}
-                  <td className="py-3 px-4 text-center">
+                  <td className="py-2 px-2 text-center">
                     {canManage && (
                       canEdit ? (
                         <button
                           type="button"
                           onClick={() => toggleAllForPage(page.key)}
                           disabled={isSaving}
-                          className={`text-[11px] font-semibold px-2 py-0.5 rounded transition-colors cursor-pointer ${
+                          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
                             isRowAll
                               ? 'bg-indigo-50 text-[#1e2a78] hover:bg-indigo-100'
                               : isRowNone
@@ -638,10 +639,10 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
                         </button>
                       ) : (
                         <span
-                          className="text-[11px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-500 inline-flex items-center gap-1 cursor-not-allowed"
+                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 inline-flex items-center gap-0.5 cursor-not-allowed"
                           title="Permissions locked"
                         >
-                          <Lock className="w-3 h-3 text-slate-400" />
+                          <Lock className="w-2.5 h-2.5 text-slate-400" />
                           {isRowAll ? 'All ✓' : isRowNone ? 'None' : 'Mixed'}
                         </span>
                       )
@@ -652,15 +653,16 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Action Footer Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-slate-500 font-medium">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1 w-full">
+        <div className="flex items-center gap-2.5">
+          <span className="text-[11px] sm:text-xs text-slate-500 font-medium">
             <strong>{countGranted}</strong> of <strong>{totalPossible}</strong> permissions granted
           </span>
-          <div className="w-24 bg-slate-200 h-1.5 rounded-full overflow-hidden">
+          <div className="w-20 sm:w-24 bg-slate-200 h-1.5 rounded-full overflow-hidden">
             <div
               className="bg-[#1e2a78] h-full rounded-full transition-all duration-300"
               style={{ width: `${Math.round((countGranted / totalPossible) * 100)}%` }}
@@ -668,7 +670,7 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 justify-end">
+        <div className="flex items-center gap-2 justify-end shrink-0">
           <button
             type="button"
             onClick={onClose}
@@ -683,7 +685,7 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
               type="button"
               onClick={onSave}
               disabled={isSaving}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1e2a78] hover:bg-[#16205e] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer shadow-sm transition-all"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#1e2a78] hover:bg-[#16205e] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer shadow-sm transition-all shrink-0"
             >
               {isSaving ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1174,7 +1176,7 @@ export const TeamRolesSection: React.FC = () => {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-8 py-4 space-y-8 pb-16 font-sans">
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 space-y-6 pb-16 font-sans">
       {/* Top Header & Breadcrumb */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -1356,14 +1358,14 @@ export const TeamRolesSection: React.FC = () => {
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50/50">
-                  <th className="py-3 px-6 font-semibold">Member</th>
-                  <th className="py-3 px-6 font-semibold">Role</th>
-                  <th className="py-3 px-6 font-semibold">Permissions</th>
-                  <th className="py-3 px-6 font-semibold">Stores</th>
-                  <th className="py-3 px-6 font-semibold">Teams</th>
-                  <th className="py-3 px-6 font-semibold">Languages</th>
-                  <th className="py-3 px-6 font-semibold">Status</th>
-                  <th className="py-3 px-6 text-right font-semibold"></th>
+                  <th className="py-2.5 px-3 sm:px-4 font-semibold">Member</th>
+                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Role</th>
+                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Permissions</th>
+                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Stores</th>
+                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Teams</th>
+                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Languages</th>
+                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Status</th>
+                  <th className="py-2.5 px-2 sm:px-3 text-right font-semibold"></th>
                 </tr>
               </thead>
               
@@ -1403,10 +1405,10 @@ export const TeamRolesSection: React.FC = () => {
                       <React.Fragment key={member.id}>
                         <tr className={`transition-colors ${isExpanded ? 'bg-indigo-50/40' : 'hover:bg-slate-50/70'}`}>
                           {/* Member */}
-                          <td className="py-4 px-6">
+                          <td className="py-3 px-3 sm:px-4">
                             <div className="flex items-center gap-3">
                               <div
-                                className={`w-9 h-9 rounded-full border flex items-center justify-center font-bold text-xs shrink-0 ${getAvatarColor(
+                                className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full border flex items-center justify-center font-bold text-xs shrink-0 ${getAvatarColor(
                                   member.name
                                 )}`}
                               >
@@ -1421,14 +1423,14 @@ export const TeamRolesSection: React.FC = () => {
                                 )}
                               </div>
                               <div className="min-w-0">
-                                <p className="font-semibold text-slate-900 text-[13.5px] truncate">{member.name}</p>
-                                <p className="text-xs text-slate-500 truncate">{member.email}</p>
+                                <p className="font-semibold text-slate-900 text-[13px] truncate">{member.name}</p>
+                                <p className="text-[11.5px] text-slate-500 truncate">{member.email}</p>
                               </div>
                             </div>
                           </td>
 
                           {/* Role */}
-                          <td className="py-4 px-6">
+                          <td className="py-3 px-2 sm:px-3">
                             <button
                               type="button"
                               onClick={() => handleToggleMemberPermissions(member)}
@@ -1447,7 +1449,7 @@ export const TeamRolesSection: React.FC = () => {
                           </td>
 
                           {/* Permissions */}
-                          <td className="py-4 px-6">
+                          <td className="py-3 px-2 sm:px-3">
                             <button
                               type="button"
                               onClick={() => handleToggleMemberPermissions(member)}
@@ -1489,9 +1491,9 @@ export const TeamRolesSection: React.FC = () => {
                           </td>
 
                           {/* Stores */}
-                          <td className="py-4 px-6 text-xs text-slate-600">
+                          <td className="py-3 px-2 sm:px-3 text-xs text-slate-600">
                             {member.stores && member.stores.length > 0 ? (
-                              <span className="truncate max-w-[140px] block" title={member.stores.join(', ')}>
+                              <span className="truncate max-w-[120px] block" title={member.stores.join(', ')}>
                                 {member.stores.join(' · ')}
                               </span>
                             ) : (
@@ -1500,7 +1502,7 @@ export const TeamRolesSection: React.FC = () => {
                           </td>
 
                           {/* Teams */}
-                          <td className="py-4 px-6 text-xs text-slate-600">
+                          <td className="py-3 px-2 sm:px-3 text-xs text-slate-600">
                             {member.teams && member.teams.length > 0 ? (
                               <span>{member.teams.join(' · ')}</span>
                             ) : (
@@ -1509,7 +1511,7 @@ export const TeamRolesSection: React.FC = () => {
                           </td>
 
                           {/* Languages */}
-                          <td className="py-4 px-6 text-xs text-slate-600 font-medium">
+                          <td className="py-3 px-2 sm:px-3 text-xs text-slate-600 font-medium">
                             {member.languages && member.languages.length > 0 ? (
                               <span>{member.languages.join(' · ')}</span>
                             ) : (
@@ -1518,7 +1520,7 @@ export const TeamRolesSection: React.FC = () => {
                           </td>
 
                           {/* Status */}
-                          <td className="py-4 px-6">
+                          <td className="py-3 px-2 sm:px-3">
                             <div className="inline-flex items-center gap-1.5 text-xs font-medium">
                               {isInvited ? (
                                 <>
@@ -1545,7 +1547,7 @@ export const TeamRolesSection: React.FC = () => {
                           </td>
 
                           {/* Action Menu */}
-                          <td className="py-4 px-6 text-right relative">
+                          <td className="py-3 px-2 sm:px-3 text-right relative">
                             {canManage && (
                               <div className="inline-block text-left" onClick={(e) => e.stopPropagation()}>
                                 <button
@@ -1630,7 +1632,7 @@ export const TeamRolesSection: React.FC = () => {
                         {isExpanded && (
                           <tr className="bg-slate-50/95 border-b-2 border-indigo-200">
                             <td colSpan={8} className="p-0">
-                              <div className="p-5 border-l-4 border-[#1e2a78] bg-slate-50/95 shadow-inner">
+                              <div className="p-3 sm:p-4 border-l-4 border-[#1e2a78] bg-slate-50/95 shadow-inner w-full max-w-full overflow-hidden">
                                 <PagePermissionsMatrix
                                   member={member}
                                   permissions={memberPermissionsDraft}
@@ -1660,12 +1662,12 @@ export const TeamRolesSection: React.FC = () => {
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50/50">
-                  <th className="py-3 px-6 font-semibold">Invited Email</th>
-                  <th className="py-3 px-6 font-semibold">Role</th>
-                  <th className="py-3 px-6 font-semibold">Stores</th>
-                  <th className="py-3 px-6 font-semibold">Teams</th>
-                  <th className="py-3 px-6 font-semibold">Expires In</th>
-                  <th className="py-3 px-6 text-right font-semibold">Actions</th>
+                  <th className="py-2.5 px-3 sm:px-4 font-semibold">Invited Email</th>
+                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Role</th>
+                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Stores</th>
+                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Teams</th>
+                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Expires In</th>
+                  <th className="py-2.5 px-2 sm:px-3 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1684,7 +1686,7 @@ export const TeamRolesSection: React.FC = () => {
 
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="py-4 px-6">
+                        <td className="py-3 px-3 sm:px-4">
                           <div>
                             <span className="font-semibold text-slate-900 text-[13px]">{inv.email}</span>
                             <p className="text-[11px] text-slate-400">
@@ -1693,34 +1695,34 @@ export const TeamRolesSection: React.FC = () => {
                           </div>
                         </td>
 
-                        <td className="py-4 px-6">
+                        <td className="py-3 px-2 sm:px-3">
                           <span className="px-2 py-0.5 rounded-md bg-slate-100 font-semibold text-xs text-slate-700 uppercase">
                             {inv.role}
                           </span>
                         </td>
 
-                        <td className="py-4 px-6 text-xs text-slate-600">
+                        <td className="py-3 px-2 sm:px-3 text-xs text-slate-600">
                           {inv.stores && inv.stores.length > 0 ? inv.stores.join(' · ') : 'All'}
                         </td>
 
-                        <td className="py-4 px-6 text-xs text-slate-600">
+                        <td className="py-3 px-2 sm:px-3 text-xs text-slate-600">
                           {inv.teams && inv.teams.length > 0 ? inv.teams.join(' · ') : 'Support'}
                         </td>
 
-                        <td className="py-4 px-6 text-xs text-slate-600">
+                        <td className="py-3 px-2 sm:px-3 text-xs text-slate-600">
                           <span className="inline-flex items-center gap-1 text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full font-medium text-[11px]">
                             <Clock className="w-3 h-3" />
                             {daysLeft > 0 ? `${daysLeft} days` : 'Expiring soon'}
                           </span>
                         </td>
 
-                        <td className="py-4 px-6 text-right">
-                          <div className="flex items-center justify-end gap-2">
+                        <td className="py-3 px-2 sm:px-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
                             <button
                               type="button"
                               onClick={() => handleCopyInviteLink(inv.token, inv.email)}
                               title="Copy secure single-use invitation link"
-                              className="px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                              className="px-2 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                             >
                               <Copy className="w-3.5 h-3.5 text-slate-500" />
                               Copy link
@@ -1730,7 +1732,7 @@ export const TeamRolesSection: React.FC = () => {
                               type="button"
                               onClick={() => handleResendInvite(inv.id, inv.email)}
                               title="Resend email with new 7-day token"
-                              className="px-2.5 py-1 rounded-lg bg-[#1e2a78] hover:bg-[#16205e] text-white text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                              className="px-2 py-1 rounded-lg bg-[#1e2a78] hover:bg-[#16205e] text-white text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                             >
                               <Send className="w-3.5 h-3.5" />
                               Resend
@@ -2487,9 +2489,11 @@ export const TeamRolesSection: React.FC = () => {
         onClose={() => setPermissionsModalMember(null)}
         title={`Page Permissions · ${permissionsModalMember?.name || 'Member'}`}
         maxWidth="2xl"
+        className="max-h-[90vh] flex flex-col"
+        bodyClassName="overflow-y-auto flex-1 min-h-0 pr-1"
       >
         {permissionsModalMember && (
-          <div className="pt-2">
+          <div className="pt-1">
             <PagePermissionsMatrix
               member={permissionsModalMember}
               permissions={memberPermissionsDraft}
