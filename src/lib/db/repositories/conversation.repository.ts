@@ -1,5 +1,5 @@
 import { db } from "..";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import {
   tickets,
   customers,
@@ -16,6 +16,33 @@ import {
   type Customer,
   type Channel,
 } from "../schema";
+import { publish } from "../../realtime";
+import { createLogger } from "../../logger";
+import {
+  CLOSED_TICKET_STATUSES,
+  TICKET_CREDIT_ALLOWANCE,
+  isClosedTicketStatus,
+  type TicketCredits,
+  type TicketEvent,
+} from "../../../types/ticket";
+
+const log = createLogger("ConversationRepository");
+
+/** Namespace of the per-customer advisory lock taken while a follow-up ticket is opened */
+const FOLLOW_UP_TICKET_LOCK = 7301;
+
+/** A ticket change to record in the thread; the ticket, time and actor name are filled in by `logEvent` */
+export type TicketEventInput = Omit<TicketEvent, "ticketId" | "occurredAt"> & { occurredAt?: Date };
+
+/** Who wrote the message that may open a follow-up ticket on a resolved one */
+export interface TicketOpener {
+  actorType: "customer" | "agent";
+  actorId: number | null;
+  /** When the message was written; the "new ticket" note is placed just before it */
+  at: Date;
+}
+
+const newTicketNumber = (customerId: number) => `C-${customerId}-${Date.now()}`;
 
 /**
  * One row in the inbox conversation list. A contact without a ticket is listed too, with
@@ -44,6 +71,10 @@ export interface ConversationListItem {
   resolvedAt: Date | null;
   unreadCount: number;
   lastReceivedMessageAt: Date | null;
+  /** Latest customer message on this ticket (not the contact's earlier tickets); null = the customer hasn't written on it */
+  ticketCustomerMessageAt: Date | null;
+  /** Mock billing: when the first teammate reply made this ticket billable */
+  billableAt: Date | null;
   lastMessage: {
     senderType: string;
     mediaType: string | null;
@@ -99,59 +130,121 @@ export class ConversationRepository {
     return ticket || null;
   }
 
-  /**
-   * Latest conversation for a customer; creates one when the customer has none yet.
-   */
-  async ensureForCustomer(organizationId: number, customerId: number, channelId?: number | null): Promise<Ticket> {
-    const [existing] = await db
+  private async latestForCustomer(organizationId: number, customerId: number): Promise<Ticket | null> {
+    const [latest] = await db
       .select()
       .from(tickets)
       .where(and(eq(tickets.organizationId, organizationId), eq(tickets.customerId, customerId)))
-      .orderBy(desc(tickets.createdAt))
+      .orderBy(desc(tickets.createdAt), desc(tickets.id))
       .limit(1);
-
-    if (existing) return existing;
-
-    const [created] = await db
-      .insert(tickets)
-      .values({
-        organizationId,
-        customerId,
-        channelId: channelId ?? null,
-        ticketNumber: `C-${customerId}-${Date.now()}`,
-        status: TicketStatus.OPEN,
-      })
-      .returning();
-
-    return created;
+    return latest ?? null;
   }
 
   /**
-   * Keeps the conversation in sync with a newly stored message:
-   * last message preview, reopening on a customer reply, and handing over to the human agent who replied.
+   * Latest conversation for a customer; creates one when the customer has none yet.
+   * With `opener`, a resolved latest ticket isn't reused: a follow-up ticket is opened (unassigned, so it lands in
+   * the Unassigned view when the customer wrote it) and the thread records why.
+   */
+  async ensureForCustomer(
+    organizationId: number,
+    customerId: number,
+    channelId?: number | null,
+    opener?: TicketOpener
+  ): Promise<Ticket> {
+    const existing = await this.latestForCustomer(organizationId, customerId);
+    if (existing && !(opener && isClosedTicketStatus(existing.status))) return existing;
+
+    if (!existing) {
+      const [created] = await db
+        .insert(tickets)
+        .values({
+          organizationId,
+          customerId,
+          channelId: channelId ?? null,
+          ticketNumber: newTicketNumber(customerId),
+          status: TicketStatus.OPEN,
+        })
+        .returning();
+      return created;
+    }
+
+    return this.openFollowUp(organizationId, customerId, channelId, opener!);
+  }
+
+  /**
+   * Opens the follow-up of a resolved ticket. The advisory lock makes concurrent messages (webhook bursts) open
+   * one follow-up, not one each: the second waits, then finds the follow-up already open and uses it.
+   */
+  private async openFollowUp(
+    organizationId: number,
+    customerId: number,
+    channelId: number | null | undefined,
+    opener: TicketOpener
+  ): Promise<Ticket> {
+    const { ticket, previous } = await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(${FOLLOW_UP_TICKET_LOCK}::int, ${customerId}::int)`);
+      const [latest] = await tx
+        .select()
+        .from(tickets)
+        .where(and(eq(tickets.organizationId, organizationId), eq(tickets.customerId, customerId)))
+        .orderBy(desc(tickets.createdAt), desc(tickets.id))
+        .limit(1);
+      if (latest && !isClosedTicketStatus(latest.status)) return { ticket: latest, previous: null };
+
+      const [created] = await tx
+        .insert(tickets)
+        .values({
+          organizationId,
+          customerId,
+          channelId: channelId ?? latest?.channelId ?? null,
+          ticketNumber: newTicketNumber(customerId),
+          status: TicketStatus.OPEN,
+          // The conversation keeps its mode: an AI-handled contact stays with the AI agent
+          handledBy: latest?.handledBy ?? ConversationHandler.HUMAN,
+          // A teammate's message assigns the new ticket to them; a customer's leaves it unassigned
+          assigneeId: opener.actorType === "agent" ? opener.actorId : null,
+        })
+        .returning();
+      return { ticket: created, previous: latest ?? null };
+    });
+
+    if (previous) {
+      await this.logEvent(ticket, {
+        action: "opened",
+        actorType: opener.actorType,
+        actorId: opener.actorId,
+        actorName: null,
+        previousStatus: previous.status,
+        status: ticket.status,
+        // Just before the message that opened it, so the thread reads "new ticket" → message
+        occurredAt: new Date(opener.at.getTime() - 1),
+      });
+    }
+    return ticket;
+  }
+
+  /**
+   * Keeps the conversation in sync with a newly stored message: last message preview, AI → human hand-over,
+   * and, on a teammate's reply, claiming an unassigned ticket and making the ticket billable (once).
    */
   async recordMessage(
     ticket: Ticket,
-    message: Pick<Message, "senderType" | "senderId" | "textContent" | "isInternalNote" | "createdAt">
+    message: Pick<Message, "senderType" | "senderId" | "textContent" | "isInternalNote" | "createdAt" | "mediaType">
   ): Promise<void> {
     const now = new Date();
     const updates: Partial<typeof tickets.$inferInsert> = { updatedAt: now };
+    // Only a teammate's own reply counts: automations send as `agent` too, but without a sender
+    const isTeammateReply = message.senderType === "agent" && !message.isInternalNote && message.senderId != null;
 
     if (!message.isInternalNote) {
       updates.lastMessageText = message.textContent ?? null;
       updates.lastMessageAt = message.createdAt ?? now;
     }
 
-    if (message.senderType === "customer" && (ticket.status === TicketStatus.RESOLVED || ticket.status === TicketStatus.CLOSED)) {
-      updates.status = TicketStatus.OPEN;
-      updates.resolvedAt = null;
-    }
-
     // A human agent replying takes the conversation over from the AI agent
-    if (message.senderType === "agent" && !message.isInternalNote && ticket.handledBy === ConversationHandler.AI) {
+    if (isTeammateReply && ticket.handledBy === ConversationHandler.AI) {
       updates.handledBy = ConversationHandler.HUMAN;
       updates.needsHuman = false;
-      if (!ticket.assigneeId && message.senderId) updates.assigneeId = message.senderId;
     }
 
     if (message.senderType === "ai") {
@@ -159,6 +252,135 @@ export class ConversationRepository {
     }
 
     await db.update(tickets).set(updates).where(eq(tickets.id, ticket.id));
+
+    // Normally a customer message on a resolved ticket opens a follow-up (see ensureForCustomer). When it still
+    // lands on a resolved ticket (filed on it explicitly, or resolved in the same instant it arrived), the ticket
+    // reopens so the message isn't lost in Closed. Decided in SQL, on the ticket's current status.
+    if (message.senderType === "customer" && message.mediaType !== "system") {
+      const [reopened] = await db
+        .update(tickets)
+        .set({ status: TicketStatus.OPEN, resolvedAt: null })
+        .where(and(eq(tickets.id, ticket.id), inArray(tickets.status, [...CLOSED_TICKET_STATUSES])))
+        .returning({ id: tickets.id });
+      if (reopened) {
+        await this.logEvent(ticket, {
+          action: "reopened",
+          actorType: "customer",
+          actorId: null,
+          actorName: null,
+          status: TicketStatus.OPEN,
+          occurredAt: now,
+        });
+      }
+    }
+
+    if (!isTeammateReply) return;
+    const senderId = message.senderId!;
+
+    // Conditional updates: exactly one reply claims the ticket and exactly one makes it billable,
+    // even when replies race
+    const [claimed] = await db
+      .update(tickets)
+      .set({ assigneeId: senderId })
+      .where(and(eq(tickets.id, ticket.id), isNull(tickets.assigneeId)))
+      .returning({ id: tickets.id });
+    const [billed] = await db
+      .update(tickets)
+      .set({ billableAt: now, billableById: senderId })
+      .where(and(eq(tickets.id, ticket.id), isNull(tickets.billableAt)))
+      .returning({ id: tickets.id });
+
+    if (claimed) {
+      await this.logEvent(ticket, {
+        action: "assigned",
+        actorType: "agent",
+        actorId: senderId,
+        actorName: null,
+        assigneeId: senderId,
+        assignReason: "first_reply",
+        occurredAt: now,
+      });
+    }
+    if (billed) {
+      await this.logEvent(ticket, {
+        action: "billable",
+        actorType: "agent",
+        actorId: senderId,
+        actorName: null,
+        occurredAt: new Date(now.getTime() + 1),
+      });
+    }
+  }
+
+  /**
+   * Records a ticket change in the thread as a team-only system note (the ticket's audit log) and tells open
+   * inboxes. Never throws: the change itself already happened.
+   */
+  async logEvent(
+    ticket: Pick<Ticket, "id" | "organizationId" | "customerId" | "channelId">,
+    input: TicketEventInput
+  ): Promise<void> {
+    try {
+      const names = await this.userNames(ticket.organizationId, [input.actorId, input.assigneeId]);
+      const event: TicketEvent = {
+        ...input,
+        ticketId: ticket.id,
+        actorName: input.actorName ?? (input.actorId != null ? names.get(input.actorId) ?? null : null),
+        ...(input.assigneeId !== undefined
+          ? { assigneeName: input.assigneeName ?? (input.assigneeId != null ? names.get(input.assigneeId) ?? null : null) }
+          : {}),
+        occurredAt: (input.occurredAt ?? new Date()).toISOString(),
+      };
+
+      const [note] = await db
+        .insert(messages)
+        .values({
+          organizationId: ticket.organizationId,
+          customerId: ticket.customerId,
+          channelId: ticket.channelId ?? null,
+          ticketId: ticket.id,
+          senderType: "system",
+          senderId: event.actorType === "agent" ? event.actorId : null,
+          receiverId: ticket.customerId,
+          textContent: describeTicketEvent(event),
+          isInternalNote: true,
+          status: MessageStatus.READ,
+          metadata: { ticketEvent: event },
+          createdAt: new Date(event.occurredAt),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      publish(ticket.organizationId, {
+        type: "message.new",
+        customerId: ticket.customerId,
+        message: { ...note, senderName: event.actorType === "agent" ? event.actorName : null },
+      });
+      publish(ticket.organizationId, { type: "conversation.updated", conversationId: ticket.id, customerId: ticket.customerId });
+    } catch (err) {
+      log.warn("Ticket changed but its audit note could not be saved", { err, ticketId: ticket.id, action: input.action });
+    }
+  }
+
+  /** Names of the organization's users with these ids */
+  async userNames(organizationId: number, ids: Array<number | null | undefined>): Promise<Map<number, string>> {
+    const wanted = [...new Set(ids.filter((id): id is number => typeof id === "number"))];
+    if (wanted.length === 0) return new Map();
+    const rows = await db
+      .select({ id: users.id, name: users.name })
+      .from(users)
+      .where(and(eq(users.organizationId, organizationId), inArray(users.id, wanted)));
+    return new Map(rows.map((r) => [r.id, r.name]));
+  }
+
+  /** Mock billing: tickets made billable by a teammate's first reply, against the fixed allowance */
+  async ticketCredits(organizationId: number): Promise<TicketCredits> {
+    const [row] = await db
+      .select({ used: sql<number>`count(*)::int` })
+      .from(tickets)
+      .where(and(eq(tickets.organizationId, organizationId), isNotNull(tickets.billableAt)));
+    const used = row?.used ?? 0;
+    return { allowance: TICKET_CREDIT_ALLOWANCE, used, remaining: Math.max(0, TICKET_CREDIT_ALLOWANCE - used) };
   }
 
   async update(id: number, organizationId: number, data: ConversationUpdate): Promise<Ticket | null> {
@@ -227,6 +449,8 @@ export class ConversationRepository {
       resolvedAt: null,
       unreadCount: 0,
       lastReceivedMessageAt: null,
+      ticketCustomerMessageAt: null,
+      billableAt: null,
       lastMessage: null,
       customer: toListCustomer(customer),
       channel: toListChannel(channel),
@@ -342,6 +566,15 @@ export class ConversationRepository {
       .orderBy(messages.customerId, desc(messages.createdAt));
     const lastReceivedMap = new Map(lastReceivedRows.map((r) => [r.customerId, r.createdAt]));
 
+    // Latest customer message on each listed ticket: a ticket the customer wrote on is one the team owes a reply
+    const listedTicketIds = [...ticketMap.values()].map((t) => t.ticket.id);
+    const ticketCustomerRows = await db
+      .selectDistinctOn([messages.ticketId], { ticketId: messages.ticketId, createdAt: messages.createdAt })
+      .from(messages)
+      .where(and(eq(messages.organizationId, organizationId), inArray(messages.ticketId, listedTicketIds), opensServiceWindow))
+      .orderBy(messages.ticketId, desc(messages.createdAt));
+    const ticketCustomerMap = new Map(ticketCustomerRows.map((r) => [r.ticketId, r.createdAt]));
+
     const items: ConversationListItem[] = allCustomers.map(({ customer, channel }) => {
       const ticketEntry = ticketMap.get(customer.id)!;
       const ticket = ticketEntry.ticket;
@@ -373,6 +606,8 @@ export class ConversationRepository {
         resolvedAt: ticket.resolvedAt,
         unreadCount: unreadMap.get(customer.id) ?? 0,
         lastReceivedMessageAt: lastReceivedMap.get(customer.id) ?? null,
+        ticketCustomerMessageAt: ticketCustomerMap.get(ticket.id) ?? null,
+        billableAt: ticket.billableAt,
         lastMessage: last
           ? { senderType: last.senderType, mediaType: last.mediaType, status: last.status, metadata: last.metadata }
           : null,
@@ -393,6 +628,38 @@ export class ConversationRepository {
     }
 
     return items;
+  }
+}
+
+/** One-line summary stored as the audit note's text (the thread shows it with the time) */
+export function describeTicketEvent(event: TicketEvent): string {
+  const actor = event.actorName || (event.actorType === "customer" ? "the customer" : "a teammate");
+  const assignee = event.assigneeName || "a teammate";
+  switch (event.action) {
+    case "opened":
+      return event.actorType === "customer"
+        ? "New ticket opened · the customer wrote after the last ticket was resolved"
+        : `New ticket opened by ${actor}`;
+    case "resolved":
+      return `Resolved by ${actor}`;
+    case "reopened":
+      return event.actorType === "customer" ? "Reopened · the customer wrote again" : `Reopened by ${actor}`;
+    case "status":
+      return `Status changed to ${(event.status || "").toLowerCase()} by ${actor}`;
+    case "assigned":
+      if (event.assignReason === "take_over") return `${actor} took over the ticket`;
+      if (event.assignReason === "first_reply") return `Assigned to ${assignee} · first reply`;
+      return event.assigneeId === event.actorId ? `${actor} assigned the ticket to themselves` : `Assigned to ${assignee} by ${actor}`;
+    case "unassigned":
+      return `Unassigned by ${actor}`;
+    case "ai_on":
+      return `AI agent turned on by ${actor}`;
+    case "ai_off":
+      return `AI agent paused by ${actor}`;
+    case "billable":
+      return `Billable · 1 ticket credit used · first reply by ${actor}`;
+    default:
+      return "Ticket updated";
   }
 }
 

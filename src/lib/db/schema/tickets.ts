@@ -61,6 +61,9 @@ export const tickets = pgTable(
     aiSuggestions: jsonb("ai_suggestions").$type<string[]>().default(sql`'[]'::jsonb`).notNull(), // Copilot reply ideas
     language: varchar("language", { length: 20 }), // Detected conversation language code, e.g. "en"
     resolvedAt: timestamp("resolved_at", { withTimezone: true, mode: "date" }),
+    // Mock billing: set once, by the first teammate reply on the ticket (one ticket credit)
+    billableAt: timestamp("billable_at", { withTimezone: true, mode: "date" }),
+    billableById: integer("billable_by_id").references(() => users.id, { onDelete: "set null" }),
 
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
@@ -73,6 +76,9 @@ export const tickets = pgTable(
     index("idx_tickets_org_customer").on(table.organizationId, table.customerId),
     index("idx_tickets_org_handled_by").on(table.organizationId, table.handledBy),
     index("idx_tickets_org_last_message").on(table.organizationId, table.lastMessageAt.desc()),
+    index("idx_tickets_org_billable")
+      .on(table.organizationId, table.billableAt)
+      .where(sql`${table.billableAt} IS NOT NULL`),
   ]
 );
 

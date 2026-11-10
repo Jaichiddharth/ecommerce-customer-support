@@ -1,13 +1,14 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import { ChevronLeft, Inbox, Plus, Lock, Users } from 'lucide-react';
+import { ChevronLeft, CircleCheck, Plus, Lock, Users, UserRoundX } from 'lucide-react';
 import { ChannelIcon } from './ChannelIcon';
 import {
   CHANNEL_LABELS,
   CHANNEL_TYPES,
   InboxChannel,
   InboxConversation,
+  TicketView,
   channelNeedsReconnect,
   formatHandle,
   formatPhone,
@@ -24,7 +25,26 @@ interface ChannelsPaneProps {
   onConnect: (type: string) => void;
   onCollapse: () => void;
   canCreate?: boolean;
+  /** Ticket views of the selected channel: Unassigned and Closed */
+  ticketView: TicketView;
+  ticketCounts: { unassigned: number; closed: number };
+  onSelectTicketView: (view: TicketView) => void;
 }
+
+const TICKET_VIEWS: { key: Exclude<TicketView, 'inbox'>; label: string; hint: string; icon: React.ElementType }[] = [
+  {
+    key: 'unassigned',
+    label: 'Unassigned',
+    hint: 'Open tickets the customer started that no teammate owns yet. Replying claims the ticket.',
+    icon: UserRoundX,
+  },
+  {
+    key: 'closed',
+    label: 'Closed',
+    hint: "Resolved tickets. The customer's next message opens a new ticket.",
+    icon: CircleCheck,
+  },
+];
 
 /** Unread-message badge: shown only while the channel has unread messages */
 const UnreadBadge: React.FC<{ unread: number }> = ({ unread }) =>
@@ -62,6 +82,9 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
   onConnect,
   onCollapse,
   canCreate = true,
+  ticketView,
+  ticketCounts,
+  onSelectTicketView,
 }) => {
   // Unread messages per channel id
   const unreadByChannel = useMemo(() => {
@@ -276,6 +299,49 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                   </button>
                 </div>
               ))}
+            </div>
+          </>
+        )}
+
+        {/* Ticket views of the selected channel; picking a channel above goes back to its inbox */}
+        {groups.length > 0 && (
+          <>
+            <div className="mt-5 mb-1.5 px-2.5 text-[11px] font-bold text-slate-700 tracking-wider">TICKETS</div>
+            <div className="space-y-0.5">
+              {TICKET_VIEWS.map(({ key, label, hint, icon: Icon }) => {
+                const active = ticketView === key;
+                const count = ticketCounts[key];
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => onSelectTicketView(active ? 'inbox' : key)}
+                    aria-pressed={active}
+                    title={hint}
+                    className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left cursor-pointer transition-colors ${
+                      active ? 'bg-[#eef0fb]' : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    <span
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                        active ? 'bg-white text-[#3440a8]' : 'bg-slate-100 text-slate-600'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                    </span>
+                    <span className={`flex-1 min-w-0 truncate text-slate-900 ${active ? 'font-semibold' : 'font-medium'}`}>
+                      {label}
+                    </span>
+                    <span
+                      className={`min-w-5 h-5 px-1.5 rounded-full text-[11px] font-semibold flex items-center justify-center shrink-0 ${
+                        key === 'unassigned' && count > 0 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'
+                      }`}
+                    >
+                      {nf.format(count)}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </>
         )}

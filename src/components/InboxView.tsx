@@ -73,13 +73,18 @@ import {
   InboxConversation,
   ListTab,
   SENDABLE_CHANNEL_TYPES,
+  TicketView,
   channelsInPaneOrder,
   conversationChannelType,
   formatHandle,
   formatPhone,
   isChannelHealthy,
+  isTicketClosed,
+  isTicketUnassigned,
   languageName,
 } from './inbox/inbox-types';
+import { TicketCreditsBar, TicketEventRow, TicketStatusMenu } from './inbox/TicketStatus';
+import type { TicketCredits } from '@/types/ticket';
 
 /**
  * Render Status Indicator for an outbound message
@@ -218,6 +223,7 @@ const mapApiMessage = (m: any, channel: string): Message => {
     isInternalNote: Boolean(m.isInternalNote),
     aiAction: m.metadata?.aiAction ?? null,
     consent: m.metadata?.consent ?? null,
+    ticketEvent: m.metadata?.ticketEvent ?? null,
     templateButtons: Array.isArray(m.metadata?.template?.buttons) ? m.metadata.template.buttons : undefined,
     repliedToId: m.repliedToId != null ? String(m.repliedToId) : null,
     repliedTo: m.repliedTo ?? null,
@@ -289,6 +295,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // The channel (number / account) whose conversations are listed; null until one is picked (the first channel is used)
   const [pickedChannelId, setPickedChannelId] = useState<number | null>(null);
   const [listTab, setListTab] = useState<ListTab>('all');
+  // Inbox (open tickets, split by the tabs) or a ticket view picked in the Channels pane
+  const [ticketView, setTicketView] = useState<TicketView>('inbox');
+  // Mock billing: ticket credits used by teammates' first replies (sent with the conversation list)
+  const [ticketCredits, setTicketCredits] = useState<TicketCredits | null>(null);
   const [listSearch, setListSearch] = useState('');
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [internalSelectedId, setInternalSelectedId] = useState<string>('');
@@ -372,6 +382,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       if (res.data?.success && Array.isArray(res.data.conversations)) {
         setConversations(res.data.conversations);
       }
+      if (res.data?.ticketCredits) setTicketCredits(res.data.ticketCredits);
       setConversationsError(null);
       return null;
     } catch (err) {
@@ -541,7 +552,20 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           Boolean(m.isInternalNote) === Boolean(incoming.isInternalNote)
         );
       });
-      if (idx < 0) return { ...prev, [convId]: [...existing, incoming] };
+      if (idx < 0) {
+        // Kept in time order: a ticket note (assigned, billable) can arrive just before the reply it follows
+        let at = existing.length;
+        while (
+          at > 0 &&
+          incoming.createdAt &&
+          existing[at - 1].createdAt &&
+          !isTempMessage(existing[at - 1]) &&
+          existing[at - 1].createdAt! > incoming.createdAt
+        ) {
+          at--;
+        }
+        return { ...prev, [convId]: [...existing.slice(0, at), incoming, ...existing.slice(at)] };
+      }
       const updated = existing
         .map((m, i) => (i === idx ? { ...m, ...incoming, mediaUrl: incoming.mediaUrl || m.mediaUrl } : m))
         // Drop a leftover temp bubble once the real message is in place
@@ -588,12 +612,18 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                 rawMsg.senderType === 'customer' && rawMsg.mediaType !== 'system' && rawMsg.createdAt
                   ? rawMsg.createdAt
                   : conv.lastReceivedMessageAt,
+              // The customer wrote on this ticket: it now shows in Unassigned when nobody owns it
+              ticketCustomerMessageAt:
+                rawMsg.senderType === 'customer' && rawMsg.mediaType !== 'system' && rawMsg.createdAt
+                  ? rawMsg.createdAt
+                  : conv.ticketCustomerMessageAt,
             };
           return [updated, ...prev.slice(0, idx), ...prev.slice(idx + 1)];
         });
-        // Agent replies can change who handles the conversation (human takes over from AI);
-        // a contact's first message created its ticket, so reload to swap in the real conversation
-        if (rawMsg.senderType === 'agent' || !known.hasConversation) refreshConversationsSoon();
+        // Agent replies can change who handles the conversation (human takes over from AI) and claim the ticket;
+        // a contact's first message created its ticket, and a message on a resolved ticket opened a new one,
+        // so reload to swap in the real conversation
+        if (rawMsg.senderType === 'agent' || !known.hasConversation || isTicketClosed(known)) refreshConversationsSoon();
       }
 
       if (isOpen && rawMsg.senderType === 'customer') {
@@ -731,6 +761,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const handleSelectChannel = (id: number) => {
     setPickedChannelId(id);
     setListTab('all');
+    setTicketView('inbox');
     if (activeConv && activeConv.channel?.id !== id) closeConversation();
   };
 
@@ -746,23 +777,33 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     return conversations.filter((conv) => conv.channel?.id === selectedChannelId);
   }, [conversations, selectedChannelId, isLoadingChannels]);
 
+  // The inbox works on open tickets; resolved ones move to the Closed view
+  const openScoped = useMemo(() => channelScoped.filter((c) => !isTicketClosed(c)), [channelScoped]);
+  const unassignedScoped = useMemo(() => openScoped.filter(isTicketUnassigned), [openScoped]);
+  const closedScoped = useMemo(() => channelScoped.filter(isTicketClosed), [channelScoped]);
+  const ticketCounts = { unassigned: unassignedScoped.length, closed: closedScoped.length };
+
   const tabCounts = useMemo<Record<ListTab, number>>(
     () => ({
-      all: channelScoped.length,
-      ai: channelScoped.filter((c) => c.handledBy === 'ai').length,
-      needs_human: channelScoped.filter((c) => c.needsHuman).length,
-      mine: channelScoped.filter((c) => dbUser?.id != null && c.assigneeId === dbUser.id).length,
+      all: openScoped.length,
+      ai: openScoped.filter((c) => c.handledBy === 'ai').length,
+      needs_human: openScoped.filter((c) => c.needsHuman).length,
+      mine: openScoped.filter((c) => dbUser?.id != null && c.assigneeId === dbUser.id).length,
     }),
-    [channelScoped, dbUser?.id]
+    [openScoped, dbUser?.id]
   );
 
   const visibleConversations = useMemo(() => {
     const q = listSearch.trim().toLowerCase();
     const digits = q.replace(/\D/g, '');
-    return channelScoped.filter((conv) => {
-      if (listTab === 'ai' && conv.handledBy !== 'ai') return false;
-      if (listTab === 'needs_human' && !conv.needsHuman) return false;
-      if (listTab === 'mine' && (dbUser?.id == null || conv.assigneeId !== dbUser.id)) return false;
+    const base = ticketView === 'unassigned' ? unassignedScoped : ticketView === 'closed' ? closedScoped : openScoped;
+    return base.filter((conv) => {
+      // The tabs split the inbox only; the ticket views list their own tickets
+      if (ticketView === 'inbox') {
+        if (listTab === 'ai' && conv.handledBy !== 'ai') return false;
+        if (listTab === 'needs_human' && !conv.needsHuman) return false;
+        if (listTab === 'mine' && (dbUser?.id == null || conv.assigneeId !== dbUser.id)) return false;
+      }
       if (unreadOnly && conv.unreadCount === 0) return false;
       if (!q) return true;
       const { name, handle, phone, email } = conv.customer;
@@ -775,7 +816,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         conv.ticketNumber.toLowerCase().includes(q)
       );
     });
-  }, [channelScoped, listTab, listSearch, unreadOnly, dbUser?.id]);
+  }, [openScoped, unassignedScoped, closedScoped, ticketView, listTab, listSearch, unreadOnly, dbUser?.id]);
 
   // Top bar context chip, e.g. "WhatsApp · Aalmara Support · +15559447164" or "Instagram · @noctylle"
   const scope = useMemo(() => {
@@ -903,6 +944,18 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       { handledBy },
       { handledBy, ...(handledBy === 'ai' ? { needsHuman: false } : {}) },
       handledBy === 'ai' ? 'Handed back to the AI agent' : 'AI agent paused'
+    );
+  };
+
+  // Resolving moves the ticket to the Closed view (the chat stays open); reopening brings it back to the inbox
+  const handleSetStatus = (status: 'OPEN' | 'RESOLVED') => {
+    if (!activeConv || !canUpdateInbox) return;
+    const resolving = status === 'RESOLVED';
+    updateConversation(
+      activeConv,
+      { status },
+      { status, resolvedAt: resolving ? new Date().toISOString() : null },
+      resolving ? 'Ticket resolved · moved to Closed' : 'Ticket reopened'
     );
   };
 
@@ -1449,6 +1502,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         onSelectConversation?.(id);
         setPickedChannelId(targetChannelId ?? null);
         setListTab('all');
+        setTicketView('inbox');
       }
     } catch (err) {
       notifyError(err, { where: 'InboxView.handleCreateContact', title: 'Customer not created' });
@@ -1648,6 +1702,16 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       );
     }
 
+    // Ticket change (the ticket's audit log: who resolved / assigned / billed it, and when)
+    if (msg.ticketEvent) {
+      return (
+        <React.Fragment key={msg.id}>
+          {daySeparator}
+          <TicketEventRow event={msg.ticketEvent} text={msg.text} />
+        </React.Fragment>
+      );
+    }
+
     // The message this one answers: the loaded one when available (it's current), else the server's preview
     const customerName = activeConv?.customer.name || 'Customer';
     const quotedLocal = msg.repliedToId ? activeMessages.find((m) => m.id === msg.repliedToId) : undefined;
@@ -1797,6 +1861,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           onConnect={handleConnectChannel}
           onCollapse={() => setIsChannelsCollapsed(true)}
           canCreate={canCreateInbox}
+          ticketView={ticketView}
+          ticketCounts={ticketCounts}
+          onSelectTicketView={setTicketView}
         />
       )}
 
@@ -1807,6 +1874,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           onOpenConversation={(conv) => {
             if (conv.channel) setPickedChannelId(conv.channel.id);
             setListTab('all');
+            setTicketView(isTicketClosed(conv) ? 'closed' : 'inbox');
             handleSelectConversation(conv);
           }}
           onNewContact={openNewContactModal}
@@ -1833,6 +1901,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
             isLoading={isLoadingConversations}
             error={conversationsError}
             onRetry={fetchConversations}
+            ticketView={ticketView}
+            onExitTicketView={() => setTicketView('inbox')}
           />
 
           {/* ====================================================== */}
@@ -1890,6 +1960,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                   {/* AI / human controls need a ticket; a new contact gets one with the first message */}
                   {activeConv.hasConversation && (
                   <div className="flex items-center gap-1.5 shrink-0">
+                    <TicketStatusMenu status={activeConv.status} disabled={!canUpdateInbox} onChange={handleSetStatus} />
                     <div className="relative" ref={modeMenuRef}>
                       <button
                         onClick={() => setShowModeMenu((v) => !v)}
@@ -1928,7 +1999,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                       )}
                     </div>
 
-                    {(isAiHandling || activeConv.needsHuman || activeConv.assigneeId !== dbUser?.id) && (
+                    {!isTicketClosed(activeConv) && (isAiHandling || activeConv.needsHuman || activeConv.assigneeId !== dbUser?.id) && (
                       <button
                         onClick={canUpdateInbox ? handleTakeOver : undefined}
                         disabled={!canUpdateInbox}
@@ -2357,6 +2428,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                           : 'Send'}
                     </button >
                   </div >
+
+                  {/* Mock billing: a ticket uses one credit on a teammate's first reply */}
+                  <TicketCreditsBar
+                    credits={ticketCredits}
+                    billableAt={activeConv.billableAt}
+                    isClosed={isTicketClosed(activeConv)}
+                  />
                 </div >
               </>
             ) : (
