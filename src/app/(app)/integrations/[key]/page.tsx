@@ -1,18 +1,19 @@
 'use client';
 
-import { useEffect } from 'react';
+import { use, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { IntegrationsView, type IntegrationKey } from '@/components/integrations/IntegrationsView';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 
 interface Props {
-  params: { key: string };
+  params: Promise<{ key: string }>;
 }
 
 export default function IntegrationDetailPage({ params }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const key = params.key as IntegrationKey;
+  const { key: rawKey } = use(params);
+  const key = rawKey as IntegrationKey;
 
   // Handle Shopify OAuth callback result
   useEffect(() => {
@@ -28,7 +29,7 @@ export default function IntegrationDetailPage({ params }: Props) {
     }
     // Strip the OAuth result params from the URL
     window.history.replaceState(null, '', `/integrations/${key}`);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [key, searchParams]);
 
   return (
     <IntegrationsView

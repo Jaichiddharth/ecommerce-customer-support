@@ -1,6 +1,6 @@
 import { db } from "..";
 import { eq, and, or, sql, desc, ne, asc, ilike, inArray } from "drizzle-orm";
-import { customers, messages, channels, tickets, shopifyCustomerLinks, ChannelStatus, type Customer, type NewCustomer } from "../schema";
+import { customers, messages, channels, tickets, shopifyCustomerLinks, shopifyOrderLinks, ChannelStatus, type Customer, type NewCustomer } from "../schema";
 import { createLogger } from "../../logger";
 import { AppError } from "../../errors";
 
@@ -474,6 +474,12 @@ export class CustomerRepository {
                     .where(eq(shopifyCustomerLinks.id, sourceLink.id));
             }
 
+            // Order associations follow the profile (an order is associated with one profile per store, so no collisions)
+            await tx
+                .update(shopifyOrderLinks)
+                .set({ customerId: targetProfileId, updatedAt: new Date() })
+                .where(and(eq(shopifyOrderLinks.organizationId, organizationId), eq(shopifyOrderLinks.customerId, sourceProfileId)));
+
             await tx
                 .update(customers)
                 .set({ primaryCustomerId: targetProfileId, updatedAt: new Date() })
@@ -522,6 +528,10 @@ export class CustomerRepository {
                 .update(shopifyCustomerLinks)
                 .set({ customerId: newPrimary.id, updatedAt: now })
                 .where(and(eq(shopifyCustomerLinks.organizationId, organizationId), eq(shopifyCustomerLinks.customerId, contact.id)));
+            await tx
+                .update(shopifyOrderLinks)
+                .set({ customerId: newPrimary.id, updatedAt: now })
+                .where(and(eq(shopifyOrderLinks.organizationId, organizationId), eq(shopifyOrderLinks.customerId, contact.id)));
         });
     }
 

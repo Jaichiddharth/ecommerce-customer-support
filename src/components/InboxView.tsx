@@ -56,7 +56,7 @@ import { ConsentBadge, ConsentEventRow } from './inbox/ConsentStatus';
 import { VirtualMessageList } from './inbox/VirtualMessageList';
 import { InboxTopBar } from './inbox/InboxTopBar';
 import { ProductBrowser, type ShareProductArgs } from './shopify/ProductBrowser';
-import { useShopifyStore } from './shopify/useShopifyStore';
+import { useChannelShopifyStore } from './shopify/useChannelShopifyStore';
 import { TemplateButtonIcon, TemplateComposer, forgetCachedTemplates, type TemplateDraft } from './inbox/TemplateComposer';
 import { FlowResponseCard } from './inbox/FlowResponseCard';
 import { ReplyQuote, quoteFromMessage, quoteFromPreview } from './inbox/ReplyQuote';
@@ -1192,7 +1192,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // -------------------------------------------------------------
   // SHOPIFY PRODUCTS
   // -------------------------------------------------------------
-  const shopifyStore = useShopifyStore();
+  // The store of the open conversation's own WhatsApp number. There is no default store: a number that isn't
+  // connected to a store (Settings → Channels) shows no Shopify products or orders.
+  const conversationChannelId = activeConv ? (activeConv.channel?.id ?? activeConv.customer.channelId ?? null) : null;
+  const shopifyStore = useChannelShopifyStore(conversationChannelId);
+  const shopifyScope = { channelId: conversationChannelId ?? undefined, customerId: activeConv?.customer.id };
 
   const shareDisabledReason = !activeConv
     ? null
@@ -1876,7 +1880,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                             </span>
                           )
                         )}
-                        {activeChannelType === 'whatsapp' && <ConsentBadge isOptedOut={activeConv.customer.isOptedOut} />}
+                        {/* Only opted-out is worth flagging in the header: nothing can be sent to them */}
+                        {activeChannelType === 'whatsapp' && activeConv.customer.isOptedOut && <ConsentBadge isOptedOut />}
                       </div>
                       <p className="text-[11.5px] text-slate-500 truncate">{headerSubtitle}</p>
                     </div>
@@ -2307,7 +2312,17 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                             ? OPTED_OUT_MESSAGE
                             : activeChannelType === 'whatsapp' && isWindowExpired
                             ? 'Products cannot be sent outside the 24-hour window'
-                            : shopifyStore.isConnected ? 'Share a Shopify product' : 'Connect your Shopify store to share products'
+                            : shopifyStore.isConnected
+                              ? `Share a product from ${shopifyStore.store?.name || shopifyStore.store?.shopDomain}`
+                              : shopifyStore.needsReauth
+                                ? "This number's Shopify store needs to be reconnected"
+                                : shopifyStore.isLoading
+                                  ? "Checking this number's Shopify store…"
+                                  : shopifyStore.failed
+                                    ? "Couldn't check this number's Shopify store"
+                                    : shopifyStore.hasStores
+                                  ? 'No Shopify store is associated with this number'
+                                  : 'No Shopify store connected'
                         }
                         className="p-1.5 rounded-lg cursor-pointer text-slate-500 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
@@ -2360,7 +2375,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           <CustomerPanel
             conversation={activeConv}
             lastAiAction={lastAiAction}
-            shopify={{ connected: shopifyStore.isConnected, needsReauth: shopifyStore.needsReauth }}
+            shopify={{
+              store: shopifyStore.store,
+              loading: shopifyStore.isLoading,
+              hasStores: shopifyStore.hasStores,
+              channelId: shopifyStore.channelId,
+              failed: shopifyStore.failed,
+              retry: shopifyStore.retry,
+            }}
+            productStoreScope={shopifyScope}
             onShareProduct={handleShareProduct}
             onInsertProductText={handleInsertProductText}
             shareDisabledReason={shareDisabledReason}
@@ -2381,7 +2404,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       />
 
       <Modal
-        isOpen={showProductPicker && Boolean(activeConv)}
+        isOpen={showProductPicker && Boolean(activeConv) && shopifyStore.isConnected}
         onClose={() => setShowProductPicker(false)}
         title={`Share a product with ${activeConv?.customer.name ?? 'customer'}`}
         icon={<ShoppingBag className="w-4 h-4 text-[#3440a8]" />}
@@ -2389,6 +2412,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       >
         <ProductBrowser
           className="h-[min(560px,70vh)]"
+          storeScope={shopifyScope}
           onShare={handleShareProduct}
           onInsertText={handleInsertProductText}
           shareDisabledReason={shareDisabledReason}

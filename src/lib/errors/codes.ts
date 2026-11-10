@@ -86,6 +86,11 @@ export const ERROR_DEFINITIONS = {
   SHOPIFY_OAUTH_FAILED: { status: 400, source: "shopify", message: "The Shopify authorization could not be verified. Please try connecting again." },
   SHOPIFY_CUSTOMER_ALREADY_LINKED: { status: 409, source: "shopify", message: "This Shopify customer is already linked to another contact." },
   CONTACT_IDENTITY_CONFLICT: { status: 409, source: "shopify", message: "These contacts are linked to different Shopify customers. Unlink one of them before linking the channels." },
+  SHOPIFY_STORE_NOT_FOUND: { status: 404, source: "shopify", message: "This Shopify store isn't connected to your workspace." },
+  SHOPIFY_STORE_ACCESS_DENIED: { status: 403, source: "shopify", message: "You don't have access to this Shopify store." },
+  SHOPIFY_STORE_CHANNEL_MISMATCH: { status: 409, source: "shopify", message: "This channel is connected to a different Shopify store." },
+  SHOPIFY_CHANNEL_ALREADY_MAPPED: { status: 409, source: "shopify", message: "This channel is already connected to another Shopify store." },
+  SHOPIFY_ORDER_ALREADY_LINKED: { status: 409, source: "shopify", message: "This order is already linked to another contact." },
 
   // Database
   DB_UNAVAILABLE: { status: 503, source: "database", message: "The database is temporarily unavailable. Please try again shortly.", retryable: true },

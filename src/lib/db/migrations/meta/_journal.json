@@ -64,6 +64,13 @@
       "when": 1793794606311,
       "tag": "0008_automation_reliability",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794000000000,
+      "tag": "0009_store_channel_connections",
+      "breakpoints": true
     }
   ]
 }

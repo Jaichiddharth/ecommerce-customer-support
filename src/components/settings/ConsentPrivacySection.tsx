@@ -68,7 +68,7 @@ export function ConsentPrivacySection() {
       >
         <div className="grid gap-6 lg:grid-cols-[1fr_200px_240px]">
           <div>
-            <FieldLabel>Stop keywords</FieldLabel>
+            <FieldLabel>Opt-out keywords</FieldLabel>
             <KeywordChips keywords={OPT_OUT_KEYWORDS} />
           </div>
           <div>
@@ -89,9 +89,8 @@ export function ConsentPrivacySection() {
         </div>
 
         <p className="mt-5 text-[11.5px] text-slate-500 leading-relaxed">
-          The whole message must be the keyword (any case, punctuation ignored). WhatsApp&apos;s own &quot;Stop promotions&quot; button
-          and delivery error 131050 also mark a contact as opted out. Opted-out contacts receive nothing from you (no replies,
-          templates or campaigns) until they reply with an opt-in keyword.
+          The reply must be only the keyword (any case). Opted-out contacts receive no messages until they reply with an
+          opt-in keyword.
         </p>
       </Card>
 
