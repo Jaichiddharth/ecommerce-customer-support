@@ -10,3 +10,6 @@ README*
 docs
 src/lib/db/migrations/
 src/lib/db/migrations_backup/
+.agents/skills/
+skills-lock.json
+.claude

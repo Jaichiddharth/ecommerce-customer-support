@@ -17,6 +17,7 @@ export function useShopifyStore() {
   const [store, setStore] = useState<ShopifyStoreInfo | null>(null);
   const [stores, setStores] = useState<ShopifyStoreInfo[]>([]);
   const [configured, setConfigured] = useState(true);
+  const [distribution, setDistribution] = useState<'private' | 'public'>('private');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
 
@@ -26,6 +27,7 @@ export function useShopifyStore() {
       setStore(res.data?.store ?? null);
       setStores(res.data?.stores ?? []);
       setConfigured(res.data?.configured !== false);
+      setDistribution(res.data?.distribution === 'public' ? 'public' : 'private');
       setError(null);
     } catch (err) {
       setError(toApiError(err));
@@ -44,6 +46,7 @@ export function useShopifyStore() {
     store,
     stores,
     configured,
+    distribution,
     isLoading,
     error,
     refresh,

@@ -1,33 +1,46 @@
-import { shopifyRepository, pickPrimaryStore, type ShopifyStoreWithUser } from "../db/repositories/shopify.repository";
+import { shopifyRepository, type ShopifyStoreWithUser } from "../db/repositories/shopify.repository";
 import { customerRepository } from "../db/repositories/customer.repository";
+import { channelRepository } from "../db/repositories/channel.repository";
 import { ShopifyLinkSource, ShopifyStoreStatus, type ShopifyStore, type SharedShopifyProduct } from "../db/schema";
 import { AppError, toAppError } from "../errors";
 import { createLogger } from "../logger";
 import { encryptToken, decryptToken } from "../security/crypto";
 import type { AuthUser } from "../security/auth";
+import { canAccessStore } from "../security/store-access";
 import { shopifyGraphql, revokeShopifyAccess } from "../shopify/admin-client";
-import { getShopifyConfig, isValidShopDomain, shopifyLegacyId, toShopifyGid, SHOPIFY_REQUIRED_SCOPES } from "../shopify/config";
+import { getShopifyConfig, getShopifyDistribution, isValidShopDomain, shopifyLegacyId, toShopifyGid, SHOPIFY_REQUIRED_SCOPES } from "../shopify/config";
+import { hasScope, toOrderLinkInfo, toStoreInfo, toStoreRef } from "../shopify/mappers";
 import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken, verifyCallbackHmac, verifyState } from "../shopify/oauth";
 import { buildProductMessageText } from "../shopify/product-message";
 import type {
   ShopifyAutoMatchStatus,
   ShopifyCustomerSummary,
+  ShopifyOrderLinkInfo,
   ShopifyOrderSearchResult,
   ShopifyMoney,
   ShopifyOrder,
   ShopifyPage,
   ShopifyProductDetail,
   ShopifyProductSummary,
-  ShopifyStoreInfo,
   ShopifyVariant,
   ShopifyContactOrdersResponse,
+  ShopifyCount,
+  ShopifyCustomerListSort,
+  ShopifyStoreCustomer,
+  ShopifyStoreOverview,
+  ShopifyStoreOrder,
+  ShopifyOrderStatusFilter,
+  ShopifyCustomerOrdersPage,
 } from "../shopify/types";
 import { whatsAppService } from "./channels/whatsapp.service";
 import { customerService } from "./customer.service";
+import { shopifyStoreConnectionService, type StoreScope } from "./shopify-store-connection.service";
 
 const log = createLogger("ShopifyService");
 
 const PRODUCTS_PAGE_SIZE = 20;
+const CUSTOMERS_PAGE_SIZE = 25;
+const STORE_ORDERS_PAGE_SIZE = 20;
 const ORDERS_PAGE_SIZE = 10;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
@@ -91,7 +104,7 @@ const VARIANT_QUERY = /* GraphQL */ `
 `;
 
 const CUSTOMER_FIELDS = /* GraphQL */ `
-  id displayName createdAt numberOfOrders
+  id displayName createdAt numberOfOrders tags
   defaultEmailAddress { emailAddress }
   defaultPhoneNumber { phoneNumber }
   amountSpent { amount currencyCode }
@@ -106,6 +119,33 @@ const SEARCH_CUSTOMERS_QUERY = /* GraphQL */ `
 const CUSTOMER_QUERY = /* GraphQL */ `
   query CustomerById($id: ID!) {
     customer(id: $id) { ${CUSTOMER_FIELDS} }
+  }
+`;
+
+const STORE_OVERVIEW_QUERY = /* GraphQL */ `
+  query StoreOverview {
+    shop {
+      name email contactEmail myshopifyDomain currencyCode ianaTimezone createdAt
+      plan { publicDisplayName partnerDevelopment shopifyPlus }
+      primaryDomain { url }
+      shopAddress { city province country }
+    }
+    productsCount(query: "status:active", limit: null) { count precision }
+    customersCount(limit: null) { count precision }
+    ordersCount(limit: null) { count precision }
+  }
+`;
+
+const LIST_CUSTOMERS_QUERY = /* GraphQL */ `
+  query ListCustomers($first: Int!, $after: String, $query: String, $sortKey: CustomerSortKeys, $reverse: Boolean) {
+    customers(first: $first, after: $after, query: $query, sortKey: $sortKey, reverse: $reverse) {
+      nodes {
+        ${CUSTOMER_FIELDS}
+        defaultAddress { city countryCodeV2 }
+        lastOrder { name createdAt }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
   }
 `;
 
@@ -126,6 +166,24 @@ const CUSTOMER_ORDERS_QUERY = /* GraphQL */ `
         nodes { ${ORDER_FIELDS} }
         pageInfo { hasNextPage endCursor }
       }
+    }
+  }
+`;
+
+const ORDER_REF_QUERY = /* GraphQL */ `
+  query OrderRef($id: ID!) {
+    order(id: $id) { id name }
+  }
+`;
+
+const LIST_ORDERS_QUERY = /* GraphQL */ `
+  query ListOrders($first: Int!, $after: String, $query: String) {
+    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
+      nodes {
+        ${ORDER_FIELDS}
+        customer { id displayName defaultEmailAddress { emailAddress } }
+      }
+      pageInfo { hasNextPage endCursor }
     }
   }
 `;
@@ -192,6 +250,7 @@ function mapCustomer(c: Node): ShopifyCustomerSummary {
     phone: c.defaultPhoneNumber?.phoneNumber ?? null,
     numberOfOrders: Number(c.numberOfOrders ?? 0),
     amountSpent: money(c.amountSpent),
+    tags: Array.isArray(c.tags) ? c.tags.map(String) : [],
     createdAt: c.createdAt,
   };
 }
@@ -221,6 +280,15 @@ function mapOrder(o: Node, shopDomain: string): ShopifyOrder {
   };
 }
 
+const toCount = (c: Node | null | undefined): ShopifyCount | null =>
+  c && c.count !== undefined ? { count: Number(c.count), atLeast: c.precision === "AT_LEAST" } : null;
+
+const CUSTOMER_LIST_SORTS: Record<ShopifyCustomerListSort, { sortKey: string; reverse: boolean }> = {
+  updated: { sortKey: "UPDATED_AT", reverse: true },
+  created: { sortKey: "CREATED_AT", reverse: true },
+  name: { sortKey: "NAME", reverse: false },
+};
+
 /** Shopify search syntax value, quoted so spaces, colons and parentheses can't change the query */
 const quoteSearchValue = (value: string) => `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
@@ -239,7 +307,8 @@ const MAX_MATCH_IDENTIFIERS = 5;
 function prefixWords(term: string): string {
   return term
     .split(/\s+/)
-    .map((w) => w.replace(/[^\p{L}\p{N}_.-]/gu, ""))
+    // A leading "-" would negate the term in Shopify search syntax
+    .map((w) => w.replace(/[^\p{L}\p{N}_.-]/gu, "").replace(/^-+/, ""))
     .filter(Boolean)
     .slice(0, 6)
     .map((w) => `${w}*`)
@@ -264,11 +333,6 @@ function buildOrderSearchQuery(term: string): string {
   return quoteSearchValue(term);
 }
 
-function hasScope(granted: string[], required: string): boolean {
-  // write_x implies read_x
-  return granted.includes(required) || granted.includes(required.replace(/^read_/, "write_"));
-}
-
 /* ------------------------------------------------------------------ */
 /* Service                                                             */
 /* ------------------------------------------------------------------ */
@@ -283,31 +347,12 @@ export class ShopifyService {
     }
   }
 
-  toStoreInfo(store: ShopifyStoreWithUser): ShopifyStoreInfo {
-    const scopes = (store.scopes || "").split(",").map((s) => s.trim()).filter(Boolean);
-    return {
-      id: store.id,
-      shopDomain: store.shopDomain,
-      name: store.name,
-      email: store.email,
-      currencyCode: store.currencyCode,
-      primaryDomainUrl: store.primaryDomainUrl,
-      status: store.status,
-      scopes,
-      missingScopes: SHOPIFY_REQUIRED_SCOPES.filter((s) => !hasScope(scopes, s)),
-      lastError: store.lastError,
-      connectedAt: store.connectedAt.toISOString(),
-      connectedByName: store.connectedByName,
-    };
-  }
-
   async getConnection(organizationId: number) {
     const stores = await shopifyRepository.findActiveStores(organizationId);
-    const primary = pickPrimaryStore(stores);
     return {
       configured: this.isConfigured(),
-      store: primary ? this.toStoreInfo(primary) : null,
-      stores: stores.map((store) => this.toStoreInfo(store)),
+      distribution: getShopifyDistribution(),
+      stores: stores.map(toStoreInfo),
     };
   }
 
@@ -364,6 +409,7 @@ export class ShopifyService {
     return store;
   }
 
+  /** Revokes and clears the token. Channel mappings and links stay, so reconnecting the shop restores them. */
   async disconnect(organizationId: number, storeId: number): Promise<void> {
     const store = await shopifyRepository.findActiveStore(organizationId, storeId);
     if (!store) throw new AppError("SHOPIFY_NOT_CONNECTED", { expected: true });
@@ -378,23 +424,21 @@ export class ShopifyService {
       }
     }
 
-    await shopifyRepository.updateStore(store.id, organizationId, {
-      status: ShopifyStoreStatus.DISCONNECTED,
-      accessToken: null,
-      refreshToken: null,
-      tokenExpiresAt: null,
-      lastError: null,
-    });
+    // Its numbers have no store until the shop is reconnected (or they're connected to another store)
+    await shopifyRepository.markStoreDisconnected(store.id, organizationId);
     log.info("Shopify store disconnected", { organizationId, shop: store.shopDomain, storeId: store.id });
   }
 
   /* ---------------- Authenticated Admin API calls ---------------- */
 
-  private async requireStore(organizationId: number): Promise<ShopifyStoreWithUser> {
-    const store = await shopifyRepository.findActiveStore(organizationId);
-    if (!store) throw new AppError("SHOPIFY_NOT_CONNECTED", { expected: true });
-    if (store.status === ShopifyStoreStatus.REAUTH_REQUIRED) throw new AppError("SHOPIFY_AUTH_FAILED", { expected: true });
-    return store;
+  /** The store for this scope (see StoreScope), usable for Admin API calls */
+  private async requireStore(user: AuthUser, scope: StoreScope): Promise<ShopifyStoreWithUser> {
+    const resolved = await shopifyStoreConnectionService.resolveStore(user, scope);
+    if (!resolved) throw new AppError("SHOPIFY_NOT_CONNECTED", { expected: true });
+    if (resolved.store.status === ShopifyStoreStatus.REAUTH_REQUIRED) {
+      throw new AppError("SHOPIFY_AUTH_FAILED", { details: { storeId: resolved.store.id }, expected: true });
+    }
+    return resolved.store;
   }
 
   private async markReauthRequired(store: ShopifyStore, reason: string) {
@@ -447,10 +491,148 @@ export class ShopifyService {
     }
   }
 
+  /* ---------------- Store details ---------------- */
+
+  /** Live details and counts of one store, straight from Shopify */
+  async getStoreOverview(user: AuthUser, storeId: number): Promise<ShopifyStoreOverview> {
+    const store = await this.requireStore(user, { storeId });
+    const data = await this.query<{ shop: Node; productsCount: Node | null; customersCount: Node | null; ordersCount: Node | null }>(
+      store,
+      "store_overview",
+      STORE_OVERVIEW_QUERY
+    );
+    const shop = data.shop ?? {};
+    const address = [shop.shopAddress?.city, shop.shopAddress?.province, shop.shopAddress?.country].filter(Boolean).join(", ");
+    return {
+      name: shop.name ?? store.name ?? store.shopDomain,
+      email: shop.email ?? null,
+      contactEmail: shop.contactEmail ?? null,
+      myshopifyDomain: shop.myshopifyDomain ?? store.shopDomain,
+      currencyCode: shop.currencyCode ?? store.currencyCode ?? "",
+      timezone: shop.ianaTimezone ?? null,
+      shopCreatedAt: shop.createdAt ?? null,
+      plan: {
+        name: shop.plan?.publicDisplayName ?? null,
+        shopifyPlus: Boolean(shop.plan?.shopifyPlus),
+        developmentStore: Boolean(shop.plan?.partnerDevelopment),
+      },
+      address: address || null,
+      storefrontUrl: shop.primaryDomain?.url ?? store.primaryDomainUrl ?? null,
+      counts: { products: toCount(data.productsCount), customers: toCount(data.customersCount), orders: toCount(data.ordersCount) },
+    };
+  }
+
+  /**
+   * One page of a store's customers, each with its tags and the UnoCX contact it's linked to.
+   * `q` is a name, email or phone number; `tag` keeps only customers with that tag.
+   */
+  async listStoreCustomers(
+    user: AuthUser,
+    storeId: number,
+    params: { q?: string; tag?: string; sort?: ShopifyCustomerListSort; after?: string | null }
+  ): Promise<ShopifyPage<ShopifyStoreCustomer>> {
+    const q = params.q?.trim().slice(0, 100);
+    const tag = params.tag?.trim().slice(0, 255);
+    const clauses = [q ? buildCustomerSearchQuery(q) : "", tag ? `tag:${quoteSearchValue(tag)}` : ""].filter(Boolean);
+    const query = clauses.length > 1 ? clauses.map((c) => `(${c})`).join(" AND ") : clauses[0] || null;
+    // A free-text search is ordered by relevance; otherwise by the chosen sort
+    const sort = q ? { sortKey: "RELEVANCE", reverse: false } : CUSTOMER_LIST_SORTS[params.sort ?? "updated"];
+
+    const store = await this.requireStore(user, { storeId });
+    const data = await this.query<{ customers: { nodes: Node[]; pageInfo: Node } }>(store, "list_customers", LIST_CUSTOMERS_QUERY, {
+      first: CUSTOMERS_PAGE_SIZE,
+      after: params.after || null,
+      query,
+      ...sort,
+    });
+
+    const nodes = data.customers.nodes;
+    const links = await shopifyRepository.findLinkedContacts(user.organizationId, store.id, nodes.map((c) => c.id));
+    const linkByCustomer = new Map(links.map((l) => [l.shopifyCustomerId, { id: l.customerId, name: l.customerName }]));
+
+    return {
+      items: nodes.map((c) => {
+        const summary = mapCustomer(c);
+        const location = [c.defaultAddress?.city, c.defaultAddress?.countryCodeV2].filter(Boolean).join(", ");
+        return {
+          ...summary,
+          location: location || null,
+          lastOrder: c.lastOrder ? { name: String(c.lastOrder.name), createdAt: String(c.lastOrder.createdAt) } : null,
+          linkedContact: linkByCustomer.get(c.id) ?? null,
+          adminUrl: `https://${store.shopDomain}/admin/customers/${summary.legacyId}`,
+        };
+      }),
+      hasNextPage: Boolean(data.customers.pageInfo?.hasNextPage),
+      endCursor: data.customers.pageInfo?.endCursor ?? null,
+    };
+  }
+
+  /** One page of a store's orders, newest first. `q` is an order number, email or other text. */
+  async listStoreOrders(
+    user: AuthUser,
+    storeId: number,
+    params: { q?: string; status?: ShopifyOrderStatusFilter; after?: string | null }
+  ): Promise<ShopifyPage<ShopifyStoreOrder>> {
+    const q = params.q?.trim().slice(0, 100);
+    const clauses = [q ? buildOrderSearchQuery(q) : "", params.status && params.status !== "any" ? `status:${params.status}` : ""].filter(Boolean);
+    const query = clauses.length > 1 ? clauses.map((c) => `(${c})`).join(" AND ") : clauses[0] || null;
+
+    const store = await this.requireStore(user, { storeId });
+    const data = await this.query<{ orders: { nodes: Node[]; pageInfo: Node } }>(store, "list_orders", LIST_ORDERS_QUERY, {
+      first: STORE_ORDERS_PAGE_SIZE,
+      after: params.after || null,
+      query,
+    });
+
+    return {
+      items: data.orders.nodes.map((o) => ({
+        ...mapOrder(o, store.shopDomain),
+        customer: o.customer
+          ? {
+              id: o.customer.id,
+              legacyId: shopifyLegacyId(o.customer.id),
+              displayName: o.customer.displayName || o.customer.defaultEmailAddress?.emailAddress || "Unnamed customer",
+              email: o.customer.defaultEmailAddress?.emailAddress ?? null,
+            }
+          : null,
+      })),
+      hasNextPage: Boolean(data.orders.pageInfo?.hasNextPage),
+      endCursor: data.orders.pageInfo?.endCursor ?? null,
+    };
+  }
+
+  /** A customer of the store with one page of their orders, newest first */
+  async getStoreCustomerOrders(
+    user: AuthUser,
+    storeId: number,
+    shopifyCustomerId: string,
+    after?: string | null
+  ): Promise<ShopifyCustomerOrdersPage> {
+    const gid = toShopifyGid("Customer", shopifyCustomerId);
+    if (!gid) throw AppError.validation("Invalid Shopify customer id.", "customerId");
+
+    const store = await this.requireStore(user, { storeId });
+    const { customer } = await this.query<{ customer: Node | null }>(store, "customer_orders", CUSTOMER_ORDERS_QUERY, {
+      id: gid,
+      first: ORDERS_PAGE_SIZE,
+      after: after || null,
+    });
+    if (!customer) return { customer: null, orders: { items: [], hasNextPage: false, endCursor: null } };
+
+    return {
+      customer: mapCustomer(customer),
+      orders: {
+        items: (customer.orders?.nodes ?? []).map((o: Node) => mapOrder(o, store.shopDomain)),
+        hasNextPage: Boolean(customer.orders?.pageInfo?.hasNextPage),
+        endCursor: customer.orders?.pageInfo?.endCursor ?? null,
+      },
+    };
+  }
+
   /* ---------------- Products ---------------- */
 
-  async searchProducts(organizationId: number, term: string, after?: string | null): Promise<ShopifyPage<ShopifyProductSummary>> {
-    const store = await this.requireStore(organizationId);
+  async searchProducts(user: AuthUser, scope: StoreScope, term: string, after?: string | null): Promise<ShopifyPage<ShopifyProductSummary>> {
+    const store = await this.requireStore(user, scope);
     const q = term.trim().slice(0, 100);
     const data = await this.query<{ products: { nodes: Node[]; pageInfo: Node } }>(store, "search_products", SEARCH_PRODUCTS_QUERY, {
       first: PRODUCTS_PAGE_SIZE,
@@ -466,11 +648,11 @@ export class ShopifyService {
     };
   }
 
-  async getProduct(organizationId: number, productId: string): Promise<ShopifyProductDetail> {
+  async getProduct(user: AuthUser, scope: StoreScope, productId: string): Promise<ShopifyProductDetail> {
     const gid = toShopifyGid("Product", productId);
     if (!gid) throw AppError.validation("Invalid product id.", "productId");
 
-    const store = await this.requireStore(organizationId);
+    const store = await this.requireStore(user, scope);
     const { product: p } = await this.query<{ product: Node | null }>(store, "product_detail", PRODUCT_DETAIL_QUERY, { id: gid });
     if (!p) throw AppError.notFound("This product no longer exists in your Shopify store.");
 
@@ -497,11 +679,11 @@ export class ShopifyService {
   }
 
   /** Loads a variant straight from Shopify, so what gets shared is always current and real */
-  async getVariant(organizationId: number, variantId: string) {
+  async getVariant(user: AuthUser, scope: StoreScope, variantId: string) {
     const gid = toShopifyGid("ProductVariant", variantId);
     if (!gid) throw AppError.validation("Invalid variant id.", "variantId");
 
-    const store = await this.requireStore(organizationId);
+    const store = await this.requireStore(user, scope);
     const { productVariant: v } = await this.query<{ productVariant: Node | null }>(store, "variant_detail", VARIANT_QUERY, { id: gid });
     if (!v || !v.product) throw AppError.notFound("This product option no longer exists in your Shopify store.");
 
@@ -527,16 +709,18 @@ export class ShopifyService {
 
   /* ---------------- Sharing ---------------- */
 
+  /** The product comes from the store of the channel it's sent on (an explicit storeId must be that store) */
   async shareProduct(
     user: AuthUser,
-    params: { customerId: number; channelId?: number; productId?: string; variantId: string; caption?: string }
+    params: { customerId: number; channelId?: number; storeId?: number; productId?: string; variantId: string; caption?: string }
   ) {
     const customer = await customerService.requireVisible(params.customerId, user.organizationId);
     if (!customer.phone) {
       throw AppError.validation(`"${customer.name}" has no phone number, so the product can't be sent on WhatsApp.`, "customerId");
     }
 
-    const { productStatus, shared } = await this.getVariant(user.organizationId, params.variantId);
+    const channelId = params.channelId ?? customer.channelId ?? undefined;
+    const { productStatus, shared } = await this.getVariant(user, { storeId: params.storeId, channelId }, params.variantId);
     if (params.productId && toShopifyGid("Product", params.productId) !== shared.productId) {
       throw AppError.validation("The selected option doesn't belong to this product.", "variantId");
     }
@@ -547,7 +731,7 @@ export class ShopifyService {
     const text = params.caption?.trim() ? params.caption.trim().slice(0, 1024) : buildProductMessageText(shared);
     const result = await whatsAppService.sendMessage({
       organizationId: user.organizationId,
-      channelId: params.channelId ?? customer.channelId ?? undefined,
+      channelId,
       senderId: user.id,
       senderName: user.name,
       customerId: customer.id,
@@ -557,20 +741,25 @@ export class ShopifyService {
       metadata: { shopifyProduct: shared },
     });
 
-    log.info("Shopify product shared", { customerId: customer.id, productId: shared.productId, variantId: shared.variantId });
+    log.info("Shopify product shared", { customerId: customer.id, storeId: shared.storeId, productId: shared.productId, variantId: shared.variantId });
     return { ...result, product: shared };
   }
 
   /* ---------------- Customers & links ---------------- */
 
-  /** Customer search for linking: `q` is a name, email or phone number; `email` / `phone` match exactly */
+  /**
+   * Customer search for linking: `q` is a name, email or phone number; `email` / `phone` match exactly (any of
+   * them may match). `tag` narrows the result to customers with that tag, and can also be used on its own.
+   */
   async searchCustomers(
-    organizationId: number,
-    params: { q?: string; email?: string; phone?: string }
+    user: AuthUser,
+    scope: StoreScope,
+    params: { q?: string; email?: string; phone?: string; tag?: string }
   ): Promise<ShopifyCustomerSummary[]> {
     const q = params.q?.trim().slice(0, 100);
     const email = params.email?.trim().toLowerCase();
     const phoneDigits = params.phone?.replace(/\D/g, "");
+    const tag = params.tag?.trim().slice(0, 255);
 
     const clauses: string[] = [];
     if (q) {
@@ -586,21 +775,23 @@ export class ShopifyService {
       if (phoneDigits.length < 6) throw AppError.validation("Enter a phone number with its country code.", "phone");
       clauses.push(`phone:${quoteSearchValue(`+${phoneDigits}`)}`);
     }
-    if (clauses.length === 0) throw AppError.validation("Enter a name, email address or phone number to search.", "q");
+    if (clauses.length === 0 && !tag) throw AppError.validation("Enter a name, email address or phone number to search.", "q");
 
-    const store = await this.requireStore(organizationId);
-    const data = await this.query<{ customers: { nodes: Node[] } }>(store, "search_customers", SEARCH_CUSTOMERS_QUERY, {
-      query: clauses.join(" OR "),
-    });
+    const tagClause = tag ? `tag:${quoteSearchValue(tag)}` : "";
+    const identity = clauses.join(" OR ");
+    const query = identity && tagClause ? `(${identity}) AND ${tagClause}` : identity || tagClause;
+
+    const store = await this.requireStore(user, scope);
+    const data = await this.query<{ customers: { nodes: Node[] } }>(store, "search_customers", SEARCH_CUSTOMERS_QUERY, { query });
     return data.customers.nodes.map(mapCustomer);
   }
 
   /** Orders by number, email or other text, each with its customer so the agent can link them */
-  async searchOrders(organizationId: number, term: string): Promise<ShopifyOrderSearchResult[]> {
+  async searchOrders(user: AuthUser, scope: StoreScope, term: string): Promise<ShopifyOrderSearchResult[]> {
     const q = term.trim().slice(0, 100);
     if (!q) throw AppError.validation("Enter an order number or email address to search.", "q");
 
-    const store = await this.requireStore(organizationId);
+    const store = await this.requireStore(user, scope);
     const data = await this.query<{ orders: { nodes: Node[] } }>(store, "search_orders", SEARCH_ORDERS_QUERY, {
       query: buildOrderSearchQuery(q),
     });
@@ -616,12 +807,13 @@ export class ShopifyService {
     return { contact, profileId: customerService.profileIdOf(contact) };
   }
 
-  async linkCustomer(user: AuthUser, customerId: number, shopifyCustomerId: string) {
+  /** Links the contact's profile in the store of the contact's channel (or the given store) */
+  async linkCustomer(user: AuthUser, customerId: number, shopifyCustomerId: string, storeId?: number) {
     const gid = toShopifyGid("Customer", shopifyCustomerId);
     if (!gid) throw AppError.validation("Invalid Shopify customer id.", "shopifyCustomerId");
 
     const { profileId } = await this.requireProfile(user.organizationId, customerId);
-    const store = await this.requireStore(user.organizationId);
+    const store = await this.requireStore(user, { storeId, customerId });
 
     // Never trust the id from the browser: it has to be a real customer of this store
     const { customer } = await this.query<{ customer: Node | null }>(store, "customer_by_id", CUSTOMER_QUERY, { id: gid });
@@ -653,10 +845,12 @@ export class ShopifyService {
     return mapCustomer(customer);
   }
 
-  async unlinkCustomer(user: AuthUser, customerId: number): Promise<void> {
+  async unlinkCustomer(user: AuthUser, customerId: number, storeId?: number): Promise<void> {
     const { profileId } = await this.requireProfile(user.organizationId, customerId);
-    const store = await shopifyRepository.findActiveStore(user.organizationId);
-    if (!store) throw new AppError("SHOPIFY_NOT_CONNECTED", { expected: true });
+    // A store needing re-authorization can still be unlinked: no Shopify call is made
+    const resolved = await shopifyStoreConnectionService.resolveStore(user, { storeId, customerId });
+    if (!resolved) throw new AppError("SHOPIFY_NOT_CONNECTED", { expected: true });
+    const { store } = resolved;
 
     const removed = await shopifyRepository.markUnlinked(user.organizationId, store.id, profileId, user.id);
     if (!removed) throw AppError.notFound("This contact isn't linked to a Shopify customer.");
@@ -714,25 +908,36 @@ export class ShopifyService {
     return { status: "none", candidates: [] };
   }
 
-  /** Link + Shopify customer + one page of their orders, for the contact panel. Matches unlinked contacts first. */
+  /**
+   * Link + Shopify customer + one page of their orders, for the contact panel, from the store of the contact's
+   * channel (or the given store). Matches unlinked contacts first.
+   */
   async getContactOrders(
-    organizationId: number,
+    user: AuthUser,
     customerId: number,
-    after?: string | null
+    after?: string | null,
+    storeId?: number
   ): Promise<Omit<ShopifyContactOrdersResponse, "success">> {
+    const organizationId = user.organizationId;
     const { profileId } = await this.requireProfile(organizationId, customerId);
     const emptyOrders: ShopifyPage<ShopifyOrder> = { items: [], hasNextPage: false, endCursor: null };
+
+    const resolved = await shopifyStoreConnectionService.resolveStore(user, { storeId, customerId });
+    if (!resolved) return { connected: false, store: null, link: null, shopifyCustomer: null, orders: emptyOrders, autoMatch: null };
+    const { store } = resolved;
+    if (store.status === ShopifyStoreStatus.REAUTH_REQUIRED) {
+      throw new AppError("SHOPIFY_AUTH_FAILED", { details: { storeId: store.id }, expected: true });
+    }
+
+    const storeRef = toStoreRef(store);
     const unlinked = (autoMatch: ShopifyContactOrdersResponse["autoMatch"]) => ({
       connected: true,
+      store: storeRef,
       link: null,
       shopifyCustomer: null,
       orders: emptyOrders,
       autoMatch,
     });
-
-    const store = await shopifyRepository.findActiveStore(organizationId);
-    if (!store) return { connected: false, link: null, shopifyCustomer: null, orders: emptyOrders, autoMatch: null };
-    if (store.status === ShopifyStoreStatus.REAUTH_REQUIRED) throw new AppError("SHOPIFY_AUTH_FAILED", { expected: true });
 
     let link = await shopifyRepository.findLink(organizationId, store.id, profileId);
     if (link && !link.shopifyCustomerId) return unlinked({ status: "dismissed", candidates: [] });
@@ -756,10 +961,11 @@ export class ShopifyService {
       after: after || null,
     });
     // Deleted or merged in Shopify: keep the link so the agent sees it and can re-link
-    if (!customer) return { connected: true, link: linkInfo, shopifyCustomer: null, orders: emptyOrders, autoMatch: null };
+    if (!customer) return { connected: true, store: storeRef, link: linkInfo, shopifyCustomer: null, orders: emptyOrders, autoMatch: null };
 
     return {
       connected: true,
+      store: storeRef,
       link: linkInfo,
       shopifyCustomer: mapCustomer(customer),
       orders: {
@@ -769,6 +975,93 @@ export class ShopifyService {
       },
       autoMatch: null,
     };
+  }
+
+  /* ---------------- Order associations ---------------- */
+
+  /** Orders associated with the contact's profile, in the active stores the member can access; optionally one store */
+  async listOrderLinks(user: AuthUser, customerId: number, storeId?: number): Promise<ShopifyOrderLinkInfo[]> {
+    const { profileId } = await this.requireProfile(user.organizationId, customerId);
+    const stores = (await shopifyRepository.findActiveStores(user.organizationId)).filter((s) => canAccessStore(user, s));
+    if (storeId !== undefined && !stores.some((s) => s.id === storeId)) {
+      throw new AppError("SHOPIFY_STORE_NOT_FOUND", { details: { storeId }, expected: true });
+    }
+    const visible = new Set(stores.map((s) => s.id));
+    const rows = await shopifyRepository.listOrderLinks(user.organizationId, profileId, storeId);
+    return rows.filter((row) => visible.has(row.shopifyStoreId)).map(toOrderLinkInfo);
+  }
+
+  /**
+   * Associates an order with the contact's profile. The store is the one of the channel the order is
+   * associated through (channelId, else the contact's channel), or the given store. The order is read from
+   * Shopify first, so only real orders of that store can be associated. Associating it again is a no-op.
+   */
+  async linkOrder(
+    user: AuthUser,
+    customerId: number,
+    params: { orderId: string; storeId?: number; channelId?: number }
+  ): Promise<{ link: ShopifyOrderLinkInfo; created: boolean }> {
+    const organizationId = user.organizationId;
+    const gid = toShopifyGid("Order", params.orderId);
+    if (!gid) throw AppError.validation("Invalid order id.", "orderId");
+
+    const { contact, profileId } = await this.requireProfile(organizationId, customerId);
+    if (params.channelId !== undefined && !(await channelRepository.findById(params.channelId, organizationId))) {
+      throw AppError.notFound("Channel not found.");
+    }
+    const channelId = params.channelId ?? contact.channelId ?? null;
+    const store = await this.requireStore(user, { storeId: params.storeId, channelId: channelId ?? undefined });
+
+    const { order } = await this.query<{ order: Node | null }>(store, "order_ref", ORDER_REF_QUERY, { id: gid });
+    if (!order) throw AppError.notFound("This order was not found in your Shopify store.");
+
+    const findOwn = async () =>
+      (await shopifyRepository.listOrderLinks(organizationId, profileId, store.id)).find((l) => l.shopifyOrderId === gid);
+
+    const existing = await shopifyRepository.findOrderLinkByOrder(organizationId, store.id, gid);
+    if (existing) {
+      if (existing.customerId !== profileId) {
+        throw new AppError("SHOPIFY_ORDER_ALREADY_LINKED", { details: { linkedContactId: existing.customerId }, expected: true });
+      }
+      const own = await findOwn();
+      if (own) return { link: toOrderLinkInfo(own), created: false };
+    }
+
+    try {
+      await shopifyRepository.createOrderLink({
+        organizationId,
+        storeId: store.id,
+        customerId: profileId,
+        channelId,
+        shopifyOrderId: gid,
+        orderName: typeof order.name === "string" ? order.name.slice(0, 100) : null,
+        linkedById: user.id,
+        source: ShopifyLinkSource.MANUAL,
+      });
+    } catch (err) {
+      const appError = toAppError(err);
+      if (appError.code === "DB_CONSTRAINT_VIOLATION") {
+        throw new AppError("SHOPIFY_ORDER_ALREADY_LINKED", { cause: appError, expected: true });
+      }
+      throw appError;
+    }
+
+    const created = await findOwn();
+    if (!created) throw new AppError("INTERNAL_ERROR", { message: "The order was linked but could not be read back." });
+    log.info("Order linked to contact", { customerId, profileId, storeId: store.id, channelId, shopifyOrderId: gid, userId: user.id });
+    return { link: toOrderLinkInfo(created), created: true };
+  }
+
+  async unlinkOrder(user: AuthUser, customerId: number, linkId: number): Promise<void> {
+    const { profileId } = await this.requireProfile(user.organizationId, customerId);
+    const link = (await shopifyRepository.listOrderLinks(user.organizationId, profileId)).find((l) => l.id === linkId);
+    if (!link) throw AppError.notFound("This order isn't linked to the contact.");
+
+    const store = await shopifyRepository.findActiveStore(user.organizationId, link.shopifyStoreId);
+    if (!store || !canAccessStore(user, store)) throw AppError.notFound("This order isn't linked to the contact.");
+
+    await shopifyRepository.deleteOrderLink(user.organizationId, profileId, linkId);
+    log.info("Order unlinked from contact", { customerId, profileId, linkId, storeId: link.shopifyStoreId, userId: user.id });
   }
 }
 

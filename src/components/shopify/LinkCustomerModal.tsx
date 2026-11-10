@@ -11,6 +11,7 @@ import { ErrorState } from '@/components/ui/states';
 import { formatShopifyPrice } from '@/lib/shopify/product-message';
 import type { ShopifyCustomerSummary, ShopifyOrderSearchResult } from '@/lib/shopify/types';
 import { ShopifyOrderCard } from './ShopifyOrderCard';
+import { ShopifyCustomerTags } from './ShopifyCustomerTags';
 
 interface LinkCustomerModalProps {
   isOpen: boolean;
@@ -18,6 +19,8 @@ interface LinkCustomerModalProps {
   contact: { id: number; name: string; email: string | null; phone: string | null };
   /** Shopify customer currently linked, so it can be marked in the results */
   currentShopifyCustomerId?: string | null;
+  /** The store of the conversation's WhatsApp number: searched and linked in */
+  store?: { id: number; name: string | null; shopDomain: string } | null;
   onLinked: (customer: ShopifyCustomerSummary) => void;
 }
 
@@ -42,7 +45,7 @@ const RadioDot: React.FC<{ selected: boolean }> = ({ selected }) => (
  * Search Shopify customers (by name, email or phone) or orders (by number or email) and link the
  * customer to the contact. The customer may use a different phone or email than the chat.
  */
-export const LinkCustomerModal: React.FC<LinkCustomerModalProps> = ({ isOpen, onClose, contact, currentShopifyCustomerId, onLinked }) => {
+export const LinkCustomerModal: React.FC<LinkCustomerModalProps> = ({ isOpen, onClose, contact, currentShopifyCustomerId, store, onLinked }) => {
   const [mode, setMode] = useState<SearchMode>('customers');
   const [query, setQuery] = useState('');
   const [customerResults, setCustomerResults] = useState<ShopifyCustomerSummary[] | null>(null);
@@ -80,12 +83,14 @@ export const LinkCustomerModal: React.FC<LinkCustomerModalProps> = ({ isOpen, on
     if (!q) return;
     setIsSearching(true);
     setSelected(null);
+    // The store of the conversation's number (customerId makes the server check it's the contact's store too)
+    const params = { q, customerId: contact.id, storeId: store?.id };
     try {
       if (mode === 'customers') {
-        const res = await apiClient.get('/api/integrations/shopify/customers', { params: { q } });
+        const res = await apiClient.get('/api/integrations/shopify/customers', { params });
         setCustomerResults(res.data.customers ?? []);
       } else {
-        const res = await apiClient.get('/api/integrations/shopify/orders', { params: { q } });
+        const res = await apiClient.get('/api/integrations/shopify/orders', { params });
         setOrderResults(res.data.results ?? []);
       }
       setSearchError(null);
@@ -102,7 +107,10 @@ export const LinkCustomerModal: React.FC<LinkCustomerModalProps> = ({ isOpen, on
     if (!selected) return;
     setIsLinking(true);
     try {
-      const res = await apiClient.put(`/api/integrations/shopify/contacts/${contact.id}/link`, { shopifyCustomerId: selected.customer.id });
+      const res = await apiClient.put(`/api/integrations/shopify/contacts/${contact.id}/link`, {
+        shopifyCustomerId: selected.customer.id,
+        storeId: store?.id,
+      });
       gooeyToast.success(`${contact.name} is now linked to ${res.data.shopifyCustomer.displayName}`);
       onLinked(res.data.shopifyCustomer);
       onClose();
@@ -122,8 +130,9 @@ export const LinkCustomerModal: React.FC<LinkCustomerModalProps> = ({ isOpen, on
     <Modal isOpen={isOpen} onClose={onClose} title="Find Shopify customer" icon={<UserSearch className="w-4 h-4 text-[#3440a8]" />} maxWidth="md">
       <div className="space-y-3 text-xs">
         <p className="text-slate-500">
-          Find <span className="font-semibold text-slate-700">{contact.name}</span> in your Shopify store. The customer can have a
-          different phone number or email than this chat.
+          Find <span className="font-semibold text-slate-700">{contact.name}</span> in{' '}
+          {store ? <span className="font-semibold text-slate-700">{store.name || store.shopDomain}</span> : 'your Shopify store'}. The
+          customer can have a different phone number or email than this chat.
         </p>
         <div className="flex rounded-lg bg-slate-100 p-0.5" role="tablist">
           {(Object.keys(MODE_LABELS) as SearchMode[]).map((m) => (
@@ -204,6 +213,7 @@ export const LinkCustomerModal: React.FC<LinkCustomerModalProps> = ({ isOpen, on
                           ID {c.legacyId} · {c.numberOfOrders} order{c.numberOfOrders === 1 ? '' : 's'}
                           {c.amountSpent ? ` · ${formatShopifyPrice(c.amountSpent.amount, c.amountSpent.currencyCode)} spent` : ''}
                         </span>
+                        <ShopifyCustomerTags tags={c.tags} className="mt-1" />
                       </span>
                     </button>
                   </li>
@@ -231,6 +241,7 @@ export const LinkCustomerModal: React.FC<LinkCustomerModalProps> = ({ isOpen, on
                               {linkedNow(customer)}
                             </span>
                             <span className="block text-slate-600 truncate">{customer.email || customer.phone || `ID ${customer.legacyId}`}</span>
+                            <ShopifyCustomerTags tags={customer.tags} className="mt-1" />
                           </>
                         ) : (
                           <span className="block text-slate-500">Guest checkout: there&apos;s no customer to link</span>

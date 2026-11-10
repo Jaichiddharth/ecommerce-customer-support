@@ -2,8 +2,10 @@
 
 import React, { useState } from 'react';
 import { CreditCard, RefreshCw, Truck, User, X } from 'lucide-react';
-import { ProductBrowser, type ShareProductArgs } from '../shopify/ProductBrowser';
+import { ProductBrowser, type ProductStoreScope, type ShareProductArgs } from '../shopify/ProductBrowser';
 import { ShopifyOrdersSection } from '../shopify/ShopifyOrdersSection';
+import { ChannelStoreSetup } from '../shopify/ChannelStoreSetup';
+import type { ShopifyChannelStore } from '@/lib/shopify/types';
 import { ContactIdentities } from './ContactIdentities';
 import { ConsentSection } from './ConsentStatus';
 import {
@@ -45,7 +47,18 @@ const QUICK_ACTIONS = [
 interface CustomerPanelProps {
   conversation: InboxConversation | null;
   lastAiAction?: string | null;
-  shopify: { connected: boolean; needsReauth: boolean };
+  /** The store the conversation's WhatsApp number is connected to; null: none, so no Shopify data is shown */
+  shopify: {
+    store: ShopifyChannelStore | null;
+    loading: boolean;
+    hasStores: boolean;
+    channelId: number | null;
+    /** The store check failed (network, session): show a retry, not "connect a store" */
+    failed: boolean;
+    retry: () => void;
+  };
+  /** The channel and contact products are shared through, so the products come from that channel's store */
+  productStoreScope?: ProductStoreScope;
   onShareProduct: (args: ShareProductArgs) => Promise<boolean>;
   onInsertProductText: (text: string) => void;
   shareDisabledReason?: string | null;
@@ -59,6 +72,7 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
   conversation,
   lastAiAction,
   shopify,
+  productStoreScope,
   onShareProduct,
   onInsertProductText,
   shareDisabledReason,
@@ -118,19 +132,36 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
     return (
       <aside className="hidden xl:flex w-[285px] bg-white border-l border-slate-200 shrink-0 h-full flex-col">
         {viewTabs}
-        {shopify.connected ? (
-          <ProductBrowser
-            className="flex-1 p-3"
-            onShare={onShareProduct}
-            onInsertText={onInsertProductText}
-            shareDisabledReason={shareDisabledReason}
-          />
-        ) : (
+        {shopify.loading ? (
+          <p className="m-4 text-xs text-slate-400">Checking this number&apos;s Shopify store…</p>
+        ) : !shopify.store ? (
+          <div className="px-4 pb-4">
+            <ChannelStoreSetup
+              channelId={shopify.channelId}
+              hasStores={shopify.hasStores}
+              what="search and share products"
+              failed={shopify.failed}
+              onRetry={shopify.retry}
+            />
+          </div>
+        ) : shopify.store.status !== 'connected' ? (
           <p className="m-4 rounded-lg bg-slate-100/80 px-3 py-2.5 text-xs text-slate-600 leading-relaxed">
-            {shopify.needsReauth
-              ? 'The Shopify connection has expired. Reconnect the store from Integrations.'
-              : 'Connect your Shopify store from Integrations to search and share products.'}
+            The connection to {shopify.store.name || shopify.store.shopDomain} has expired. Reconnect the store from Integrations.
           </p>
+        ) : (
+          <>
+            <p className="px-3 pt-2.5 text-[11px] text-slate-400 truncate" title={shopify.store.shopDomain}>
+              Products from {shopify.store.name || shopify.store.shopDomain}
+            </p>
+            <ProductBrowser
+              key={shopify.store.id}
+              className="flex-1 p-3"
+              storeScope={productStoreScope}
+              onShare={onShareProduct}
+              onInsertText={onInsertProductText}
+              shareDisabledReason={shareDisabledReason}
+            />
+          </>
         )}
       </aside>
     );
@@ -196,8 +227,12 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
         <ShopifyOrdersSection
           key={`${conversation.customer.id}:${profileVersion}`}
           contact={conversation.customer}
-          storeConnected={shopify.connected}
-          storeNeedsReauth={shopify.needsReauth}
+          store={shopify.store}
+          storeLoading={shopify.loading}
+          channelId={shopify.channelId}
+          hasStores={shopify.hasStores}
+          storeCheckFailed={shopify.failed}
+          onRetryStoreCheck={shopify.retry}
         />
       </section>
 

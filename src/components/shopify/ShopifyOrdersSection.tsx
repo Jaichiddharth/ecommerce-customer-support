@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link2Off, Loader2, ShoppingBag, Sparkles, UserSearch } from 'lucide-react';
+import { Link2Off, Loader2, Sparkles, UserSearch } from 'lucide-react';
 import apiClient from '@/lib/api/client';
 import { ApiError, toApiError } from '@/lib/api/api-error';
 import { notifyError } from '@/lib/api/notify';
@@ -9,15 +9,24 @@ import { gooeyToast } from '@/components/ui/goey-toaster';
 import { Modal } from '@/components/ui/Modal';
 import { ErrorState } from '@/components/ui/states';
 import { formatShopifyPrice } from '@/lib/shopify/product-message';
-import type { ShopifyAutoMatchStatus, ShopifyContactOrdersResponse, ShopifyCustomerSummary } from '@/lib/shopify/types';
+import type { ShopifyAutoMatchStatus, ShopifyChannelStore, ShopifyContactOrdersResponse, ShopifyCustomerSummary } from '@/lib/shopify/types';
 import { LinkCustomerModal } from './LinkCustomerModal';
 import { ShopifyOrderCard } from './ShopifyOrderCard';
+import { ShopifyCustomerTags } from './ShopifyCustomerTags';
+import { OlderOrdersNotice } from './store/CustomerOrdersModal';
+import { ChannelStoreSetup } from './ChannelStoreSetup';
 
 interface ShopifyOrdersSectionProps {
   contact: { id: number; name: string; email: string | null; phone: string | null };
-  /** From useShopifyStore: whether a store is connected and usable */
-  storeConnected: boolean;
-  storeNeedsReauth: boolean;
+  /** The store the conversation's WhatsApp number is connected to (useChannelShopifyStore); null: it has none */
+  store: ShopifyChannelStore | null;
+  storeLoading: boolean;
+  /** For the "Connect store" / "Associate store" prompt when the number has no store */
+  channelId: number | null;
+  hasStores: boolean;
+  /** The store check failed; offer a retry instead of the connect/associate prompt */
+  storeCheckFailed?: boolean;
+  onRetryStoreCheck?: () => void;
 }
 
 /** What the panel says when automatic matching found no single customer */
@@ -28,7 +37,18 @@ const UNLINKED_MESSAGES: Record<ShopifyAutoMatchStatus, string> = {
   no_details: 'This contact has no phone number or email to match. Search by name, email or order number to link one.',
 };
 
-export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ contact, storeConnected, storeNeedsReauth }) => {
+export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({
+  contact,
+  store,
+  storeLoading,
+  channelId,
+  hasStores,
+  storeCheckFailed,
+  onRetryStoreCheck,
+}) => {
+  const storeId = store?.id;
+  const storeConnected = store?.status === 'connected';
+  const storeNeedsReauth = store?.status === 'reauth_required';
   const [data, setData] = useState<Omit<ShopifyContactOrdersResponse, 'success'> | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -43,7 +63,9 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
       if (after) setIsLoadingMore(true);
       else setIsLoading(true);
       try {
-        const res = await apiClient.get(`/api/integrations/shopify/contacts/${contact.id}/orders`, { params: { after: after || undefined } });
+        const res = await apiClient.get(`/api/integrations/shopify/contacts/${contact.id}/orders`, {
+          params: { after: after || undefined, storeId },
+        });
         const next = res.data as ShopifyContactOrdersResponse;
         setData((prev) =>
           after && prev ? { ...next, orders: { ...next.orders, items: [...prev.orders.items, ...next.orders.items] } } : next
@@ -57,7 +79,7 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
         setIsLoadingMore(false);
       }
     },
-    [contact.id]
+    [contact.id, storeId]
   );
 
   useEffect(() => {
@@ -69,7 +91,7 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
   const handleUnlink = async () => {
     setIsUnlinking(true);
     try {
-      await apiClient.delete(`/api/integrations/shopify/contacts/${contact.id}/link`);
+      await apiClient.delete(`/api/integrations/shopify/contacts/${contact.id}/link`, { params: { storeId } });
       gooeyToast.success('Shopify customer unlinked');
       setShowUnlinkConfirm(false);
       load();
@@ -84,7 +106,7 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
   const handleLinkCandidate = async (candidate: ShopifyCustomerSummary) => {
     setLinkingId(candidate.id);
     try {
-      await apiClient.put(`/api/integrations/shopify/contacts/${contact.id}/link`, { shopifyCustomerId: candidate.id });
+      await apiClient.put(`/api/integrations/shopify/contacts/${contact.id}/link`, { shopifyCustomerId: candidate.id, storeId });
       gooeyToast.success(`${contact.name} is now linked to ${candidate.displayName}`);
       load();
     } catch (err) {
@@ -109,15 +131,24 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
   );
 
   let body: React.ReactNode;
-  if (storeNeedsReauth) {
-    body = box('The Shopify connection has expired. Reconnect the store from Integrations to see orders.');
-  } else if (!storeConnected) {
-    body = box(
-      <span className="flex items-start gap-2">
-        <ShoppingBag className="w-4 h-4 shrink-0 text-slate-400 mt-0.5" />
-        Connect your Shopify store from Integrations to see this customer&apos;s orders and share products.
-      </span>
+  if (storeLoading) {
+    body = (
+      <div className="mt-2.5 flex items-center gap-2 text-xs text-slate-400">
+        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking this number&apos;s Shopify store…
+      </div>
     );
+  } else if (!store) {
+    body = (
+      <ChannelStoreSetup
+        channelId={channelId}
+        hasStores={hasStores}
+        what="see this customer's orders"
+        failed={storeCheckFailed}
+        onRetry={onRetryStoreCheck}
+      />
+    );
+  } else if (storeNeedsReauth) {
+    body = box(`The connection to ${store.name || store.shopDomain} has expired. Reconnect the store from Integrations to see orders.`);
   } else if (error) {
     body = <ErrorState error={error} title="Couldn't load orders" compact onRetry={() => load()} />;
   } else if (isLoading || !data) {
@@ -145,6 +176,7 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
                   <span className="block text-[11px] text-slate-400">
                     {c.numberOfOrders} order{c.numberOfOrders === 1 ? '' : 's'}
                   </span>
+                  <ShopifyCustomerTags tags={c.tags} className="mt-1" />
                 </span>
                 <button
                   type="button"
@@ -174,6 +206,7 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
                 {customer.numberOfOrders} order{customer.numberOfOrders === 1 ? '' : 's'}
                 {customer.amountSpent ? ` · ${formatShopifyPrice(customer.amountSpent.amount, customer.amountSpent.currencyCode)} spent` : ''}
               </p>
+              <ShopifyCustomerTags tags={customer.tags} className="mt-1" />
             </>
           ) : (
             <p className="text-amber-700">The linked Shopify customer no longer exists. Link another customer.</p>
@@ -201,7 +234,8 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
           </div>
         </div>
 
-        {customer && data.orders.items.length === 0 && box('No orders for this customer yet.')}
+        {customer && data.orders.items.length === 0 && customer.numberOfOrders > 0 && <OlderOrdersNotice count={customer.numberOfOrders} />}
+        {customer && data.orders.items.length === 0 && customer.numberOfOrders === 0 && box('No orders for this customer yet.')}
         {data.orders.items.length > 0 && (
           <ul className="space-y-2">
             {data.orders.items.map((order) => (
@@ -225,12 +259,18 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({ cont
 
   return (
     <>
+      {store && !storeLoading && (
+        <p className="mt-1 text-[11px] text-slate-400 truncate" title={store.shopDomain}>
+          From {store.name || store.shopDomain}
+        </p>
+      )}
       {body}
       <LinkCustomerModal
         isOpen={showLinkModal}
         onClose={() => setShowLinkModal(false)}
         contact={contact}
         currentShopifyCustomerId={data?.link?.shopifyCustomerId ?? null}
+        store={store}
         onLinked={() => load()}
       />
       <Modal isOpen={showUnlinkConfirm} onClose={() => setShowUnlinkConfirm(false)} title="Unlink Shopify customer?" maxWidth="sm">

@@ -12,6 +12,17 @@ export const SHOPIFY_REQUIRED_SCOPES = ["read_products", "read_customers", "read
 /** Supported Admin API version (Shopify releases quarterly and supports each for 12 months). */
 export const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-07";
 
+/**
+ * How the Shopify app is distributed. "private" (no distribution chosen yet): only stores in the app's own Shopify
+ * organization can install it and read_all_orders can't be requested. Set SHOPIFY_APP_DISTRIBUTION=public once the
+ * app is published with Public distribution: any merchant's store can then connect.
+ */
+export type ShopifyAppDistribution = "private" | "public";
+
+export function getShopifyDistribution(): ShopifyAppDistribution {
+  return process.env.SHOPIFY_APP_DISTRIBUTION?.trim().toLowerCase() === "public" ? "public" : "private";
+}
+
 export interface ShopifyAppConfig {
   apiKey: string;
   apiSecret: string;
@@ -68,7 +79,7 @@ export function isValidShopDomain(shop: unknown): shop is string {
 }
 
 /** "gid://shopify/Product/123" ← ("Product", "123"); accepts a full GID as-is. Returns null for anything else. */
-export function toShopifyGid(type: "Product" | "ProductVariant" | "Customer", id: unknown): string | null {
+export function toShopifyGid(type: "Product" | "ProductVariant" | "Customer" | "Order", id: unknown): string | null {
   const value = String(id ?? "").trim();
   if (/^\d+$/.test(value)) return `gid://shopify/${type}/${value}`;
   const match = value.match(new RegExp(`^gid://shopify/${type}/(\\d+)$`));

@@ -24,6 +24,7 @@ import {
   Unplug,
   Lock,
   ShieldAlert,
+  ShoppingBag,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -36,7 +37,9 @@ import { ChannelIcon } from './inbox/ChannelIcon';
 import { InboxConversation, formatPhone, isChannelHealthy } from './inbox/inbox-types';
 import { ContactSearch, TopBar } from './TopBar';
 import { Channel, STATUS_META, fmtDate, needsReconnect, useDisconnectChannel } from './settings/channel-settings';
-import { WhatsAppNumberSection } from './settings/WhatsAppNumberSection';
+import { WhatsAppNumberHealth } from './settings/WhatsAppNumberHealth';
+import { ChannelShopifyStore, useChannelStores } from './settings/ChannelShopifyStore';
+import type { ShopifyChannelStoreStatus, ShopifyStoreInfo } from '@/lib/shopify/types';
 import { TeamRolesSection } from './settings/TeamRolesSection';
 import { ConsentPrivacySection } from './settings/ConsentPrivacySection';
 
@@ -88,19 +91,46 @@ function CopyField({ icon, label, value }: DetailField) {
 
 // ─── ConnectionCard ───────────────────────────────────────────────────────────
 
+/** Shopify store block of a channel card; absent for members who can't manage integrations */
+interface ChannelShopifyProps {
+  status: ShopifyChannelStoreStatus | undefined;
+  stores: ShopifyStoreInfo[];
+  loaded: boolean;
+  onChanged: () => void;
+}
+
 function ConnectionCard({
   channel,
   expanded,
   onToggle,
   onReconnect,
   onDisconnect,
+  shopify,
+  focusShopify = false,
 }: {
   channel: Channel;
   expanded: boolean;
   onToggle: () => void;
   onReconnect: () => void;
   onDisconnect: (channel: Channel) => void;
+  shopify: ChannelShopifyProps | null;
+  /** Opened from the inbox's "Associate store": scroll to and highlight the Shopify store picker */
+  focusShopify?: boolean;
 }) {
+  const shopifyRef = useRef<HTMLDivElement>(null);
+  const [highlightShopify, setHighlightShopify] = useState(false);
+  useEffect(() => {
+    if (!focusShopify || !expanded) return;
+    const el = shopifyRef.current;
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.querySelector('select')?.focus({ preventScroll: true });
+    setHighlightShopify(true);
+    const t = window.setTimeout(() => setHighlightShopify(false), 2500);
+    return () => window.clearTimeout(t);
+  }, [focusShopify, expanded, shopify?.loaded]);
+  const syncedStore =
+    shopify?.status?.via === 'mapping' ? shopify.stores.find((s) => s.id === shopify.status?.effectiveStoreId) ?? null : null;
   const status = STATUS_META[channel.status] ?? STATUS_META.error;
   const number = formatPhone(channel.phoneNumber);
   const isApproved =
@@ -136,6 +166,16 @@ function ConnectionCard({
             <span className="text-slate-400"> · connected {fmtDate(channel.createdAt)}</span>
           </p>
         </button>
+
+        {syncedStore && (
+          <span
+            title={`Synced with Shopify store ${syncedStore.shopDomain}`}
+            className="hidden md:inline-flex items-center gap-1 max-w-[160px] px-2 py-0.5 rounded-full bg-slate-100 text-[11px] font-medium text-slate-600"
+          >
+            <ShoppingBag className="w-3 h-3 shrink-0" />
+            <span className="truncate">{syncedStore.name || syncedStore.shopDomain}</span>
+          </span>
+        )}
 
         <span className={`hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px] font-semibold ${status.pill}`}>
           <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
@@ -177,6 +217,36 @@ function ConnectionCard({
             ))}
           </div>
 
+          {channel.type === 'whatsapp' && (
+            <div className="mt-4 pt-3 border-t border-slate-100">
+              <WhatsAppNumberHealth channel={channel} />
+            </div>
+          )}
+
+          {shopify && channel.status !== 'disconnected' && (
+            <div
+              ref={shopifyRef}
+              id={`channel-${channel.id}-shopify`}
+              className={`mt-4 pt-3 border-t border-slate-100 space-y-2 rounded-lg transition-shadow duration-500 ${
+                highlightShopify ? 'ring-2 ring-[#3440a8]/40 ring-offset-4' : ''
+              }`}
+            >
+              <div>
+                <p className="text-[11px] font-semibold text-slate-700">Shopify store</p>
+                <p className="text-[11px] text-slate-500">
+                  Products shared, customers matched and orders shown in this number&apos;s chats come from this store.
+                </p>
+              </div>
+              <ChannelShopifyStore
+                channelId={channel.id}
+                status={shopify.status}
+                stores={shopify.stores}
+                loaded={shopify.loaded}
+                onChanged={shopify.onChanged}
+              />
+            </div>
+          )}
+
           {channel.status !== 'disconnected' && (
             <div className="mt-4 pt-3 border-t border-slate-100 flex justify-end">
               <button
@@ -198,6 +268,9 @@ function ConnectionCard({
 // ─── ChannelsSection ──────────────────────────────────────────────────────────
 
 function ChannelsSection() {
+  const { hasPermission, can } = useAuth();
+  const canManageStores = can('integrations', 'read') && hasPermission('manage_billing_and_integrations');
+  const channelStores = useChannelStores(canManageStores);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -228,6 +301,20 @@ function ChannelsSection() {
 
   // Stay in sync with connects/disconnects made in other tabs or by teammates
   useRealtime({ onChannelUpdated: () => fetchChannels({ quiet: true }) });
+
+  // Deep link from the inbox ("Associate store"): /settings?channel=<id>&focus=shopify opens that number's card on
+  // its Shopify store picker. Read from window.location so the page needs no Suspense boundary for useSearchParams.
+  const [focusShopifyId, setFocusShopifyId] = useState<number | null>(null);
+  useEffect(() => {
+    if (loading) return;
+    const params = new URLSearchParams(window.location.search);
+    const id = Number(params.get('channel'));
+    if (!Number.isInteger(id) || id <= 0 || !channels.some((c) => c.id === id)) return;
+    setExpandedIds((prev) => new Set(prev).add(id));
+    if (params.get('focus') === 'shopify') setFocusShopifyId(id);
+    // Only once: a later reload or collapse shouldn't reopen it
+    window.history.replaceState(null, '', window.location.pathname);
+  }, [loading, channels]);
 
   const toggle = (id: number) =>
     setExpandedIds((prev) => {
@@ -332,6 +419,17 @@ function ChannelsSection() {
                 onToggle={() => toggle(ch.id)}
                 onReconnect={() => setShowConnect(true)}
                 onDisconnect={requestDisconnect}
+                focusShopify={focusShopifyId === ch.id}
+                shopify={
+                  canManageStores
+                    ? {
+                        status: channelStores.channels.find((c) => c.channelId === ch.id),
+                        stores: channelStores.stores,
+                        loaded: channelStores.loaded,
+                        onChanged: channelStores.refresh,
+                      }
+                    : null
+                }
               />
             ))}
           </div>
@@ -386,13 +484,12 @@ function ComingSoonSection({ icon: Icon, title, description }: { icon: LucideIco
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-type Section = 'general' | 'channels' | 'whatsapp' | 'team' | 'routing' | 'consent' | 'languages' | 'billing' | 'api';
+type Section = 'general' | 'channels' | 'team' | 'routing' | 'consent' | 'languages' | 'billing' | 'api';
 
 /** Sections with `soon` are listed but open a "coming soon" panel */
 const SECTIONS: { key: Section; label: string; subtitle: string; icon: LucideIcon; soon?: boolean }[] = [
   { key: 'general', label: 'General', subtitle: 'Workspace name, timezone and notification preferences.', icon: Settings, soon: true },
   { key: 'channels', label: 'Channels', subtitle: 'Connect the messaging accounts your team replies from and manage the ones already connected', icon: Layers },
-  { key: 'whatsapp', label: 'WhatsApp number', subtitle: 'Your connected number, its health at Meta and the business profile customers see', icon: Phone },
   { key: 'team', label: 'Team & roles', subtitle: 'Invite teammates, assign roles and control who can reply.', icon: Users },
   { key: 'routing', label: 'Routing & hours', subtitle: 'Assign conversations automatically and set business hours and away messages.', icon: Route, soon: true },
   { key: 'consent', label: 'Consent & privacy', subtitle: 'Opt-out keywords, confirmation messages and data retention.', icon: ShieldCheck },
@@ -447,7 +544,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
   const { hasPermission, can } = useAuth();
   const canManageBilling = hasPermission('manage_billing_and_integrations');
   const canReadSettings = can('settings', 'read');
-  const [activeSection, setActiveSection] = useState<Section>('whatsapp');
+  const [activeSection, setActiveSection] = useState<Section>('channels');
   const active = SECTIONS.find((s) => s.key === activeSection)!;
   const topBar = useSettingsTopBar();
 
@@ -545,11 +642,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
                   <ChannelsSection />
                 </>
               )}
-              {activeSection === 'whatsapp' && <WhatsAppNumberSection onOpenChannels={() => setActiveSection('channels')} />}
               {activeSection === 'team' && <TeamRolesSection />}
             </>
           )}
-          {activeSection === 'whatsapp' && <WhatsAppNumberSection onOpenChannels={() => setActiveSection('channels')} />}
           {activeSection === 'consent' && <ConsentPrivacySection />}
         </main>
       </div>

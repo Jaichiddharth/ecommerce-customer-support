@@ -32,6 +32,7 @@ import {
   messageReactionRepository,
 } from "../src/lib/db/repositories";
 import { eq } from "drizzle-orm";
+import { canAccessStore } from "../src/lib/security/store-access";
 
 interface TestStats {
   passed: number;
@@ -181,6 +182,7 @@ async function runTenantIsolationTests() {
       email: `customer1@beta.test`,
       channelId: channelB.id,
     });
+    if (!customerB) throw new Error("Failed to create customerB");
 
     console.log("\x1b[32m[Setup Complete]\x1b[0m Tenant Alpha (ID: " + orgA.id + ") & Tenant Beta (ID: " + orgB.id + ")\n");
 
@@ -322,6 +324,129 @@ async function runTenantIsolationTests() {
 
     const pristineStoreA = await shopifyRepository.findStoreByDomain(orgA.id, storeA.shopDomain);
     assert(pristineStoreA?.status === "connected", "Org A store remains connected and unaffected");
+
+    // Can Org B load Org A's store by id?
+    const foreignStore = await shopifyRepository.findActiveStore(orgB.id, storeA.id);
+    assert(foreignStore === null, "Org B cannot load Org A store by id");
+
+    // -----------------------------------------------------------------
+    // TEST SUITE 6b: STORE ↔ CHANNEL MAPPINGS & ORDER LINKS ISOLATION
+    // -----------------------------------------------------------------
+    console.log("\n\x1b[35m[Suite 6b] Store Connection Mapping Isolation Tests\x1b[0m");
+
+    const mappingA = await shopifyRepository.createChannelMapping({
+      organizationId: orgA.id,
+      storeId: storeA.id,
+      channelId: channelA.id,
+      userId: userA.id,
+    });
+    const mappedStore = await shopifyRepository.findStoreForChannel(orgA.id, channelA.id);
+    assert(mappedStore?.id === storeA.id, "Org A channel resolves to its mapped Org A store");
+
+    assert((await shopifyRepository.listChannelMappings(orgB.id)).length === 0, "Org B mapping list does not leak Org A mappings");
+    assert((await shopifyRepository.findChannelMapping(orgB.id, mappingA.id)) === null, "Org B cannot read Org A mapping by ID");
+    assert((await shopifyRepository.findStoreForChannel(orgB.id, channelA.id)) === null, "Org B cannot resolve Org A channel's store");
+    assert((await shopifyRepository.deleteChannelMapping(orgB.id, mappingA.id)) === null, "Org B cannot delete Org A mapping");
+    assert((await shopifyRepository.findChannelMapping(orgA.id, mappingA.id)) !== null, "Org A mapping remains intact");
+
+    // The composite (organization_id, id) foreign keys reject rows that cross workspaces, whatever the code does
+    const rejects = async (fn: () => Promise<unknown>) => {
+      try {
+        await fn();
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    assert(
+      await rejects(() => shopifyRepository.createChannelMapping({ organizationId: orgB.id, storeId: storeA.id, channelId: channelB.id, userId: userB.id })),
+      "Database rejects mapping an Org B channel to an Org A store"
+    );
+    const [storeB] = await db
+      .insert(shopifyStores)
+      .values({ organizationId: orgB.id, shopDomain: `beta-store-${runId}.myshopify.com`, name: "Beta Shop", status: "connected" })
+      .returning();
+    assert(
+      await rejects(() => shopifyRepository.createChannelMapping({ organizationId: orgB.id, storeId: storeB.id, channelId: channelA.id, userId: userB.id })),
+      "Database rejects mapping an Org A channel to an Org B store"
+    );
+    assert(
+      await rejects(() => shopifyRepository.createChannelMapping({ organizationId: orgA.id, storeId: storeA.id, channelId: channelA.id, userId: userA.id })),
+      "A channel can be mapped to only one store"
+    );
+
+    // Many stores per workspace; one store → many numbers; one number → one store (disconnect, then connect)
+    const [storeA2] = await db
+      .insert(shopifyStores)
+      .values({ organizationId: orgA.id, shopDomain: `alpha-second-${runId}.myshopify.com`, name: "Alpha Outlet", status: "connected" })
+      .returning();
+    const [serviceNumberA] = await db
+      .insert(channels)
+      .values({ organizationId: orgA.id, type: "whatsapp", name: "Alpha Service", metaPhoneNumberId: `phone_id_alpha_svc_${runId}`, phoneNumber: `15551110009` })
+      .returning();
+    assert((await shopifyRepository.findActiveStores(orgA.id)).length === 2, "A workspace can connect several stores");
+
+    const serviceMapping = await shopifyRepository.createChannelMapping({ organizationId: orgA.id, storeId: storeA.id, channelId: serviceNumberA.id, userId: userA.id });
+    assert(
+      (await shopifyRepository.listChannelMappings(orgA.id, { storeId: storeA.id })).length === 2,
+      "One store can have several numbers (sales + service)"
+    );
+    assert(
+      await rejects(() => shopifyRepository.createChannelMapping({ organizationId: orgA.id, storeId: storeA2.id, channelId: serviceNumberA.id, userId: userA.id })),
+      "A number connected to one store can't be connected to another store"
+    );
+    await shopifyRepository.deleteChannelMapping(orgA.id, serviceMapping.id);
+    const switched = await shopifyRepository.createChannelMapping({ organizationId: orgA.id, storeId: storeA2.id, channelId: serviceNumberA.id, userId: userA.id });
+    assert(
+      (await shopifyRepository.findStoreForChannel(orgA.id, serviceNumberA.id))?.id === storeA2.id && switched.shopifyStoreId === storeA2.id,
+      "After disconnecting it from its store, the number can be connected to another store"
+    );
+    assert(
+      await rejects(() =>
+        shopifyRepository.upsertLink({ organizationId: orgB.id, storeId: storeA.id, customerId: customerB.id, shopifyCustomerId: "gid://shopify/Customer/1", linkedById: userB.id, source: "manual" })
+      ),
+      "Database rejects an Org B contact link into an Org A store"
+    );
+
+    const orderLinkA = await shopifyRepository.createOrderLink({
+      organizationId: orgA.id,
+      storeId: storeA.id,
+      customerId: customerA.id,
+      channelId: channelA.id,
+      shopifyOrderId: `gid://shopify/Order/${runId}`,
+      orderName: "#1001",
+      linkedById: userA.id,
+      source: "manual",
+    });
+    assert((await shopifyRepository.listOrderLinks(orgB.id, customerA.id)).length === 0, "Org B cannot list Org A order links");
+    assert(
+      (await shopifyRepository.findOrderLinkByOrder(orgB.id, storeA.id, orderLinkA.shopifyOrderId)) === null,
+      "Org B cannot find Org A order link by order ID"
+    );
+    assert((await shopifyRepository.deleteOrderLink(orgB.id, customerA.id, orderLinkA.id)) === null, "Org B cannot delete Org A order link");
+    assert((await shopifyRepository.listOrderLinks(orgA.id, customerA.id)).length === 1, "Org A order link remains intact");
+    assert(
+      await rejects(() =>
+        shopifyRepository.createOrderLink({
+          organizationId: orgB.id,
+          storeId: storeA.id,
+          customerId: customerB.id,
+          channelId: null,
+          shopifyOrderId: `gid://shopify/Order/${runId}-b`,
+          orderName: null,
+          linkedById: userB.id,
+          source: "manual",
+        })
+      ),
+      "Database rejects an Org B order link into an Org A store"
+    );
+
+    // Store-level access inside a workspace (users.stores)
+    assert(canAccessStore({ role: "AGENT", stores: [] }, storeA), "Agent with no store limits can access every store");
+    assert(canAccessStore({ role: "AGENT", stores: ["All"] }, storeA), "Agent with 'All' can access every store");
+    assert(canAccessStore({ role: "AGENT", stores: [storeA.shopDomain] }, storeA), "Agent limited to a store can access it");
+    assert(!canAccessStore({ role: "AGENT", stores: ["other-shop.myshopify.com"] }, storeA), "Agent limited to another store cannot access this one");
+    assert(canAccessStore({ role: "ADMIN", stores: ["other-shop.myshopify.com"] }, storeA), "Admins are never limited by store");
 
     // -----------------------------------------------------------------
     // TEST SUITE 7: TEAM MEMBERS & INVITATIONS ISOLATION
