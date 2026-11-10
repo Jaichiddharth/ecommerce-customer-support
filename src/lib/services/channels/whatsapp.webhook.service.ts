@@ -558,8 +558,9 @@ export class WhatsAppWebhookService {
     automationPending: boolean
   ): Promise<void> {
     try {
-      // STOP / UNSUBSCRIBE / START: update consent and confirm. These messages never trigger automations,
-      // so a customer who just opted out can't get an automated promotional reply.
+      // STOP / UNSUBSCRIBE / START: update consent and confirm. These messages start only automations whose
+      // Keyword trigger lists that exact keyword (never "Incoming message" ones), so a customer who just
+      // opted out can't get an unrelated automated reply.
       const consentMatch = matchConsentKeyword(consentKeywordCandidates(msg));
       if (consentMatch) {
         const { customer, changed } = await consentService.changeStatus({
@@ -573,6 +574,21 @@ export class WhatsAppWebhookService {
           occurredAt: msgDate,
         });
         if (changed) ctx.defer(() => consentService.sendConfirmation(ctx.orgId, customer, consentMatch.status, 'keyword'));
+        // Evaluate (and settle the pending marker) here: a marker left behind would be replayed by the sweep
+        if (automationPending) {
+          ctx.defer(async () => {
+            await automationEngine.handleInboundMessage({
+              organizationId: ctx.orgId,
+              channelId: ctx.channelId,
+              customerId,
+              messageId,
+              wamid: msg.id,
+              text: consentMatch.text,
+              pending: true,
+              consentKeyword: consentMatch.keyword,
+            });
+          });
+        }
         return;
       }
 
@@ -587,6 +603,12 @@ export class WhatsAppWebhookService {
           msg,
         });
         if (submission) ctx.defer(() => whatsappFlowSubmissionService.process(submission));
+        // Flow replies never trigger automations: clear the marker so the sweep doesn't replay this message
+        if (automationPending && messageId) {
+          await messageRepository.clearAutomationPending(messageId).catch((err) =>
+            log.warn('Could not clear the automation marker of a message', { err, messageId })
+          );
+        }
         return;
       }
       // No message-triggered automation in this org: nothing to start

@@ -42,6 +42,7 @@ import { ChannelShopifyStore, useChannelStores } from './settings/ChannelShopify
 import type { ShopifyChannelStoreStatus, ShopifyStoreInfo } from '@/lib/shopify/types';
 import { TeamRolesSection } from './settings/TeamRolesSection';
 import { ConsentPrivacySection } from './settings/ConsentPrivacySection';
+import { RoutingHoursSection } from './settings/RoutingHoursSection';
 
 interface DetailField {
   icon: React.ReactNode;
@@ -227,9 +228,8 @@ function ConnectionCard({
             <div
               ref={shopifyRef}
               id={`channel-${channel.id}-shopify`}
-              className={`mt-4 pt-3 border-t border-slate-100 space-y-2 rounded-lg transition-shadow duration-500 ${
-                highlightShopify ? 'ring-2 ring-[#3440a8]/40 ring-offset-4' : ''
-              }`}
+              className={`mt-4 pt-3 border-t border-slate-100 space-y-2 rounded-lg transition-shadow duration-500 ${highlightShopify ? 'ring-2 ring-[#3440a8]/40 ring-offset-4' : ''
+                }`}
             >
               <div>
                 <p className="text-[11px] font-semibold text-slate-700">Shopify store</p>
@@ -423,11 +423,11 @@ function ChannelsSection() {
                 shopify={
                   canManageStores
                     ? {
-                        status: channelStores.channels.find((c) => c.channelId === ch.id),
-                        stores: channelStores.stores,
-                        loaded: channelStores.loaded,
-                        onChanged: channelStores.refresh,
-                      }
+                      status: channelStores.channels.find((c) => c.channelId === ch.id),
+                      stores: channelStores.stores,
+                      loaded: channelStores.loaded,
+                      onChanged: channelStores.refresh,
+                    }
                     : null
                 }
               />
@@ -491,7 +491,7 @@ const SECTIONS: { key: Section; label: string; subtitle: string; icon: LucideIco
   { key: 'general', label: 'General', subtitle: 'Workspace name, timezone and notification preferences.', icon: Settings, soon: true },
   { key: 'channels', label: 'Channels', subtitle: 'Connect the messaging accounts your team replies from and manage the ones already connected', icon: Layers },
   { key: 'team', label: 'Team & roles', subtitle: 'Invite teammates, assign roles and control who can reply.', icon: Users },
-  { key: 'routing', label: 'Routing & hours', subtitle: 'Assign conversations automatically and set business hours and away messages.', icon: Route, soon: true },
+  { key: 'routing', label: 'Routing & hours', subtitle: 'Assign conversations automatically and set business hours and away messages.', icon: Route },
   { key: 'consent', label: 'Consent & privacy', subtitle: 'Opt-out keywords, confirmation messages and data retention.', icon: ShieldCheck },
   { key: 'languages', label: 'Languages', subtitle: 'The languages your AI agent and templates reply in.', icon: Languages, soon: true },
   { key: 'billing', label: 'Billing & usage', subtitle: 'Your plan, seats, AI resolutions and invoices.', icon: CreditCard, soon: true },
@@ -541,11 +541,33 @@ function useSettingsTopBar() {
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }) => {
-  const { hasPermission, can } = useAuth();
+  const { hasPermission, can, dbUser } = useAuth();
   const canManageBilling = hasPermission('manage_billing_and_integrations');
   const canReadSettings = can('settings', 'read');
-  const [activeSection, setActiveSection] = useState<Section>('channels');
-  const active = SECTIONS.find((s) => s.key === activeSection)!;
+
+  // Agent and Viewer roles cannot access Team & roles
+  const userRole = (dbUser?.role || '').toUpperCase();
+  const isAgentOrViewer = userRole === 'AGENT' || userRole === 'VIEWER';
+
+  const visibleSections = React.useMemo(() => {
+    return SECTIONS.filter((s) => {
+      if (s.key === 'team' && isAgentOrViewer) {
+        return false;
+      }
+      return true;
+    });
+  }, [isAgentOrViewer]);
+
+  const [activeSection, setActiveSection] = useState<Section>('whatsapp');
+
+  // If role is Agent or Viewer and active section was team, fallback to whatsapp
+  useEffect(() => {
+    if (isAgentOrViewer && activeSection === 'team') {
+      setActiveSection('whatsapp');
+    }
+  }, [isAgentOrViewer, activeSection]);
+
+  const active = visibleSections.find((s) => s.key === activeSection) || visibleSections[0] || SECTIONS[0];
   const topBar = useSettingsTopBar();
 
   if (!canReadSettings) {
@@ -594,7 +616,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
         <aside className="w-[220px] shrink-0 border-r border-slate-200 bg-white flex flex-col pt-6">
           <p className="px-5 mb-3 text-[11px] font-bold text-slate-400 uppercase tracking-widest">Settings</p>
           <nav className="px-3 space-y-0.5">
-            {SECTIONS.map(({ key, label, soon }) => {
+            {visibleSections.map(({ key, label, soon }) => {
               const isActive = activeSection === key;
               const isRestricted = key === 'billing' && !canManageBilling;
               return (
@@ -603,8 +625,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
                   onClick={() => setActiveSection(key)}
                   title={isRestricted ? 'Billing & usage is restricted for your role' : soon ? `${label} · coming soon` : label}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-[13px] transition-colors cursor-pointer text-left ${isActive
-                      ? 'bg-[#eef0fb] border-[#dfe3f7] text-[#3440a8] font-semibold'
-                      : 'border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    ? 'bg-[#eef0fb] border-[#dfe3f7] text-[#3440a8] font-semibold'
+                    : 'border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                     }`}
                 >
                   <span className="truncate">{label}</span>
@@ -642,7 +664,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
                   <ChannelsSection />
                 </>
               )}
-              {activeSection === 'team' && <TeamRolesSection />}
+              {activeSection === 'team' && !isAgentOrViewer && <TeamRolesSection />}
+              {activeSection === 'routing' && <RoutingHoursSection />}
+              {activeSection === 'consent' && <ConsentPrivacySection />}
             </>
           )}
           {activeSection === 'consent' && <ConsentPrivacySection />}

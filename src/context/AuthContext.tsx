@@ -21,6 +21,7 @@ import { notifyError, errorDescription } from '@/lib/api/notify';
 import { toApiError } from '@/lib/api/api-error';
 import { clientLogger } from '@/lib/client-logger';
 import { canUser, CrudAction } from '@/lib/security/permissions';
+import type { WorkspaceTrial } from '@/lib/trial';
 
 export const NO_WORKSPACE_MESSAGE =
   'No workspace is linked to this email. Create an account to set up your company, or ask your admin to invite you.';
@@ -74,6 +75,7 @@ export interface DbUser {
   organizationSlug?: string | null;
   organizationPlan?: string | null;
   organizationSeats?: number | null;
+  organizationTrial?: WorkspaceTrial | null;
   name: string;
   email: string;
   role: string;

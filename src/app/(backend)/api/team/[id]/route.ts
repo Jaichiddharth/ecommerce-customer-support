@@ -21,8 +21,27 @@ export const PATCH = withAuth<{ params: Promise<{ id: string }> }>(
       throw AppError.notFound("Team member not found.");
     }
 
-    // Admins cannot edit an Owner or promote someone to Owner
     const isOwner = req.user.role.toUpperCase() === "OWNER";
+    const body = (await readJson(req)) ?? {};
+    const { role, teams, languages, stores, customPermissions, status, name } = body;
+
+    // Workspace Owner permissions and role are immutable
+    if (targetUser.role?.toUpperCase() === "OWNER") {
+      if (customPermissions !== undefined) {
+        throw new AppError("FORBIDDEN", {
+          message: "Workspace Owner permissions are immutable and cannot be modified.",
+          expected: true,
+        });
+      }
+      if (role !== undefined && role.toUpperCase() !== "OWNER") {
+        throw new AppError("FORBIDDEN", {
+          message: "Workspace Owner role cannot be changed.",
+          expected: true,
+        });
+      }
+    }
+
+    // Admins cannot edit an Owner or promote someone to Owner
     if (targetUser.role?.toUpperCase() === "OWNER" && !isOwner) {
       throw new AppError("FORBIDDEN", {
         message: "Only workspace Owners can modify an Owner's account.",
@@ -30,8 +49,22 @@ export const PATCH = withAuth<{ params: Promise<{ id: string }> }>(
       });
     }
 
-    const body = (await readJson(req)) ?? {};
-    const { role, teams, languages, stores, customPermissions, status, name } = body;
+    if (!isOwner) {
+      // Admin cannot modify their own role or permissions
+      if (targetUser.id === req.user.id && (customPermissions !== undefined || role !== undefined)) {
+        throw new AppError("FORBIDDEN", {
+          message: "Administrators cannot modify their own permissions or role.",
+          expected: true,
+        });
+      }
+      // Admin cannot modify another Admin's role or permissions
+      if (targetUser.role?.toUpperCase() === "ADMIN" && (customPermissions !== undefined || role !== undefined)) {
+        throw new AppError("FORBIDDEN", {
+          message: "Only the Workspace Owner can modify Administrator permissions or roles.",
+          expected: true,
+        });
+      }
+    }
 
     if (role && role.toUpperCase() === "OWNER" && !isOwner) {
       throw new AppError("FORBIDDEN", {
@@ -78,11 +111,20 @@ export const DELETE = withAuth<{ params: Promise<{ id: string }> }>(
       throw AppError.notFound("Team member not found.");
     }
 
-    // Admins cannot remove an Owner
     const isOwner = req.user.role.toUpperCase() === "OWNER";
+
+    // Admins cannot remove an Owner
     if (targetUser.role?.toUpperCase() === "OWNER" && !isOwner) {
       throw new AppError("FORBIDDEN", {
         message: "Only workspace Owners can remove an Owner.",
+        expected: true,
+      });
+    }
+
+    // Admins cannot remove another Admin
+    if (targetUser.role?.toUpperCase() === "ADMIN" && !isOwner) {
+      throw new AppError("FORBIDDEN", {
+        message: "Only the Workspace Owner can remove an Administrator.",
         expected: true,
       });
     }

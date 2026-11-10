@@ -5,6 +5,7 @@ import apiClient from '@/lib/api/client';
 import { useAuth } from '@/context/AuthContext';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 import { Modal } from '@/components/ui/Modal';
+import type { WorkspaceTrial } from '@/lib/trial';
 import {
   Plus,
   Users,
@@ -234,14 +235,42 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
   canManage,
   isModal = false,
 }) => {
+  const { dbUser } = useAuth();
   const roleUpper = (member.role || 'AGENT').toUpperCase();
-  const isOwner = roleUpper === 'OWNER';
+  const isTargetOwner = roleUpper === 'OWNER';
+  const isTargetAdmin = roleUpper === 'ADMIN';
+
+  const actorRole = (dbUser?.role || 'AGENT').toUpperCase();
+  const isActorAdmin = actorRole === 'ADMIN';
+  const isSelf = Boolean(
+    dbUser && (member.id === dbUser.id || (member.email && dbUser.email && member.email.toLowerCase() === dbUser.email.toLowerCase()))
+  );
+
+  // Locking rules:
+  // 1. Workspace Owner permissions are permanent and cannot be modified (Owner always has full unrestricted CRUD).
+  // 2. When logged in as Admin:
+  //    - An Admin cannot modify their own permissions (self-editing locked).
+  //    - An Admin cannot modify any Admin or Owner's permissions (only Owner can modify Admin permissions).
+  const isPermissionsLocked = isTargetOwner || (isActorAdmin && (isSelf || isTargetAdmin));
+  const canEdit = canManage && !isPermissionsLocked;
+
+  // Ensure Workspace Owner always displays 100% full granted access across all pages
+  const effectivePermissions = useMemo(() => {
+    if (isTargetOwner) {
+      const full: Record<string, PageCrudPermissions> = {};
+      WORKSPACE_PAGES.forEach((p) => {
+        full[p.key] = { create: true, read: true, update: true, delete: true };
+      });
+      return full;
+    }
+    return permissions;
+  }, [isTargetOwner, permissions]);
 
   const toggleCell = (pageKey: string, action: keyof PageCrudPermissions) => {
-    if (!canManage || isSaving) return;
-    const current = permissions[pageKey] || { create: false, read: false, update: false, delete: false };
+    if (!canEdit || isSaving) return;
+    const current = effectivePermissions[pageKey] || { create: false, read: false, update: false, delete: false };
     onChange({
-      ...permissions,
+      ...effectivePermissions,
       [pageKey]: {
         ...current,
         [action]: !current[action],
@@ -250,21 +279,21 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
   };
 
   const toggleAllForPage = (pageKey: string) => {
-    if (!canManage || isSaving) return;
-    const current = permissions[pageKey] || { create: false, read: false, update: false, delete: false };
+    if (!canEdit || isSaving) return;
+    const current = effectivePermissions[pageKey] || { create: false, read: false, update: false, delete: false };
     const allChecked = current.create && current.read && current.update && current.delete;
     const nextVal = !allChecked;
     onChange({
-      ...permissions,
+      ...effectivePermissions,
       [pageKey]: { create: nextVal, read: nextVal, update: nextVal, delete: nextVal },
     });
   };
 
   const toggleAllForAction = (action: keyof PageCrudPermissions) => {
-    if (!canManage || isSaving) return;
-    const allChecked = WORKSPACE_PAGES.every((p) => permissions[p.key]?.[action]);
+    if (!canEdit || isSaving) return;
+    const allChecked = WORKSPACE_PAGES.every((p) => effectivePermissions[p.key]?.[action]);
     const nextVal = !allChecked;
-    const updated = { ...permissions };
+    const updated = { ...effectivePermissions };
     WORKSPACE_PAGES.forEach((p) => {
       updated[p.key] = {
         ...(updated[p.key] || { create: false, read: false, update: false, delete: false }),
@@ -275,7 +304,7 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
   };
 
   const applyPreset = (preset: 'all' | 'readOnly' | 'defaults' | 'clear') => {
-    if (!canManage || isSaving) return;
+    if (!canEdit || isSaving) return;
     if (preset === 'defaults') {
       onChange(getDefaultPagePermissions(member.role));
       return;
@@ -296,21 +325,21 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
   const countGranted = useMemo(() => {
     let count = 0;
     WORKSPACE_PAGES.forEach((p) => {
-      const perm = permissions[p.key];
+      const perm = effectivePermissions[p.key];
       if (perm?.create) count++;
       if (perm?.read) count++;
       if (perm?.update) count++;
       if (perm?.delete) count++;
     });
     return count;
-  }, [permissions]);
+  }, [effectivePermissions]);
 
   const totalPossible = WORKSPACE_PAGES.length * 4;
 
-  const isAllCreate = WORKSPACE_PAGES.every((p) => permissions[p.key]?.create);
-  const isAllRead = WORKSPACE_PAGES.every((p) => permissions[p.key]?.read);
-  const isAllUpdate = WORKSPACE_PAGES.every((p) => permissions[p.key]?.update);
-  const isAllDelete = WORKSPACE_PAGES.every((p) => permissions[p.key]?.delete);
+  const isAllCreate = WORKSPACE_PAGES.every((p) => effectivePermissions[p.key]?.create);
+  const isAllRead = WORKSPACE_PAGES.every((p) => effectivePermissions[p.key]?.read);
+  const isAllUpdate = WORKSPACE_PAGES.every((p) => effectivePermissions[p.key]?.update);
+  const isAllDelete = WORKSPACE_PAGES.every((p) => effectivePermissions[p.key]?.delete);
 
   return (
     <div className="space-y-4">
@@ -324,59 +353,105 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
             <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#eef0fb] text-[#1e2a78] uppercase">
               {roleUpper}
             </span>
-            {hasCustomPagePermissions(member) && (
+            {isPermissionsLocked && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-200">
+                <Lock className="w-3 h-3 text-amber-700" />
+                Locked
+              </span>
+            )}
+            {!isPermissionsLocked && hasCustomPagePermissions(member) && (
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-100 text-purple-700">
                 Custom Overrides Active
               </span>
             )}
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Configure individual Create, Read, Update, and Delete permissions across all pages for this user.
+            {isPermissionsLocked
+              ? 'Page Create, Read, Update, and Delete permissions are locked in read-only mode for this role.'
+              : 'Configure individual Create, Read, Update, and Delete permissions across all pages for this user.'}
           </p>
         </div>
 
         {/* Preset Toolbar */}
         {canManage && (
-          <div className="flex items-center flex-wrap gap-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => applyPreset('all')}
-              className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs"
-            >
-              Grant All
-            </button>
-            <button
-              type="button"
-              onClick={() => applyPreset('readOnly')}
-              className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs"
-            >
-              Read Only
-            </button>
-            <button
-              type="button"
-              onClick={() => applyPreset('defaults')}
-              className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
-            >
-              <RotateCcw className="w-3 h-3 text-slate-500" />
-              Role Defaults
-            </button>
-            <button
-              type="button"
-              onClick={() => applyPreset('clear')}
-              className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-red-200 hover:bg-red-50 text-slate-600 hover:text-red-600 rounded-lg cursor-pointer transition-colors shadow-2xs"
-            >
-              Clear All
-            </button>
-          </div>
+          canEdit ? (
+            <div className="flex items-center flex-wrap gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => applyPreset('all')}
+                className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs"
+              >
+                Grant All
+              </button>
+              <button
+                type="button"
+                onClick={() => applyPreset('readOnly')}
+                className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs"
+              >
+                Read Only
+              </button>
+              <button
+                type="button"
+                onClick={() => applyPreset('defaults')}
+                className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
+              >
+                <RotateCcw className="w-3 h-3 text-slate-500" />
+                Role Defaults
+              </button>
+              <button
+                type="button"
+                onClick={() => applyPreset('clear')}
+                className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 hover:border-red-200 hover:bg-red-50 text-slate-600 hover:text-red-600 rounded-lg cursor-pointer transition-colors shadow-2xs"
+              >
+                Clear All
+              </button>
+            </div>
+          ) : (
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-600 shadow-2xs">
+              <Lock className="w-3.5 h-3.5 text-slate-500 stroke-[2.2]" />
+              <span>Permissions Locked</span>
+            </div>
+          )
         )}
       </div>
 
-      {isOwner && (
-        <div className="p-3 bg-amber-50/80 border border-amber-200/80 rounded-xl flex items-center gap-2 text-xs text-amber-900">
-          <Shield className="w-4 h-4 text-amber-600 shrink-0" />
-          <span>
-            <strong>Workspace Owner:</strong> Owners inherently have unrestricted access across all pages. You may configure custom page flags or keep standard ownership.
-          </span>
+      {isTargetOwner && (
+        <div className="p-3.5 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-start gap-2.5 text-xs text-amber-900 shadow-2xs">
+          <div className="w-6 h-6 rounded-lg bg-amber-100 border border-amber-200 flex items-center justify-center shrink-0 text-amber-700 mt-0.5">
+            <Lock className="w-3.5 h-3.5 stroke-[2.5]" />
+          </div>
+          <div className="min-w-0">
+            <p className="font-bold text-amber-950 flex items-center gap-1.5">
+              <span>Workspace Owner · Permissions Locked</span>
+              <span className="px-1.5 py-0.5 bg-amber-200/70 text-amber-900 rounded text-[10px] uppercase font-bold tracking-wider">
+                Immutable
+              </span>
+            </p>
+            <p className="text-amber-800/90 mt-0.5 leading-relaxed">
+              Workspace Owners inherently possess unrestricted Create, Read, Update, and Delete access across all workspace pages. These root permissions cannot be modified or revoked.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {!isTargetOwner && isPermissionsLocked && (
+        <div className="p-3.5 bg-slate-100 border border-slate-200 rounded-xl flex items-start gap-2.5 text-xs text-slate-800 shadow-2xs">
+          <div className="w-6 h-6 rounded-lg bg-slate-200 flex items-center justify-center shrink-0 text-slate-600 mt-0.5">
+            <Lock className="w-3.5 h-3.5 stroke-[2.5]" />
+          </div>
+          <div className="min-w-0">
+            <p className="font-bold text-slate-900 flex items-center gap-1.5">
+              <span>{isSelf ? 'Your Admin Permissions are Locked' : 'Administrator Permissions Locked'}</span>
+              <span className="px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded text-[10px] uppercase font-bold tracking-wider">
+                Locked
+              </span>
+            </p>
+            <p className="text-slate-600 mt-0.5 leading-relaxed">
+              {isSelf
+                ? 'As an Administrator, you cannot modify your own page permissions. Only the Workspace Owner has authority to alter Administrator permissions.'
+                : 'Administrators cannot modify permissions for other Administrators. Only the Workspace Owner can alter these permissions.'}
+            </p>
+          </div>
         </div>
       )}
 
@@ -392,13 +467,13 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
                 <div className="flex flex-col items-center gap-1">
                   <span className="text-slate-700 font-bold">CREATE</span>
                   {canManage && (
-                    <label className="cursor-pointer inline-flex items-center" title="Toggle all Create permissions">
+                    <label className={`inline-flex items-center ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} title={canEdit ? "Toggle all Create permissions" : "Permissions locked"}>
                       <input
                         type="checkbox"
                         checked={isAllCreate}
-                        disabled={!canManage || isSaving}
+                        disabled={!canEdit || isSaving}
                         onChange={() => toggleAllForAction('create')}
-                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer"
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
                       />
                     </label>
                   )}
@@ -410,13 +485,13 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
                 <div className="flex flex-col items-center gap-1">
                   <span className="text-slate-700 font-bold">READ</span>
                   {canManage && (
-                    <label className="cursor-pointer inline-flex items-center" title="Toggle all Read permissions">
+                    <label className={`inline-flex items-center ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} title={canEdit ? "Toggle all Read permissions" : "Permissions locked"}>
                       <input
                         type="checkbox"
                         checked={isAllRead}
-                        disabled={!canManage || isSaving}
+                        disabled={!canEdit || isSaving}
                         onChange={() => toggleAllForAction('read')}
-                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer"
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
                       />
                     </label>
                   )}
@@ -428,13 +503,13 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
                 <div className="flex flex-col items-center gap-1">
                   <span className="text-slate-700 font-bold">UPDATE</span>
                   {canManage && (
-                    <label className="cursor-pointer inline-flex items-center" title="Toggle all Update permissions">
+                    <label className={`inline-flex items-center ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} title={canEdit ? "Toggle all Update permissions" : "Permissions locked"}>
                       <input
                         type="checkbox"
                         checked={isAllUpdate}
-                        disabled={!canManage || isSaving}
+                        disabled={!canEdit || isSaving}
                         onChange={() => toggleAllForAction('update')}
-                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer"
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
                       />
                     </label>
                   )}
@@ -446,13 +521,13 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
                 <div className="flex flex-col items-center gap-1">
                   <span className="text-slate-700 font-bold">DELETE</span>
                   {canManage && (
-                    <label className="cursor-pointer inline-flex items-center" title="Toggle all Delete permissions">
+                    <label className={`inline-flex items-center ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} title={canEdit ? "Toggle all Delete permissions" : "Permissions locked"}>
                       <input
                         type="checkbox"
                         checked={isAllDelete}
-                        disabled={!canManage || isSaving}
+                        disabled={!canEdit || isSaving}
                         onChange={() => toggleAllForAction('delete')}
-                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer"
+                        className="w-3.5 h-3.5 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
                       />
                     </label>
                   )}
@@ -466,7 +541,7 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
           <tbody className="divide-y divide-slate-100">
             {WORKSPACE_PAGES.map((page) => {
               const Icon = page.icon;
-              const perm = permissions[page.key] || { create: false, read: false, update: false, delete: false };
+              const perm = effectivePermissions[page.key] || { create: false, read: false, update: false, delete: false };
               const isRowAll = perm.create && perm.read && perm.update && perm.delete;
               const isRowNone = !perm.create && !perm.read && !perm.update && !perm.delete;
 
@@ -492,52 +567,52 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
 
                   {/* Create Checkbox */}
                   <td className="py-3 px-3 text-center">
-                    <label className="inline-flex items-center justify-center cursor-pointer p-1">
+                    <label className={`inline-flex items-center justify-center p-1 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
                       <input
                         type="checkbox"
                         checked={Boolean(perm.create)}
-                        disabled={!canManage || isSaving}
+                        disabled={!canEdit || isSaving}
                         onChange={() => toggleCell(page.key, 'create')}
-                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
+                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
                       />
                     </label>
                   </td>
 
                   {/* Read Checkbox */}
                   <td className="py-3 px-3 text-center">
-                    <label className="inline-flex items-center justify-center cursor-pointer p-1">
+                    <label className={`inline-flex items-center justify-center p-1 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
                       <input
                         type="checkbox"
                         checked={Boolean(perm.read)}
-                        disabled={!canManage || isSaving}
+                        disabled={!canEdit || isSaving}
                         onChange={() => toggleCell(page.key, 'read')}
-                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
+                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
                       />
                     </label>
                   </td>
 
                   {/* Update Checkbox */}
                   <td className="py-3 px-3 text-center">
-                    <label className="inline-flex items-center justify-center cursor-pointer p-1">
+                    <label className={`inline-flex items-center justify-center p-1 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
                       <input
                         type="checkbox"
                         checked={Boolean(perm.update)}
-                        disabled={!canManage || isSaving}
+                        disabled={!canEdit || isSaving}
                         onChange={() => toggleCell(page.key, 'update')}
-                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
+                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
                       />
                     </label>
                   </td>
 
                   {/* Delete Checkbox */}
                   <td className="py-3 px-3 text-center">
-                    <label className="inline-flex items-center justify-center cursor-pointer p-1">
+                    <label className={`inline-flex items-center justify-center p-1 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
                       <input
                         type="checkbox"
                         checked={Boolean(perm.delete)}
-                        disabled={!canManage || isSaving}
+                        disabled={!canEdit || isSaving}
                         onChange={() => toggleCell(page.key, 'delete')}
-                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
+                        className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
                       />
                     </label>
                   </td>
@@ -545,21 +620,31 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
                   {/* Row toggle button */}
                   <td className="py-3 px-4 text-center">
                     {canManage && (
-                      <button
-                        type="button"
-                        onClick={() => toggleAllForPage(page.key)}
-                        disabled={isSaving}
-                        className={`text-[11px] font-semibold px-2 py-0.5 rounded transition-colors cursor-pointer ${
-                          isRowAll
-                            ? 'bg-indigo-50 text-[#1e2a78] hover:bg-indigo-100'
-                            : isRowNone
-                              ? 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                        }`}
-                        title="Toggle all CRUD permissions for this page"
-                      >
-                        {isRowAll ? 'All ✓' : isRowNone ? 'None' : 'Mixed'}
-                      </button>
+                      canEdit ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleAllForPage(page.key)}
+                          disabled={isSaving}
+                          className={`text-[11px] font-semibold px-2 py-0.5 rounded transition-colors cursor-pointer ${
+                            isRowAll
+                              ? 'bg-indigo-50 text-[#1e2a78] hover:bg-indigo-100'
+                              : isRowNone
+                                ? 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                          }`}
+                          title="Toggle all CRUD permissions for this page"
+                        >
+                          {isRowAll ? 'All ✓' : isRowNone ? 'None' : 'Mixed'}
+                        </button>
+                      ) : (
+                        <span
+                          className="text-[11px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-500 inline-flex items-center gap-1 cursor-not-allowed"
+                          title="Permissions locked"
+                        >
+                          <Lock className="w-3 h-3 text-slate-400" />
+                          {isRowAll ? 'All ✓' : isRowNone ? 'None' : 'Mixed'}
+                        </span>
+                      )
                     )}
                   </td>
                 </tr>
@@ -593,7 +678,7 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
             {isModal ? 'Close' : 'Collapse'}
           </button>
 
-          {canManage && (
+          {canEdit && (
             <button
               type="button"
               onClick={onSave}
@@ -628,6 +713,7 @@ export const TeamRolesSection: React.FC = () => {
   const [currentRole, setCurrentRole] = useState<string>('ADMIN');
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingPermissions, setIsSavingPermissions] = useState(false);
+  const [trial, setTrial] = useState<WorkspaceTrial | null>(null);
 
   // Tabs state: 'members' | 'invitations'
   const [activeTab, setActiveTab] = useState<'members' | 'invitations'>('members');
@@ -688,6 +774,7 @@ export const TeamRolesSection: React.FC = () => {
         if (res.data.pendingInvitations) setPendingInvitations(res.data.pendingInvitations);
         if (res.data.stores) setStores(res.data.stores);
         if (res.data.seats) setSeats(res.data.seats);
+        if (res.data.trial) setTrial(res.data.trial);
         if (res.data.permissions) setPermissions(res.data.permissions);
         if (res.data.currentRole) setCurrentRole(res.data.currentRole);
       }
@@ -1063,6 +1150,29 @@ export const TeamRolesSection: React.FC = () => {
     }
   };
 
+  const actorRoleUpper = (dbUser?.role || currentRole || '').toUpperCase();
+  const isAgentOrViewer = actorRoleUpper === 'AGENT' || actorRoleUpper === 'VIEWER';
+
+  if (isAgentOrViewer) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 gap-4 text-center px-4">
+        <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 shadow-2xs">
+          <Lock className="w-6 h-6 stroke-[2]" />
+        </div>
+        <div>
+          <p className="text-base font-bold text-slate-900">Team & roles access restricted</p>
+          <p className="text-xs text-slate-500 mt-1 max-w-sm leading-relaxed">
+            Your role does not have permission to view or manage workspace team members and roles. Contact your workspace administrator or owner to request access.
+          </p>
+        </div>
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-[11px] font-semibold">
+          <Shield className="w-3.5 h-3.5 text-amber-500" />
+          Permission required: Workspace Administrator or Owner
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-6xl mx-auto px-8 py-4 space-y-8 pb-16 font-sans">
       {/* Top Header & Breadcrumb */}
@@ -1113,9 +1223,20 @@ export const TeamRolesSection: React.FC = () => {
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-bold text-slate-900">Workspace plan & seats</h2>
-              <span className="px-2.5 py-0.5 rounded-full bg-[#eef0fb] text-[#1e2a78] font-bold text-xs uppercase tracking-wider">
+              {/* <span className="px-2.5 py-0.5 rounded-full bg-[#eef0fb] text-[#1e2a78] font-bold text-xs uppercase tracking-wider">
                 {seats.plan} Plan
-              </span>
+              </span> */}
+              {trial && (
+                <span className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] border ${
+                  trial.isExpired
+                    ? 'bg-red-50 text-red-700 border-red-200'
+                    : 'bg-amber-50 text-amber-800 border-amber-200'
+                }`}>
+                  {trial.isExpired
+                    ? 'Trial Expired'
+                    : `${trial.totalDays}-Day Trial · ${trial.daysLeft} day${trial.daysLeft === 1 ? '' : 's'} left (Day ${trial.currentDay} of ${trial.totalDays})`}
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-500 font-medium">
               <strong>{seats.used} of {seats.total} seats used</strong> on the {seats.plan} plan
@@ -1123,6 +1244,9 @@ export const TeamRolesSection: React.FC = () => {
                 <span className="text-amber-700 font-semibold ml-1.5">· Limit reached</span>
               ) : (
                 <span className="text-slate-400 ml-1.5">· {availableSeats} seat(s) available</span>
+              )}
+              {trial && !trial.isExpired && (
+                <span className="text-slate-500 ml-1.5">· Workspace trial ends {trial.formattedExpiresAt}</span>
               )}
             </p>
           </div>
@@ -1242,6 +1366,7 @@ export const TeamRolesSection: React.FC = () => {
                   <th className="py-3 px-6 text-right font-semibold"></th>
                 </tr>
               </thead>
+              
               <tbody className="divide-y divide-slate-100">
                 {isLoading ? (
                   <tr>
@@ -1259,6 +1384,14 @@ export const TeamRolesSection: React.FC = () => {
                 ) : (
                   members.map((member) => {
                     const roleNormalized = member.role.toUpperCase();
+                    const isMemberOwner = roleNormalized === 'OWNER';
+                    const isMemberAdmin = roleNormalized === 'ADMIN';
+                    const isSelf = Boolean(
+                      dbUser && (member.id === dbUser.id || (member.email && dbUser.email && member.email.toLowerCase() === dbUser.email.toLowerCase()))
+                    );
+                    const isActorAdmin = actorRoleUpper === 'ADMIN';
+                    const isMemberPermissionsLocked = isMemberOwner || (isActorAdmin && (isSelf || isMemberAdmin));
+
                     const statusLower = (member.status || '').toLowerCase();
                     const isOnline = member.isOnline || statusLower === 'online' || statusLower === 'active';
                     const isAway = statusLower === 'away';
@@ -1321,14 +1454,32 @@ export const TeamRolesSection: React.FC = () => {
                               className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer shadow-2xs ${
                                 isExpanded
                                   ? 'bg-[#1e2a78] text-white ring-2 ring-[#1e2a78]/30'
-                                  : hasCustom
-                                    ? 'bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200'
-                                    : 'bg-indigo-50/80 hover:bg-indigo-100 text-[#1e2a78] border border-indigo-200/70'
+                                  : isMemberPermissionsLocked
+                                    ? 'bg-slate-100 hover:bg-slate-200/80 text-slate-700 border border-slate-200'
+                                    : hasCustom
+                                      ? 'bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200'
+                                      : 'bg-indigo-50/80 hover:bg-indigo-100 text-[#1e2a78] border border-indigo-200/70'
                               }`}
-                              title="Click to view & configure page-by-page Create, Read, Update, and Delete permissions"
+                              title={
+                                isMemberPermissionsLocked
+                                  ? 'View locked permissions'
+                                  : 'Click to view & configure page-by-page Create, Read, Update, and Delete permissions'
+                              }
                             >
-                              <Sliders className="w-3.5 h-3.5" />
-                              <span>{hasCustom ? 'Custom CRUD' : 'Permissions'}</span>
+                              {isMemberPermissionsLocked ? (
+                                <Lock className="w-3.5 h-3.5 text-slate-500 stroke-[2.2]" />
+                              ) : (
+                                <Sliders className="w-3.5 h-3.5" />
+                              )}
+                              <span>
+                                {isMemberOwner
+                                  ? 'Owner (Locked)'
+                                  : isMemberAdmin && isActorAdmin
+                                    ? 'Admin (Locked)'
+                                    : hasCustom
+                                      ? 'Custom CRUD'
+                                      : 'Permissions'}
+                              </span>
                               <ChevronDown
                                 className={`w-3.5 h-3.5 transition-transform duration-200 ${
                                   isExpanded ? 'rotate-180' : ''
@@ -1417,21 +1568,28 @@ export const TeamRolesSection: React.FC = () => {
                                       }}
                                       className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-indigo-50 text-[#1e2a78] font-medium text-left cursor-pointer"
                                     >
-                                      <Sliders className="w-3.5 h-3.5 text-[#1e2a78]" />
-                                      Page permissions (CRUD)
+                                      {isMemberPermissionsLocked ? (
+                                        <Lock className="w-3.5 h-3.5 text-slate-500 stroke-[2.2]" />
+                                      ) : (
+                                        <Sliders className="w-3.5 h-3.5 text-[#1e2a78]" />
+                                      )}
+                                      {isMemberPermissionsLocked ? 'Page permissions (Locked)' : 'Page permissions (CRUD)'}
                                     </button>
 
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveMenuMemberId(null);
-                                        handleOpenEdit(member);
-                                      }}
-                                      className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 text-left cursor-pointer"
-                                    >
-                                      <Edit3 className="w-3.5 h-3.5 text-slate-500" />
-                                      Edit details & role
-                                    </button>
+                                    {/* Edit details & role: Not allowed for Owner, nor can an Admin edit other Admins or their own role */}
+                                    {!isMemberOwner && (!isActorAdmin || (!isMemberAdmin && !isSelf)) && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActiveMenuMemberId(null);
+                                          handleOpenEdit(member);
+                                        }}
+                                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 text-left cursor-pointer"
+                                      >
+                                        <Edit3 className="w-3.5 h-3.5 text-slate-500" />
+                                        Edit details & role
+                                      </button>
+                                    )}
 
                                     {isInvited && (
                                       <button
@@ -1447,7 +1605,8 @@ export const TeamRolesSection: React.FC = () => {
                                       </button>
                                     )}
 
-                                    {member.role !== 'OWNER' && (
+                                    {/* Remove member: Not allowed for Owner, self, or for Admin removing another Admin */}
+                                    {!isMemberOwner && !isSelf && (!isActorAdmin || !isMemberAdmin) && canDeleteMember && (
                                       <button
                                         type="button"
                                         onClick={() => {
@@ -1606,7 +1765,7 @@ export const TeamRolesSection: React.FC = () => {
               Owner always has every permission. Admin and Owner require 2-step verification before entering.
             </p>
           </div>
-          {canManage && (
+          {canManage && actorRoleUpper === 'OWNER' && (
             <button
               type="button"
               onClick={handleResetPermissions}
@@ -1641,22 +1800,28 @@ export const TeamRolesSection: React.FC = () => {
 
                     {/* OWNER (Always Locked 🔒) */}
                     <td className="py-3.5 px-6 text-center">
-                      <div className="flex items-center justify-center">
+                      <div className="flex items-center justify-center" title="Workspace Owner permissions are permanent and cannot be modified">
                         <Lock className="w-4 h-4 text-slate-400 stroke-[2.2]" />
                       </div>
                     </td>
 
-                    {/* ADMIN */}
+                    {/* ADMIN (Only Owner can edit Admin role permissions; locked for Admin) */}
                     <td className="py-3.5 px-6 text-center">
-                      <label className="inline-flex items-center justify-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={adminChecked}
-                          disabled={!canUpdateMember || isSavingPermissions}
-                          onChange={() => handleTogglePermission('ADMIN', key)}
-                          className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
-                        />
-                      </label>
+                      {actorRoleUpper === 'OWNER' ? (
+                        <label className="inline-flex items-center justify-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={adminChecked}
+                            disabled={!canUpdateMember || isSavingPermissions}
+                            onChange={() => handleTogglePermission('ADMIN', key)}
+                            className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
+                          />
+                        </label>
+                      ) : (
+                        <div className="flex items-center justify-center" title="Only the Workspace Owner can modify Administrator role permissions">
+                          <Lock className="w-4 h-4 text-slate-400 stroke-[2.2]" />
+                        </div>
+                      )}
                     </td>
 
                     {/* AGENT */}
@@ -1755,6 +1920,18 @@ export const TeamRolesSection: React.FC = () => {
         ) : (
           /* Main Multi-Invite Form */
           <form onSubmit={handleInviteSubmit} className="space-y-5 pt-1">
+            {trial && (
+              <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl flex items-start gap-2.5 text-xs text-amber-950">
+                <Clock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold block">Workspace Trial: {trial.daysLeft} day{trial.daysLeft === 1 ? '' : 's'} remaining</span>
+                  <p className="text-[11px] text-amber-800 leading-normal mt-0.5">
+                    Invited team members join this workspace and share the owner&apos;s trial timeline (Day {trial.currentDay} of {trial.totalDays}, ends {trial.formattedExpiresAt}).
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Multi-email input chips */}
             <div>
               <div className="flex items-center justify-between mb-1">

@@ -12,6 +12,7 @@ import {
 } from "../db/schema";
 import { whatsAppService } from "../services/channels/whatsapp.service";
 import { whatsappFlowSendService } from "../services/whatsapp-flows/flow-send.service";
+import { matchConsentKeyword, normalizeKeyword } from "../services/consent.service";
 import { mapLimit, sleep } from "@/lib/concurrency";
 import { keywordPattern, matchesKeywords, normalizeKeywords } from "./keywords";
 import { toAppError } from "@/lib/errors";
@@ -126,23 +127,33 @@ function compare(actual: string, operator: string, expected: string): boolean {
 
 interface CompiledAutomation {
   automation: Automation;
-  /** Trigger nodes in graph order; keyword triggers carry their compiled patterns. */
-  triggers: { node: AutomationGraphNode; patterns: RegExp[] | null }[];
+  /**
+   * Trigger nodes in graph order; keyword triggers carry their compiled patterns and their keywords
+   * normalized like consent keywords (to recognize triggers built on purpose for STOP / START).
+   */
+  triggers: { node: AutomationGraphNode; patterns: RegExp[] | null; consentForms: string[] }[];
 }
 
 function compile(automation: Automation): CompiledAutomation {
   const triggers: CompiledAutomation["triggers"] = [];
   for (const n of automation.graph?.nodes ?? []) {
-    if (n.data?.type === "trigger_incoming_message") triggers.push({ node: n, patterns: null });
+    if (n.data?.type === "trigger_incoming_message") triggers.push({ node: n, patterns: null, consentForms: [] });
     else if (n.data?.type === "trigger_keyword") {
-      const patterns = normalizeKeywords(n.data.keywords).map(keywordPattern);
-      if (patterns.length) triggers.push({ node: n, patterns });
+      const keywords = normalizeKeywords(n.data.keywords);
+      const patterns = keywords.map(keywordPattern);
+      if (patterns.length) triggers.push({ node: n, patterns, consentForms: keywords.map(normalizeKeyword) });
     }
   }
   return { automation, triggers };
 }
 
-function matchTrigger(c: CompiledAutomation, text: string | null): AutomationGraphNode | null {
+/**
+ * The trigger of this automation that an inbound message fires, if any. A consent keyword (STOP, START,
+ * UNSUBSCRIBE…) fires only a Keyword trigger that lists that exact keyword — never "Incoming message"
+ * or a keyword that merely appears in it — so opting in or out doesn't start unrelated automations.
+ */
+function matchTrigger(c: CompiledAutomation, text: string | null, consentKeyword: string | null): AutomationGraphNode | null {
+  if (consentKeyword) return c.triggers.find((t) => t.consentForms.includes(consentKeyword))?.node ?? null;
   for (const t of c.triggers) {
     if (!t.patterns) return t.node;
     if (text && t.patterns.some((p) => p.test(text))) return t.node;
@@ -198,12 +209,16 @@ export class AutomationEngine {
     wamid: string;
     text: string | null;
     pending?: boolean;
+    /** Normalized consent keyword the message holds (STOP, START…), when the caller already matched it */
+    consentKeyword?: string | null;
   }): Promise<boolean> {
     let settled = false;
     try {
+      // Replayed messages carry only their text: recognize consent keywords from it as well
+      const consentKeyword = params.consentKeyword ?? (params.text ? matchConsentKeyword([params.text])?.keyword ?? null : null);
       const active = await this.activeFor(params.organizationId);
       const matched = active
-        .map((c) => ({ automation: c.automation, trigger: matchTrigger(c, params.text) }))
+        .map((c) => ({ automation: c.automation, trigger: matchTrigger(c, params.text, consentKeyword) }))
         .filter((m): m is { automation: Automation; trigger: AutomationGraphNode } => !!m.trigger);
 
       const results = await mapLimit(matched, START_CONCURRENCY, (m) => this.start(m.automation, m.trigger, params));
