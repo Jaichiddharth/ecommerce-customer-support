@@ -1,35 +1,22 @@
 'use client';
 
 import React, { useState } from 'react';
-import {
-  MessageCircle, Hash, Bell, GitBranch, Search, UserCheck,
-  Send, FileText, UserPlus, PenLine, Clock, Shuffle, StopCircle,
-  MessageSquareText, Hourglass,
-} from 'lucide-react';
-import { PALETTE_ITEMS, CATEGORY_META } from './palette-config';
+import { PICKABLE_ITEMS, CATEGORY_META, themeOf } from './palette-config';
 import type { PaletteItem, NodeCategory } from './flow-types';
+import { NodeTypeIcon } from './node-icons';
 
-// ─── Icon registry ────────────────────────────────────────────────────────────
-
-const ICON_MAP: Record<string, React.FC<{ className?: string }>> = {
-  MessageCircle, Hash, Bell, GitBranch, Search, UserCheck,
-  Send, FileText, UserPlus, PenLine, Clock, Shuffle, StopCircle,
-  MessageSquareText, Hourglass,
-};
-
-function NodeIcon({ name, className }: { name: string; className?: string }) {
-  const Icon = ICON_MAP[name] ?? MessageCircle;
-  return <Icon className={className} />;
+/** The step's icon exactly as the canvas draws it: white glyph on the step colour, round for triggers. */
+function PaletteIcon({ item, size }: { item: PaletteItem; size: 'md' | 'sm' }) {
+  const shape = item.category === 'triggers' ? 'rounded-full' : size === 'md' ? 'rounded-lg' : 'rounded-md';
+  return (
+    <div
+      className={`${size === 'md' ? 'w-8 h-8' : 'w-6 h-6'} ${shape} flex items-center justify-center shrink-0 text-white`}
+      style={{ backgroundColor: themeOf(item.type).accent }}
+    >
+      <NodeTypeIcon type={item.type} className={size === 'md' ? 'w-4 h-4' : 'w-3.5 h-3.5'} />
+    </div>
+  );
 }
-
-// ─── Original toolbox colours (per category) ──────────────────────────────────
-
-const ITEM_COLORS: Record<NodeCategory, { color: string; textColor: string }> = {
-  triggers: { color: '#dbeafe', textColor: '#1d4ed8' },
-  conditions: { color: '#fef9c3', textColor: '#a16207' },
-  actions: { color: '#dcfce7', textColor: '#15803d' },
-  'flow-controls': { color: '#fee2e2', textColor: '#b91c1c' },
-};
 
 // ─── Category header ──────────────────────────────────────────────────────────
 
@@ -69,9 +56,7 @@ function PaletteNodeCard({ item }: { item: PaletteItem }) {
                  hover:border-slate-300 hover:shadow-sm
                  transition-all duration-150"
     >
-      <div style={{ color: ITEM_COLORS[item.category].textColor }}>
-        <NodeIcon name={item.icon} className="w-4 h-4" />
-      </div>
+      <PaletteIcon item={item} size="md" />
       <p className="text-[10px] font-medium text-slate-600 text-center leading-tight line-clamp-2 w-full">
         {item.label}
       </p>
@@ -97,12 +82,7 @@ function PaletteSearchCard({ item }: { item: PaletteItem }) {
                  cursor-grab active:cursor-grabbing select-none
                  hover:border-slate-300 hover:shadow-sm transition-all duration-150"
     >
-      <div
-        className="w-6 h-6 rounded-md flex items-center justify-center shrink-0"
-        style={{ backgroundColor: ITEM_COLORS[item.category].color, color: ITEM_COLORS[item.category].textColor }}
-      >
-        <NodeIcon name={item.icon} className="w-3.5 h-3.5" />
-      </div>
+      <PaletteIcon item={item} size="sm" />
       <div className="min-w-0 flex-1">
         <p className="text-[11px] font-semibold text-slate-700 truncate">{item.label}</p>
         <p className="text-[10px] text-slate-400 truncate">{item.description}</p>
@@ -130,7 +110,7 @@ export function FlowPalette() {
     });
 
   const filtered = search.trim()
-    ? PALETTE_ITEMS.filter(
+    ? PICKABLE_ITEMS.filter(
         (i) =>
           i.label.toLowerCase().includes(search.toLowerCase()) ||
           i.description.toLowerCase().includes(search.toLowerCase()),
@@ -170,7 +150,7 @@ export function FlowPalette() {
         ) : (
           CATEGORY_ORDER.map((cat) => {
             const meta = CATEGORY_META[cat];
-            const items = PALETTE_ITEMS.filter((i) => i.category === cat);
+            const items = PICKABLE_ITEMS.filter((i) => i.category === cat);
             const isCollapsed = collapsed.has(cat);
             return (
               <div key={cat}>

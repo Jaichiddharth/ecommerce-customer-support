@@ -1,4 +1,5 @@
 import { whatsappFlowRepository, automationRepository, type FlowSortKey } from "../../db/repositories";
+import { flowFieldsOf } from "@/lib/automation/variables";
 import { toListResult, type ListQuery } from "@/lib/api/list-query";
 import {
   META_FLOW_CATEGORIES,
@@ -156,6 +157,8 @@ export class WhatsAppFlowService {
               wabaId: v.wabaId,
               entryScreen: v.definition.screens[0]?.id ?? null,
               screens: v.definition.screens.map((s) => ({ id: s.id, title: s.title })),
+              // Questions of the published version: automation variables {{flow.<name>}} and Flow conditions
+              fields: flowFieldsOf(v.definition),
             }
           : null,
       };

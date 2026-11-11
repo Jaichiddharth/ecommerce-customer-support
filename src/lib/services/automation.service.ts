@@ -12,6 +12,7 @@ import { AppError } from "@/lib/errors";
 import { SEND_FLOW_NODE, invalidateActiveAutomations } from "@/lib/automation/engine";
 import { summarizeIssues, validateAutomation, type AutomationIssue } from "@/lib/automation/validate";
 import { SENDABLE_TEMPLATE_STATUS } from "./whatsapp-flows/template.service";
+import { flowFieldsOf, type FlowField } from "@/lib/automation/variables";
 
 /** Listing status (derived in SQL). Failed = switched on, but its most recent run failed. */
 export const AUTOMATION_LIST_STATUSES = ["draft", "active", "paused", "failed", "archived"] as const;
@@ -184,7 +185,7 @@ export class AutomationService {
    * of that Flow. All issues are returned in `details.issues` so the builder can list them.
    */
   async assertActivatable(organizationId: number, graph: AutomationGraph) {
-    const issues: AutomationIssue[] = validateAutomation(graph);
+    const issues: AutomationIssue[] = validateAutomation(graph, { flowFields: await this.flowFieldsOf(organizationId, graph) });
     const misconfigured = new Set(issues.map((i) => i.nodeId));
 
     for (const node of graph.nodes) {
@@ -220,6 +221,25 @@ export class AutomationService {
         expected: true,
       });
     }
+  }
+
+  /**
+   * Questions of every Flow the automation sends, from the version the customer will actually open
+   * (the template's pinned version, else the published one), so {{flow.…}} variables are checked by name.
+   */
+  private async flowFieldsOf(organizationId: number, graph: AutomationGraph): Promise<Map<number, FlowField[]>> {
+    const out = new Map<number, FlowField[]>();
+    for (const node of graph.nodes) {
+      const d = node.data;
+      const flowId = Number(d.flowId);
+      if (d.type !== SEND_FLOW_NODE || !flowId || out.has(flowId)) continue;
+      const flow = await whatsappFlowRepository.findFlow(flowId, organizationId);
+      const template = d.sendMethod !== "interactive" && d.templateId ? await whatsappFlowRepository.findTemplate(Number(d.templateId), organizationId) : null;
+      const versionId = template?.flowVersionId ?? flow?.publishedVersionId;
+      const version = versionId ? await whatsappFlowRepository.findVersion(versionId, organizationId) : null;
+      if (version) out.set(flowId, flowFieldsOf(version.definition));
+    }
+    return out;
   }
 }
 
