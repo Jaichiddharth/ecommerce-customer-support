@@ -1,4 +1,14 @@
 import { normalizeKeywords } from "./keywords";
+import {
+  CONTACT_UPDATE_FIELDS,
+  NO_VALUE_OPERATORS,
+  OPERATOR_LABELS,
+  attributeDef,
+  variableProblems,
+  type FlowField,
+  type FlowScope,
+  type OperatorId,
+} from "./variables";
 
 /**
  * Configuration checks for an automation graph, shared by the builder (live issue list, node
@@ -6,7 +16,7 @@ import { normalizeKeywords } from "./keywords";
  * checks that need it (Flow published, template approved) in AutomationService.assertActivatable.
  *
  * The rules mirror what the runtime (engine.ts) actually does, so anything reported here would
- * otherwise make a run fail, silently skip steps or never start.
+ * otherwise make a run fail, silently skip steps, send blank text or never start.
  */
 
 export interface AutomationIssue {
@@ -30,9 +40,21 @@ interface GraphEdge {
 
 /** Triggers the runtime starts runs from. */
 const RUNNABLE_TRIGGERS = new Set(["trigger_incoming_message", "trigger_keyword"]);
-const SEND_FLOW = "action_send_whatsapp_flow";
+export const SEND_FLOW = "action_send_whatsapp_flow";
+export const WAIT_FLOW = "flow_wait_flow_submission";
+
+/** Text fields the engine fills variables into, per step type. */
+export const VARIABLE_FIELDS: Record<string, string[]> = {
+  action_send_message: ["messageContent"],
+  action_update_contact: ["updateValue"],
+  [SEND_FLOW]: ["flowBody"],
+};
 
 const text = (d: Record<string, unknown>, key: string) => String(d[key] ?? "").trim();
+
+/** Values a Send Template step fills in, by template field id (`body:1`, `header`, `button:0`). */
+const templateValues = (d: Record<string, unknown>): Record<string, string> =>
+  d.templateValues && typeof d.templateValues === "object" ? (d.templateValues as Record<string, string>) : {};
 
 /** One field-level problem; `field` is the node data key the message is about. */
 export interface NodeFieldIssue {
@@ -40,13 +62,22 @@ export interface NodeFieldIssue {
   message: string;
 }
 
-/** Field-level checks for one step, keyed by the data field each one is about (for inline form errors). */
-export function nodeConfigFieldIssues(type: string, d: Record<string, unknown>): NodeFieldIssue[] {
+/**
+ * Field-level checks for one step, keyed by the data field each one is about (for inline form errors).
+ * Pass `scope` (Flow answers available at this step) to also check `{{flow.…}}` variables and Flow conditions.
+ */
+export function nodeConfigFieldIssues(type: string, d: Record<string, unknown>, scope?: FlowScope): NodeFieldIssue[] {
   const out: NodeFieldIssue[] = [];
   const push = (field: string, message: string) => out.push({ field, message });
+  const checkVariables = (field: string) => {
+    const [first] = variableProblems(d[field], scope);
+    if (first) push(field, first);
+  };
+
   switch (type) {
     case "trigger_incoming_message":
     case "flow_end":
+    case WAIT_FLOW:
       break;
 
     case "trigger_keyword":
@@ -59,34 +90,75 @@ export function nodeConfigFieldIssues(type: string, d: Record<string, unknown>):
       break;
 
     case "condition_if_else":
-    case "condition_contact_attribute":
-      if (!text(d, "attribute")) push("attribute", "Choose the attribute to check.");
-      if (!text(d, "operator")) push("operator", "Choose an operator.");
-      else if (d.operator !== "is_empty" && !text(d, "value")) push("value", "Enter the value to compare with.");
+    case "condition_contact_attribute": {
+      const attribute = text(d, "attribute");
+      const operator = text(d, "operator");
+      if (!attribute) {
+        push("attribute", "Choose what to check.");
+        break;
+      }
+      const isFlow = attribute.startsWith("flow.");
+      if (isFlow && scope && !scope.available) {
+        push("attribute", "Flow answers need a Wait for Flow Submission step earlier on this path.");
+        break;
+      }
+      // Flow questions are only known with a scope; without one, only the operator/value presence is checked
+      const def = attributeDef(attribute, scope?.fields);
+      if (!def && (!isFlow || scope?.fields)) {
+        push("attribute", isFlow ? "This question isn't in the Flow any more. Choose another one." : "This can't be checked. Choose another attribute.");
+        break;
+      }
+      if (!operator) push("operator", "Choose an operator.");
+      else if (def && !def.operators.includes(operator as OperatorId)) {
+        push("operator", `“${OPERATOR_LABELS[operator as OperatorId] ?? operator}” doesn't work for ${def.label}. Choose another operator.`);
+      } else if (!NO_VALUE_OPERATORS.has(operator) && !text(d, "value")) {
+        push("value", def?.valueOptions ? "Choose a value." : "Enter the value to compare with.");
+      } else if (def?.valueOptions && !NO_VALUE_OPERATORS.has(operator) && !def.valueOptions.some((o) => o.value === text(d, "value"))) {
+        push("value", "This option isn't in the Flow any more. Choose another one.");
+      }
       break;
+    }
 
     case "action_send_message":
       if (!text(d, "messageContent")) push("messageContent", "Enter the message to send.");
+      else checkVariables("messageContent");
       break;
 
-    case "action_send_template":
-      if (!text(d, "templateId")) push("templateId", "Enter the template to send.");
+    case "action_send_template": {
+      if (!text(d, "templateName")) {
+        // Older steps stored a typed name, sent in en_US without its variables
+        push("templateName", text(d, "templateId") ? "Choose the template again from the list." : "Choose an approved template.");
+        break;
+      }
+      const values = templateValues(d);
+      const fieldIds = Array.isArray(d.templateFieldIds) ? (d.templateFieldIds as string[]) : [];
+      if (fieldIds.some((id) => !String(values[id] ?? "").trim())) push("templateValues", "Fill in every template variable.");
+      else {
+        const [first] = fieldIds.flatMap((id) => variableProblems(values[id], scope));
+        if (first) push("templateValues", first);
+      }
       break;
+    }
 
     case "action_assign_conversation":
       if (!text(d, "assignTo")) push("assignTo", "Choose who the conversation is assigned to.");
       break;
 
-    case "action_update_contact":
-      if (!text(d, "updateField")) push("updateField", "Choose the contact field to update.");
+    case "action_update_contact": {
+      const field = text(d, "updateField");
+      if (!field) push("updateField", "Choose what to update.");
+      else if (!CONTACT_UPDATE_FIELDS.some((f) => f.value === field)) push("updateField", "This field can't be updated. Choose another one.");
       else if (!text(d, "updateValue")) push("updateValue", "Enter the new value.");
+      else checkVariables("updateValue");
       break;
+    }
 
     case SEND_FLOW:
       if (!d.flowId) {
         push("flowId", "Choose a published WhatsApp Flow.");
       } else if (d.sendMethod === "interactive") {
         if (!text(d, "flowBody")) push("flowBody", "Enter the message text.");
+        else checkVariables("flowBody");
         if (!text(d, "flowCta")) push("flowCta", "Enter the button text.");
       } else if (!d.templateId) {
         push("templateId", "Choose an approved template that opens this Flow.");
@@ -100,15 +172,74 @@ export function nodeConfigFieldIssues(type: string, d: Record<string, unknown>):
 }
 
 /** Field-level checks for one step (what its config panel must have before it can be saved). */
-export function nodeConfigIssues(type: string, d: Record<string, unknown>): string[] {
-  return nodeConfigFieldIssues(type, d).map((i) => i.message);
+export function nodeConfigIssues(type: string, d: Record<string, unknown>, scope?: FlowScope): string[] {
+  return nodeConfigFieldIssues(type, d, scope).map((i) => i.message);
+}
+
+// ─── Flow answers in scope ──────────────────────────────────────────────────
+
+/** Steps upstream of `nodeId` (every step that can run before it). */
+function upstreamOf(nodeId: string, edges: GraphEdge[]): Set<string> {
+  const seen = new Set<string>();
+  const stack = [nodeId];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    for (const e of edges) {
+      if (e.target === cur && !seen.has(e.source)) {
+        seen.add(e.source);
+        stack.push(e.source);
+      }
+    }
+  }
+  return seen;
 }
 
 /**
- * Every problem that would stop the automation from running as drawn, in reading order
- * (automation-level first, then steps top to bottom). Pass `name` to also check the name.
+ * Flows whose answers a step can use: those sent by a Send WhatsApp Flow step before a Wait for Flow
+ * Submission step that comes before this one. `waitsFor` is set for a Wait step: the Flows it waits for.
  */
-export function validateAutomation(input: { name?: string; nodes: GraphNode[]; edges: GraphEdge[] }): AutomationIssue[] {
+export function flowsInScope(
+  nodeId: string,
+  nodes: GraphNode[],
+  edges: GraphEdge[]
+): { available: boolean; flowIds: number[]; waitsFor: number[] } {
+  const typeById = new Map(nodes.map((n) => [n.id, String(n.data?.type ?? "")]));
+  const flowIdOf = (id: string) => Number(nodes.find((n) => n.id === id)?.data?.flowId) || null;
+  const sentBefore = (id: string) =>
+    [...upstreamOf(id, edges)].filter((u) => typeById.get(u) === SEND_FLOW).map(flowIdOf).filter((f): f is number => !!f);
+
+  const up = upstreamOf(nodeId, edges);
+  const waits = [...up].filter((u) => typeById.get(u) === WAIT_FLOW);
+  const flowIds = [...new Set(waits.flatMap(sentBefore))];
+  const waitsFor = typeById.get(nodeId) === WAIT_FLOW ? [...new Set(sentBefore(nodeId))] : [];
+  return { available: waits.length > 0, flowIds, waitsFor };
+}
+
+/** FlowScope for a step; `fields` is null when a Flow's questions aren't in `flowFields`. */
+export function flowScopeFor(
+  nodeId: string,
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  flowFields?: Map<number, FlowField[]>
+): FlowScope {
+  const { available, flowIds } = flowsInScope(nodeId, nodes, edges);
+  if (!available || !flowFields || flowIds.some((id) => !flowFields.has(id))) return { available, fields: null };
+  const seen = new Set<string>();
+  const fields = flowIds.flatMap((id) => flowFields.get(id)!).filter((f) => !seen.has(f.name) && seen.add(f.name));
+  return { available, fields };
+}
+
+// ─── Whole automation ───────────────────────────────────────────────────────
+
+/**
+ * Every problem that would stop the automation from running as drawn, in reading order
+ * (automation-level first, then steps top to bottom). Pass `name` to also check the name, and
+ * `flowFields` (questions per Flow id) to check `{{flow.…}}` variables and Flow conditions by name.
+ */
+export function validateAutomation(
+  input: { name?: string; nodes: GraphNode[]; edges: GraphEdge[] },
+  opts: { flowFields?: Map<number, FlowField[]> } = {}
+): AutomationIssue[] {
   const issues: AutomationIssue[] = [];
   const nodes = [...input.nodes].sort(
     (a, b) => (a.position?.y ?? 0) - (b.position?.y ?? 0) || (a.position?.x ?? 0) - (b.position?.x ?? 0)
@@ -127,11 +258,7 @@ export function validateAutomation(input: { name?: string; nodes: GraphNode[]; e
 
   const edges = input.edges.filter((e) => byId.has(e.source) && byId.has(e.target));
   const outgoing = new Map<string, GraphEdge[]>();
-  const incoming = new Map<string, GraphEdge[]>();
-  for (const e of edges) {
-    outgoing.set(e.source, [...(outgoing.get(e.source) ?? []), e]);
-    incoming.set(e.target, [...(incoming.get(e.target) ?? []), e]);
-  }
+  for (const e of edges) outgoing.set(e.source, [...(outgoing.get(e.source) ?? []), e]);
 
   // Steps reachable from a trigger — anything else never runs
   const reachable = new Set<string>();
@@ -162,11 +289,16 @@ export function validateAutomation(input: { name?: string; nodes: GraphNode[]; e
     const out = outgoing.get(n.id) ?? [];
     const isTrigger = type.startsWith("trigger_");
 
+    if (type === "condition_contact_attribute") {
+      add(n, "The Filter step has been removed. Replace it with If / Else.");
+    }
+
     if (type === "trigger_conversation_event") {
       add(n, "Conversation Event triggers don't run yet. Use an Incoming Message or Keyword trigger instead.");
     }
 
-    for (const message of nodeConfigIssues(type, n.data ?? {})) add(n, message);
+    const scope = isTrigger ? undefined : flowScopeFor(n.id, nodes, edges, opts.flowFields);
+    for (const message of nodeConfigIssues(type, n.data ?? {}, scope)) add(n, message);
 
     if (isTrigger) {
       if (!out.length) add(n, "Connect this trigger to the first step.");
@@ -175,16 +307,23 @@ export function validateAutomation(input: { name?: string; nodes: GraphNode[]; e
       continue; // its position in the flow can't be judged
     }
 
+    if (type === WAIT_FLOW && !flowsInScope(n.id, nodes, edges).waitsFor.length) {
+      add(n, "Place it after a Send WhatsApp Flow step.");
+    }
+
+    // Every path must finish on an End step, so where an automation stops is always explicit on the canvas
     if (type === "condition_if_else") {
-      if (!out.some((e) => e.sourceHandle === "true" || e.sourceHandle === "false")) {
-        add(n, "Connect the TRUE or FALSE path to a next step.");
+      for (const handle of ["true", "false"] as const) {
+        if (!out.some((e) => e.sourceHandle === handle)) {
+          add(n, `Connect the ${handle.toUpperCase()} path to a next step, or to an End step if nothing should happen.`);
+        }
       }
-    } else if (type !== "flow_end" && out.length > 1) {
-      add(n, `Has ${out.length} outgoing connections, but only the first one runs. Keep one connection.`);
+    } else if (type !== "flow_end") {
+      if (!out.length && !isTrigger) add(n, "This is the last step on its path. Connect it to an End step.");
+      else if (out.length > 1) add(n, `Has ${out.length} outgoing connections, but only the first one runs. Keep one connection.`);
     }
 
     if (loopTargets.has(n.id)) add(n, "Is part of a loop, so the automation would never finish. Remove a connection to break it.");
-
   }
 
   return issues;

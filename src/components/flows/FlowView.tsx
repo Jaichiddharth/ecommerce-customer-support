@@ -41,7 +41,8 @@ import apiClient from '@/lib/api/client';
 import { notifyError } from '@/lib/api/notify';
 import { toApiError } from '@/lib/api/api-error';
 import { gooeyToast } from '@/components/ui/goey-toaster';
-import { nodeConfigIssues, validateAutomation, type AutomationIssue } from '@/lib/automation/validate';
+import { flowsInScope, nodeConfigIssues, validateAutomation, type AutomationIssue } from '@/lib/automation/validate';
+import { useFlowFields } from './use-published-flows';
 import { AutomationIssuesPanel, type IssuesIntent } from './AutomationIssuesPanel';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -239,9 +240,11 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
 
   // ── Validation: checked live, enforced on Save / Activate ──────────────
+  // Flow questions (once loaded) let the live check catch {{flow.<field>}} typos and removed questions
+  const flowFields = useFlowFields();
   const clientIssues = useMemo(
-    () => validateAutomation({ name, nodes: nodes, edges }),
-    [name, nodes, edges],
+    () => validateAutomation({ name, nodes: nodes, edges }, { flowFields }),
+    [name, nodes, edges, flowFields],
   );
   /** Issues only the server can detect (Flow not published, template not approved), from the last attempt. */
   const [serverIssues, setServerIssues] = useState<AutomationIssue[]>([]);
@@ -805,6 +808,7 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
               nodeId={selectedNode.id}
               data={selectedNode.data as AutomationNodeData}
               issues={issuesByNode.get(selectedNode.id)}
+              flowContext={flowsInScope(selectedNode.id, nodes, edges)}
               onUpdate={onUpdateNodeData}
               onClose={() => setSelectedNodeId(null)}
               onDelete={onDeleteNode}

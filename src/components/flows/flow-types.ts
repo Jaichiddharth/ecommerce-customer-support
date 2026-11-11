@@ -10,6 +10,8 @@ export interface PaletteItem {
   icon: string; // lucide icon name (see node-icons.tsx)
   /** Extra words the node search matches on. */
   keywords?: string[];
+  /** Retired step: still renders and runs in existing automations, but can't be added. */
+  hidden?: boolean;
 }
 
 /** Visual tokens for a node category (subtle, on the Unocx slate + #3440a8 theme). */
