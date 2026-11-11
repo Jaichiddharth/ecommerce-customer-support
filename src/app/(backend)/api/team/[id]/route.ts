@@ -25,52 +25,23 @@ export const PATCH = withAuth<{ params: Promise<{ id: string }> }>(
     const body = (await readJson(req)) ?? {};
     const { role, teams, languages, stores, customPermissions, status, name } = body;
 
-    // Workspace Owner permissions and role are immutable
-    if (targetUser.role?.toUpperCase() === "OWNER") {
-      if (customPermissions !== undefined) {
-        throw new AppError("FORBIDDEN", {
-          message: "Workspace Owner permissions are immutable and cannot be modified.",
-          expected: true,
-        });
-      }
-      if (role !== undefined && role.toUpperCase() !== "OWNER") {
-        throw new AppError("FORBIDDEN", {
-          message: "Workspace Owner role cannot be changed.",
-          expected: true,
-        });
-      }
-    }
+    const targetRole = (targetUser.role || "AGENT").toUpperCase();
+    const isTargetAgentOrViewer = targetRole === "AGENT" || targetRole === "VIEWER";
 
-    // Admins cannot edit an Owner or promote someone to Owner
-    if (targetUser.role?.toUpperCase() === "OWNER" && !isOwner) {
-      throw new AppError("FORBIDDEN", {
-        message: "Only workspace Owners can modify an Owner's account.",
-        expected: true,
-      });
-    }
-
+    // Non-owners (e.g. Admins) can only modify Agent and Viewer roles and custom CRUD permissions
     if (!isOwner) {
-      // Admin cannot modify their own role or permissions
-      if (targetUser.id === req.user.id && (customPermissions !== undefined || role !== undefined)) {
+      if (!isTargetAgentOrViewer) {
         throw new AppError("FORBIDDEN", {
-          message: "Administrators cannot modify their own permissions or role.",
+          message: "Administrators can only modify Agent and Viewer roles and permissions. Owner and Administrator accounts are protected.",
           expected: true,
         });
       }
-      // Admin cannot modify another Admin's role or permissions
-      if (targetUser.role?.toUpperCase() === "ADMIN" && (customPermissions !== undefined || role !== undefined)) {
+      if (role && role.toUpperCase() === "OWNER") {
         throw new AppError("FORBIDDEN", {
-          message: "Only the Workspace Owner can modify Administrator permissions or roles.",
+          message: "Only workspace Owners can promote a member to Owner.",
           expected: true,
         });
       }
-    }
-
-    if (role && role.toUpperCase() === "OWNER" && !isOwner) {
-      throw new AppError("FORBIDDEN", {
-        message: "Only workspace Owners can promote a member to Owner.",
-        expected: true,
-      });
     }
 
     const updated = await userRepository.updateTeamMember(memberId, orgId, {
