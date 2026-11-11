@@ -18,7 +18,9 @@ import { mapLimit, sleep } from "@/lib/concurrency";
 import { keywordPattern, matchesKeywords, normalizeKeywords } from "./keywords";
 import { EMAIL_RE } from "./variables";
 import { formatFlowResponse } from "@/lib/whatsapp-flows/flow-response-format";
-import { toAppError } from "@/lib/errors";
+import { AppError, toAppError } from "@/lib/errors";
+import { getObject } from "@/lib/storage/s3";
+import { automationMediaOf, automationMediaPrefix } from "./media";
 import { createLogger } from "@/lib/logger";
 
 /**
@@ -607,18 +609,32 @@ export class AutomationEngine {
 
       case "action_send_message": {
         const text = render(String(d.messageContent ?? ""), x).trim();
-        if (!text) throw new Error("Send Message has no content.");
+        const media = automationMediaOf(d);
+        if (!text && !media) throw new Error("Send Message has no content.");
         const preloaded = await this.preloaded(x);
+        const base = {
+          organizationId: x.run.organizationId,
+          customerId: x.customer.id,
+          to: x.customer.phone ?? "",
+          metadata: { automation: { automationId: x.automation.id, runId: x.run.id, nodeId: node.id } },
+          preloaded,
+        };
+        if (!media) {
+          await this.quickRetry(() => whatsAppService.sendMessage({ ...base, text }));
+          return { kind: "next" };
+        }
+        // Only this organization's files: the key comes from the saved graph
+        if (!media.key.startsWith(automationMediaPrefix(x.run.organizationId))) {
+          throw new AppError("MEDIA_NOT_FOUND", { message: "The attached file isn't available. Attach it again.", expected: true });
+        }
+        // Read from S3 on every run and upload to Meta like an inbox attachment; the message stores Meta's media id
+        const file = await this.quickRetry(() => getObject(media.key));
+        // WhatsApp drops captions on audio, so the text follows as its own message
+        const caption = media.kind === "audio" ? undefined : text || undefined;
         await this.quickRetry(() =>
-          whatsAppService.sendMessage({
-            organizationId: x.run.organizationId,
-            customerId: x.customer.id,
-            to: x.customer.phone ?? "",
-            text,
-            metadata: { automation: { automationId: x.automation.id, runId: x.run.id, nodeId: node.id } },
-            preloaded,
-          })
+          whatsAppService.sendMessage({ ...base, text: caption, mediaFile: file, mimeType: media.mimeType, filename: media.filename })
         );
+        if (media.kind === "audio" && text) await this.quickRetry(() => whatsAppService.sendMessage({ ...base, text }));
         return { kind: "next" };
       }
 
