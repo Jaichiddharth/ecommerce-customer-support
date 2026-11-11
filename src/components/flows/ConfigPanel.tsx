@@ -15,6 +15,8 @@ import { ASSIGNEE_OPTIONS, EVENT_OPTIONS, type Option } from './node-options';
 import { usePublishedFlows } from './use-published-flows';
 import { VariableInput, VariablesContext, type VariableGroup } from './VariableInput';
 import { TemplateFields } from './TemplateFields';
+import { MessageMediaField } from './MessageMediaField';
+import { automationMediaOf } from '@/lib/automation/media';
 
 /** Where the selected step sits relative to Flow sends and waits (from validate.flowsInScope). */
 export interface StepFlowContext {
@@ -359,18 +361,43 @@ function TypeFields({
         </Field>
       );
 
-    case 'action_send_message':
+    case 'action_send_message': {
+      const media = automationMediaOf(local);
       return (
-        <Field label="Message" name="messageContent" required hint="Use Insert variable to personalise it, e.g. with the contact’s name.">
-          <VariableInput
-            multiline
-            value={String(local.messageContent ?? '')}
-            onChange={(v) => set('messageContent', v)}
-            className={`${inputCls} min-h-[96px] ${bad('messageContent')}`}
-            placeholder="Hi {{contact.name}}, thanks for your message!"
-          />
-        </Field>
+        <>
+          <Field
+            label={media ? 'Caption' : 'Message'}
+            name="messageContent"
+            required={!media}
+            hint={
+              media?.kind === 'audio'
+                ? 'WhatsApp doesn’t show captions on audio, so this text is sent as a separate message after it.'
+                : media
+                  ? 'Optional. Shown under the file. Use Insert variable to personalise it.'
+                  : 'Use Insert variable to personalise it, e.g. with the contact’s name.'
+            }
+          >
+            <VariableInput
+              multiline
+              value={String(local.messageContent ?? '')}
+              onChange={(v) => set('messageContent', v)}
+              className={`${inputCls} min-h-[96px] ${bad('messageContent')}`}
+              placeholder="Hi {{contact.name}}, thanks for your message!"
+            />
+          </Field>
+          <Field label="Attachment" hint="Optional. Sent with every run of this step.">
+            <MessageMediaField
+              value={local.media}
+              onChange={(m) => {
+                set('media', m);
+                // Adding a file makes an empty message valid, so its "enter a message" error no longer applies
+                if (m) set('messageContent', local.messageContent ?? '');
+              }}
+            />
+          </Field>
+        </>
       );
+    }
 
     case 'action_send_template':
       return <TemplateFields local={local} set={set} inputCls={inputCls} Field={Field} />;

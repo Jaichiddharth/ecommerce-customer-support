@@ -1,4 +1,5 @@
 import { normalizeKeywords } from "./keywords";
+import { automationMediaOf } from "./media";
 import {
   CONTACT_UPDATE_FIELDS,
   NO_VALUE_OPERATORS,
@@ -120,8 +121,10 @@ export function nodeConfigFieldIssues(type: string, d: Record<string, unknown>, 
     }
 
     case "action_send_message":
-      if (!text(d, "messageContent")) push("messageContent", "Enter the message to send.");
-      else checkVariables("messageContent");
+      // With an attachment the text is its caption, so it may be left empty
+      if (!text(d, "messageContent")) {
+        if (!automationMediaOf(d)) push("messageContent", "Enter the message to send or attach a file.");
+      } else checkVariables("messageContent");
       break;
 
     case "action_send_template": {
