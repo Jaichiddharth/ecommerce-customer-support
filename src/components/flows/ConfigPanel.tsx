@@ -1,21 +1,37 @@
 'use client';
 
 import React, { createContext, useContext, useMemo, useState } from 'react';
-import { AlertTriangle, Check, Info, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, Info, Loader2, Trash2, X } from 'lucide-react';
 import type { AutomationNodeData } from './flow-types';
 import { SendWhatsAppFlowFields } from './whatsapp/AutomationFlowFields';
 import { nodeConfigFieldIssues } from '@/lib/automation/validate';
+import {
+  BASE_ATTRIBUTES, CONTACT_UPDATE_FIELDS, CONTACT_VARIABLES, MESSAGE_VARIABLES, NO_VALUE_OPERATORS, OPERATOR_LABELS,
+  attributeDef, flowAttribute, type FlowField, type FlowScope,
+} from '@/lib/automation/variables';
 import { getPaletteItem, themeOf } from './palette-config';
 import { NodeTypeIcon } from './node-icons';
-import {
-  ASSIGNEE_OPTIONS, ATTRIBUTE_OPTIONS, CONTACT_FIELD_OPTIONS, EVENT_OPTIONS, OPERATOR_OPTIONS, type Option,
-} from './node-options';
+import { ASSIGNEE_OPTIONS, EVENT_OPTIONS, type Option } from './node-options';
+import { usePublishedFlows } from './use-published-flows';
+import { VariableInput, VariablesContext, type VariableGroup } from './VariableInput';
+import { TemplateFields } from './TemplateFields';
+
+/** Where the selected step sits relative to Flow sends and waits (from validate.flowsInScope). */
+export interface StepFlowContext {
+  /** A Wait for Flow Submission step runs before this one, so Flow answers are available */
+  available: boolean;
+  /** Flows whose answers are available */
+  flowIds: number[];
+  /** For a Wait step: the Flows it waits for */
+  waitsFor: number[];
+}
 
 interface ConfigPanelProps {
   nodeId: string;
   data: AutomationNodeData;
   /** Issues flagged on this step's card (connections, loops… as well as missing settings). */
   issues?: string[];
+  flowContext: StepFlowContext;
   onUpdate: (id: string, data: Partial<AutomationNodeData>) => void;
   onClose: () => void;
   onDelete: (id: string) => void;
@@ -70,11 +86,43 @@ function toLocal(data: AutomationNodeData): Record<string, unknown> {
 }
 
 /** Properties panel for the selected step: edits are kept locally until Apply. */
-export function ConfigPanel({ nodeId, data, issues = [], onUpdate, onClose, onDelete }: ConfigPanelProps) {
+export function ConfigPanel({ nodeId, data, issues = [], flowContext, onUpdate, onClose, onDelete }: ConfigPanelProps) {
   const [local, setLocal] = useState<Record<string, unknown>>(() => toLocal(data));
+  const { flows } = usePublishedFlows();
+
+  // Flow questions this step can use (null while loading or when a Flow isn't published)
+  const flowScope = useMemo<FlowScope>(() => {
+    if (!flowContext.available || !flows) return { available: flowContext.available, fields: null };
+    const seen = new Set<string>();
+    const fields: FlowField[] = [];
+    for (const id of flowContext.flowIds) {
+      const f = flows.find((x) => x.id === id);
+      if (!f?.publishedVersion) return { available: true, fields: null };
+      for (const q of f.publishedVersion.fields) {
+        if (!seen.has(q.name)) {
+          seen.add(q.name);
+          fields.push(q);
+        }
+      }
+    }
+    return { available: true, fields };
+  }, [flowContext, flows]);
+
+  const variableGroups = useMemo<VariableGroup[]>(() => [
+    { title: 'Contact', items: CONTACT_VARIABLES },
+    { title: 'Message', items: MESSAGE_VARIABLES },
+    {
+      title: 'Flow answers',
+      items: (flowScope.fields ?? []).map((f) => ({ path: `flow.${f.name}`, label: f.label })),
+      emptyHint: flowScope.available
+        ? 'Loading the Flow’s questions…'
+        : 'Add Send WhatsApp Flow → Wait for Flow Submission before this step to use the customer’s answers.',
+    },
+  ], [flowScope]);
+
   // Once the user has tried to save the automation, show the step's missing settings right away
   const [errors, setErrors] = useState<Record<string, string>>(() =>
-    issues.length ? errorMap(nodeConfigFieldIssues(data.type, toLocal(data))) : {},
+    issues.length ? errorMap(nodeConfigFieldIssues(data.type, toLocal(data), flowScope)) : {},
   );
   const [touched, setTouched] = useState(false);
 
@@ -93,13 +141,13 @@ export function ConfigPanel({ nodeId, data, issues = [], onUpdate, onClose, onDe
 
   // Canvas-level problems (not about a single field), e.g. "Connect this trigger to the first step."
   const fieldMessages = useMemo(
-    () => new Set(nodeConfigFieldIssues(data.type, toLocal(data)).map((i) => i.message)),
-    [data],
+    () => new Set(nodeConfigFieldIssues(data.type, toLocal(data), flowScope).map((i) => i.message)),
+    [data, flowScope],
   );
   const graphIssues = issues.filter((m) => !fieldMessages.has(m));
 
   const apply = () => {
-    const problems = nodeConfigFieldIssues(data.type, local);
+    const problems = nodeConfigFieldIssues(data.type, local, flowScope);
     if (problems.length) {
       setErrors(errorMap(problems));
       return;
@@ -167,6 +215,7 @@ export function ConfigPanel({ nodeId, data, issues = [], onUpdate, onClose, onDe
           </div>
         )}
 
+        <VariablesContext.Provider value={variableGroups}>
         <FieldErrorsContext.Provider value={errors}>
           <Section title="General">
             <Field label="Label" hint="Shown on the canvas so others can tell steps apart.">
@@ -181,7 +230,7 @@ export function ConfigPanel({ nodeId, data, issues = [], onUpdate, onClose, onDe
           </Section>
 
           <Section title="Settings">
-            <TypeFields type={data.type} local={local} set={set} />
+            <TypeFields type={data.type} local={local} set={set} flowScope={flowScope} waitsFor={flowContext.waitsFor} />
           </Section>
 
           {data.type === 'condition_if_else' && (
@@ -199,6 +248,7 @@ export function ConfigPanel({ nodeId, data, issues = [], onUpdate, onClose, onDe
             </Section>
           )}
         </FieldErrorsContext.Provider>
+        </VariablesContext.Provider>
       </div>
 
       {/* Footer */}
@@ -268,10 +318,14 @@ function TypeFields({
   type,
   local,
   set,
+  flowScope,
+  waitsFor,
 }: {
   type: string;
   local: Record<string, unknown>;
   set: (k: string, v: unknown) => void;
+  flowScope: FlowScope;
+  waitsFor: number[];
 }) {
   const errors = useContext(FieldErrorsContext);
   const bad = (k: string) => (errors[k] ? invalidCls : '');
@@ -296,26 +350,7 @@ function TypeFields({
 
     case 'condition_if_else':
     case 'condition_contact_attribute':
-      return (
-        <>
-          <Field label="Attribute" name="attribute" required hint="What to check about the message or contact.">
-            <Select value={local.attribute} onChange={(v) => set('attribute', v)} options={ATTRIBUTE_OPTIONS} placeholder="Select an attribute…" invalid={!!errors.attribute} />
-          </Field>
-          <Field label="Operator" name="operator" required>
-            <Select value={local.operator} onChange={(v) => set('operator', v)} options={OPERATOR_OPTIONS} placeholder="Select an operator…" invalid={!!errors.operator} />
-          </Field>
-          {local.operator !== 'is_empty' && (
-            <Field label="Value" name="value" required>
-              <input
-                value={String(local.value ?? '')}
-                onChange={(e) => set('value', e.target.value)}
-                className={`${inputCls} ${bad('value')}`}
-                placeholder="Enter a value…"
-              />
-            </Field>
-          )}
-        </>
-      );
+      return <ConditionFields local={local} set={set} flowScope={flowScope} />;
 
     case 'condition_keyword_match':
       return (
@@ -326,28 +361,19 @@ function TypeFields({
 
     case 'action_send_message':
       return (
-        <Field label="Message" name="messageContent" required>
-          <textarea
+        <Field label="Message" name="messageContent" required hint="Use Insert variable to personalise it, e.g. with the contact’s name.">
+          <VariableInput
+            multiline
             value={String(local.messageContent ?? '')}
-            onChange={(e) => set('messageContent', e.target.value)}
-            className={`${inputCls} resize-y min-h-[96px] ${bad('messageContent')}`}
-            rows={4}
-            placeholder="Type the reply to send…"
+            onChange={(v) => set('messageContent', v)}
+            className={`${inputCls} min-h-[96px] ${bad('messageContent')}`}
+            placeholder="Hi {{contact.name}}, thanks for your message!"
           />
         </Field>
       );
 
     case 'action_send_template':
-      return (
-        <Field label="Template ID" name="templateId" required hint="The name of an approved WhatsApp template.">
-          <input
-            value={String(local.templateId ?? '')}
-            onChange={(e) => set('templateId', e.target.value)}
-            className={`${inputCls} ${bad('templateId')}`}
-            placeholder="e.g. welcome_message_v1"
-          />
-        </Field>
-      );
+      return <TemplateFields local={local} set={set} inputCls={inputCls} Field={Field} />;
 
     case 'action_assign_conversation':
       return (
@@ -356,25 +382,33 @@ function TypeFields({
         </Field>
       );
 
-    case 'action_update_contact':
+    case 'action_update_contact': {
+      const field = CONTACT_UPDATE_FIELDS.find((f) => f.value === local.updateField);
+      const options: Option[] = [...CONTACT_UPDATE_FIELDS];
+      if (local.updateField && !field) options.push({ value: String(local.updateField), label: `${String(local.updateField)} (can’t be saved)` });
+      const isTag = field?.value === 'tag' || field?.value === 'remove_tag';
       return (
         <>
-          <Field label="Contact field" name="updateField" required>
-            <Select value={local.updateField} onChange={(v) => set('updateField', v)} options={CONTACT_FIELD_OPTIONS} placeholder="Select a field…" invalid={!!errors.updateField} />
+          <Field label="Update" name="updateField" required>
+            <Select value={local.updateField} onChange={(v) => set('updateField', v)} options={options} placeholder="Choose what to update…" invalid={!!errors.updateField} />
           </Field>
-          <Field label="New value" name="updateValue" required>
-            <input
+          <Field label={isTag ? 'Tag' : 'New value'} name="updateValue" required hint={field?.hint}>
+            <VariableInput
               value={String(local.updateValue ?? '')}
-              onChange={(e) => set('updateValue', e.target.value)}
+              onChange={(v) => set('updateValue', v)}
               className={`${inputCls} ${bad('updateValue')}`}
-              placeholder="New value…"
+              placeholder={field?.placeholder ?? 'New value…'}
             />
           </Field>
         </>
       );
+    }
 
     case 'action_send_whatsapp_flow':
       return <SendWhatsAppFlowFields local={local} set={set} inputCls={inputCls} Field={Field} />;
+
+    case 'flow_wait_flow_submission':
+      return <WaitFields waitsFor={waitsFor} />;
 
     case 'flow_end':
       return <Note>Stops the automation on this path. Nothing to set up.</Note>;
@@ -382,6 +416,147 @@ function TypeFields({
     default:
       return <Note>No additional configuration is needed for this step.</Note>;
   }
+}
+
+/** Attribute → condition → value, offering only the combinations that work for the chosen attribute. */
+function ConditionFields({
+  local,
+  set,
+  flowScope,
+}: {
+  local: Record<string, unknown>;
+  set: (k: string, v: unknown) => void;
+  flowScope: FlowScope;
+}) {
+  const errors = useContext(FieldErrorsContext);
+  const attribute = String(local.attribute ?? '');
+  const operator = String(local.operator ?? '');
+  const flowAttrs = (flowScope.fields ?? []).map(flowAttribute);
+  const def = attributeDef(attribute, flowScope.fields);
+  const isFlow = attribute.startsWith('flow.');
+  const flowLoading = isFlow && flowScope.available && !flowScope.fields;
+  const legacy = !!attribute && !def && !flowLoading;
+
+  const chooseAttribute = (value: string) => {
+    const next = attributeDef(value, flowScope.fields);
+    set('attribute', value);
+    set('attributeLabel', value.startsWith('flow.') ? next?.label : undefined);
+    set('operator', next?.operators[0] ?? '');
+    set('value', '');
+    set('valueLabel', undefined);
+  };
+
+  return (
+    <>
+      <Field label="Check" name="attribute" required>
+        <select value={attribute} onChange={(e) => chooseAttribute(e.target.value)} className={`${inputCls} ${errors.attribute ? invalidCls : ''}`}>
+          <option value="">Choose what to check…</option>
+          <optgroup label="Message & contact">
+            {BASE_ATTRIBUTES.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+          </optgroup>
+          {flowAttrs.length > 0 && (
+            <optgroup label="Flow answers">
+              {flowAttrs.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+            </optgroup>
+          )}
+          {(legacy || flowLoading) && (
+            <option value={attribute}>
+              {String(local.attributeLabel || attribute)}{legacy ? ' (no longer available)' : ''}
+            </option>
+          )}
+        </select>
+        {!flowScope.available && (
+          <p className="text-[11px] text-slate-500 leading-snug">
+            To check the customer’s form answers, put Send WhatsApp Flow → Wait for Flow Submission before this step.
+          </p>
+        )}
+        {flowLoading && (
+          <p className="flex items-center gap-1.5 text-[11px] text-slate-400"><Loader2 className="w-3 h-3 animate-spin" /> Loading the Flow’s questions…</p>
+        )}
+      </Field>
+
+      {def && (
+        <Field label="Condition" name="operator" required>
+          <Select
+            value={operator}
+            onChange={(v) => {
+              set('operator', v);
+              if (NO_VALUE_OPERATORS.has(v)) {
+                set('value', '');
+                set('valueLabel', undefined);
+              }
+            }}
+            options={def.operators.map((o) => ({ value: o, label: OPERATOR_LABELS[o] }))}
+            placeholder="Choose a condition…"
+            invalid={!!errors.operator}
+          />
+        </Field>
+      )}
+
+      {def && operator && !NO_VALUE_OPERATORS.has(operator) && (
+        <Field label="Value" name="value" required hint={def.valueOptions ? undefined : def.hint}>
+          {def.valueOptions ? (
+            <Select
+              value={local.value}
+              onChange={(v) => {
+                set('value', v);
+                set('valueLabel', def.valueOptions!.find((o) => o.value === v)?.label);
+              }}
+              options={def.valueOptions}
+              placeholder="Choose an answer…"
+              invalid={!!errors.value}
+            />
+          ) : (
+            <input
+              value={String(local.value ?? '')}
+              onChange={(e) => set('value', e.target.value)}
+              className={`${inputCls} ${errors.value ? invalidCls : ''}`}
+              placeholder={def.placeholder ?? 'Enter a value…'}
+            />
+          )}
+        </Field>
+      )}
+    </>
+  );
+}
+
+/** Wait for Flow Submission: nothing to set, so explain what it waits for and what it unlocks. */
+function WaitFields({ waitsFor }: { waitsFor: number[] }) {
+  const { flows } = usePublishedFlows();
+  const waited = waitsFor.map((id) => flows?.find((f) => f.id === id)).filter((f): f is NonNullable<typeof f> => !!f);
+
+  if (!waitsFor.length) {
+    return <Note>Place this step after a Send WhatsApp Flow step. It then waits for the customer to submit that Flow.</Note>;
+  }
+  return (
+    <>
+      <Note>
+        Pauses the automation until the customer submits the Flow, for as long as the response window set on the Send WhatsApp Flow
+        step. If they don’t submit in time, the automation stops (shown as Timed out in its runs). Other messages from the customer
+        don’t affect the wait.
+      </Note>
+      {waited.map((f) => (
+        <div key={f.id} className="space-y-1.5">
+          <p className="text-[11.5px] font-medium text-slate-700">Answers from “{f.name}” you can use next</p>
+          {(f.publishedVersion?.fields ?? []).length === 0 ? (
+            <p className="text-[11px] text-slate-500">This Flow has no questions.</p>
+          ) : (
+            <ul className="rounded-lg border border-slate-200 divide-y divide-slate-100">
+              {f.publishedVersion!.fields.map((q) => (
+                <li key={q.name} className="px-3 py-1.5 flex items-center justify-between gap-3">
+                  <span className="text-[12px] text-slate-700 truncate">{q.label}</span>
+                  <code className="text-[10.5px] text-slate-500 bg-slate-50 px-1 rounded shrink-0">{`{{flow.${q.name}}}`}</code>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+      <p className="text-[11px] text-slate-500 leading-snug">
+        Use them in later messages with Insert variable, or check them in If / Else under “Flow answers”.
+      </p>
+    </>
+  );
 }
 
 function Note({ children }: { children: React.ReactNode }) {
