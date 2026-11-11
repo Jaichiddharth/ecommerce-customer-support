@@ -69,6 +69,8 @@ export const ERROR_DEFINITIONS = {
   FILE_TYPE_UNSUPPORTED: { status: 415, source: "upload", message: "This file type isn't supported by WhatsApp." },
   FILE_UPLOAD_FAILED: { status: 502, source: "upload", message: "The file could not be uploaded to WhatsApp. Please try again.", retryable: true },
   MEDIA_NOT_FOUND: { status: 404, source: "upload", message: "This media file is no longer available." },
+  MEDIA_STORAGE_NOT_CONFIGURED: { status: 500, source: "upload", message: "File storage is not configured on the server." },
+  MEDIA_STORAGE_FAILED: { status: 502, source: "upload", message: "The file could not be saved or read from storage. Please try again.", retryable: true },
 
   // Webhooks
   WEBHOOK_VERIFICATION_FAILED: { status: 403, source: "webhook", message: "Webhook verification failed." },

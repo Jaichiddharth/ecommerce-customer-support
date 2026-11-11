@@ -1,5 +1,6 @@
 import type { AutomationNodeData } from './flow-types';
 import { BASE_ATTRIBUTES, CONTACT_UPDATE_FIELDS, NO_VALUE_OPERATORS, OPERATOR_LABELS, type OperatorId } from '@/lib/automation/variables';
+import { automationMediaOf } from '@/lib/automation/media';
 
 export interface Option {
   value: string;
@@ -61,8 +62,12 @@ export function nodeSummary(data: AutomationNodeData): string {
       const k = keywordList(d.keywords);
       return k.length ? `Message contains ${quoteList(k)}` : '';
     }
-    case 'action_send_message':
-      return d.messageContent ? `“${String(d.messageContent).trim()}”` : '';
+    case 'action_send_message': {
+      const text = String(d.messageContent ?? '').trim();
+      const media = automationMediaOf(d as Record<string, unknown>);
+      if (media) return text ? `📎 ${media.filename} · “${text}”` : `📎 ${media.filename}`;
+      return text ? `“${text}”` : '';
+    }
     case 'action_send_template':
       return d.templateName ? `Template: ${d.templateName}` : d.templateId ? `Template: ${d.templateId}` : '';
     case 'action_assign_conversation':

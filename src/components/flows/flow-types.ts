@@ -1,3 +1,5 @@
+import type { AutomationMedia } from '@/lib/automation/media';
+
 // ─── Node palette type definitions ──────────────────────────────────────────
 
 export type NodeCategory = 'triggers' | 'conditions' | 'actions' | 'flow-controls';
@@ -52,6 +54,8 @@ export interface ConditionNodeData extends BaseNodeData {
 export interface ActionNodeData extends BaseNodeData {
   actionType?: 'send_message' | 'send_template' | 'assign_conversation' | 'update_contact';
   messageContent?: string;
+  /** Send Message attachment stored in S3 (see lib/automation/media.ts) */
+  media?: AutomationMedia | null;
   templateId?: string;
   assignTo?: string;
   updateField?: string;
