@@ -4,8 +4,10 @@ import { userRepository, organizationRepository, invitationRepository, shopifyRe
 import { invitationService } from "@/lib/services/invitation.service";
 import { AppError } from "@/lib/errors";
 import { readJson } from "@/lib/api/handler";
+import { calculateWorkspaceTrial } from "@/lib/trial";
 
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
+  assertRole(req.user.role, ["OWNER", "ADMIN"]);
   assertPagePermission(req.user, 'settings', 'read');
   const orgId = req.user.organizationId;
   const org = await organizationRepository.findById(orgId);
@@ -78,6 +80,7 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
       available: Math.max(0, maxSeats - members.length),
       plan: plan.charAt(0).toUpperCase() + plan.slice(1),
     },
+    trial: calculateWorkspaceTrial(org),
     permissions: mergedPermissions,
     currentRole: req.user.role,
   });

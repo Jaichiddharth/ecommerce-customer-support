@@ -4,6 +4,7 @@ import { emailService } from "./email.service";
 import { AppError } from "../errors";
 import { adminAuth } from "../firebase/admin";
 import { createLogger } from "../logger";
+import { calculateWorkspaceTrial, type WorkspaceTrial } from "../trial";
 
 const log = createLogger("invitation.service");
 
@@ -239,6 +240,7 @@ export class InvitationService {
       inviterEmail: string | null;
       expiresAt: Date;
       accountExists: boolean;
+      trial?: WorkspaceTrial | null;
     };
   }> {
     if (!token || typeof token !== "string") {
@@ -272,12 +274,15 @@ export class InvitationService {
       accountExists = false;
     }
 
+    const org = await organizationRepository.findById(invite.organizationId);
+    const trial = calculateWorkspaceTrial(org);
+
     return {
       valid: true,
       invitation: {
         id: invite.id,
         organizationId: invite.organizationId,
-        organizationName: invite.organizationName || "UnoCX Workspace",
+        organizationName: org?.name || invite.organizationName || "UnoCX Workspace",
         email: invite.email,
         name: invite.name,
         role: invite.role,
@@ -289,6 +294,7 @@ export class InvitationService {
         inviterEmail: invite.inviterEmail ?? null,
         expiresAt: invite.expiresAt,
         accountExists,
+        trial,
       },
     };
   }

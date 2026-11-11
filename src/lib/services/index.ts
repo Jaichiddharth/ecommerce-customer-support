@@ -5,4 +5,5 @@ export * from "./channels";
 export * from "./customer.service";
 export * from "./conversation.service";
 export * from "./shopify.service";
+export * from "./shopify-store-connection.service";
 export * from "./consent.service";

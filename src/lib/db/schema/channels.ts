@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, varchar, text, boolean, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, varchar, text, boolean, timestamp, index, unique, uniqueIndex } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { organizations } from "./organizations";
 import { customers } from "./customers";
@@ -42,6 +42,8 @@ export const channels = pgTable(
     index("idx_channels_meta_phone_id").on(table.metaPhoneNumberId),
     index("idx_channels_phone_number").on(table.phoneNumber),
     index("idx_channels_external_account").on(table.externalAccountId),
+    // Target of composite (organization_id, channel_id) foreign keys, so rows that map a channel can't cross workspaces
+    unique("uq_channels_org_id").on(table.organizationId, table.id),
     // A number is live in at most one workspace at a time; disconnected rows from earlier owners may remain
     uniqueIndex("uq_channels_live_meta_phone_id")
       .on(table.metaPhoneNumberId)

@@ -108,6 +108,8 @@ export interface AuthUser {
   customPermissions?: Record<string, any> | null;
   teams?: string[] | null;
   languages?: string[] | null;
+  /** Shop domains the member may work with; empty or "All" = every store (see security/store-access) */
+  stores?: string[] | null;
   status?: string | null;
   avatarUrl?: string | null;
   isOnline?: boolean | null;
@@ -199,6 +201,7 @@ export async function authenticate(req: NextRequest): Promise<AuthContext> {
     customPermissions: (dbUser.customPermissions as Record<string, any>) || null,
     teams: dbUser.teams ?? [],
     languages: dbUser.languages ?? ["EN"],
+    stores: dbUser.stores ?? [],
     status: dbUser.status ?? "active",
     avatarUrl: dbUser.avatarUrl || (decodedToken.picture as string | undefined) || null,
     isOnline: dbUser.isOnline ?? true,
