@@ -73,35 +73,257 @@ export const WORKSPACE_PAGES: PageDefinition[] = [
   { key: 'settings', label: 'Settings', icon: Settings, description: 'Workspace settings, team management, billing & security', category: 'Setup' },
 ];
 
+export interface PermissionAreaConfig {
+  key: string;
+  label: string;
+  subtext: (role: string) => string;
+  adminOnly?: boolean;
+}
+
+export const PERMISSION_AREAS: PermissionAreaConfig[] = [
+  {
+    key: 'inbox',
+    label: 'Conversations',
+    subtext: () => 'Assigned and own-team chats',
+  },
+  {
+    key: 'contacts',
+    label: 'Contacts',
+    subtext: () => 'Profiles, tags, notes',
+  },
+  {
+    key: 'broadcasts',
+    label: 'Campaigns',
+    subtext: () => 'Broadcasts and segments',
+  },
+  {
+    key: 'templates',
+    label: 'Templates',
+    subtext: () => 'WhatsApp message templates',
+  },
+  {
+    key: 'flows',
+    label: 'Flows',
+    subtext: () => 'Flow builder and automations',
+  },
+  {
+    key: 'ai',
+    label: 'AI agent',
+    subtext: () => 'Take over and hand back chats',
+  },
+  {
+    key: 'integrations',
+    label: 'Catalog and payments',
+    subtext: () => 'Send products and payment requests',
+  },
+  {
+    key: 'analytics',
+    label: 'Analytics',
+    subtext: () => 'Own and team reports',
+  },
+  {
+    key: 'team',
+    label: 'Team and roles',
+    adminOnly: true,
+    subtext: (role: string) => {
+      const r = (role || '').toUpperCase();
+      return r === 'ADMIN' || r === 'OWNER'
+        ? 'Invite, edit and manage team members and roles'
+        : `Not available to the ${role.charAt(0) + role.slice(1).toLowerCase()} role`;
+    },
+  },
+  {
+    key: 'settings',
+    label: 'Channels and settings',
+    adminOnly: true,
+    subtext: (role: string) => {
+      const r = (role || '').toUpperCase();
+      return r === 'ADMIN' || r === 'OWNER'
+        ? 'Workspace channels, routing & configuration'
+        : `Not available to the ${role.charAt(0) + role.slice(1).toLowerCase()} role`;
+    },
+  },
+  {
+    key: 'billing',
+    label: 'Billing',
+    adminOnly: true,
+    subtext: (role: string) => {
+      const r = (role || '').toUpperCase();
+      return r === 'ADMIN' || r === 'OWNER'
+        ? 'Plan, invoices and payment methods'
+        : `Not available to the ${role.charAt(0) + role.slice(1).toLowerCase()} role`;
+    },
+  },
+];
+
 export function getDefaultPagePermissions(role: string): Record<string, PageCrudPermissions> {
   const norm = (role || 'AGENT').toUpperCase();
   const result: Record<string, PageCrudPermissions> = {};
 
-  WORKSPACE_PAGES.forEach((page) => {
+  const allKeys = [
+    'home',
+    'inbox',
+    'contacts',
+    'broadcasts',
+    'templates',
+    'flows',
+    'ai',
+    'integrations',
+    'analytics',
+    'team',
+    'settings',
+    'billing',
+  ];
+
+  allKeys.forEach((key) => {
     if (norm === 'OWNER') {
-      result[page.key] = { create: true, read: true, update: true, delete: true };
+      result[key] = { create: true, read: true, update: true, delete: true };
     } else if (norm === 'ADMIN') {
-      result[page.key] = { create: true, read: true, update: true, delete: page.key !== 'settings' };
-    } else if (norm === 'AGENT') {
-      if (['inbox', 'contacts'].includes(page.key)) {
-        result[page.key] = { create: true, read: true, update: true, delete: false };
-      } else if (['home', 'ai', 'flows', 'broadcasts', 'templates', 'analytics'].includes(page.key)) {
-        result[page.key] = { create: false, read: true, update: false, delete: false };
+      if (key === 'settings') {
+        result[key] = { create: true, read: true, update: true, delete: false };
+      } else if (key === 'billing') {
+        result[key] = { create: false, read: true, update: false, delete: false };
       } else {
-        result[page.key] = { create: false, read: false, update: false, delete: false };
+        result[key] = { create: true, read: true, update: true, delete: true };
+      }
+    } else if (norm === 'AGENT') {
+      if (['inbox', 'contacts'].includes(key)) {
+        result[key] = { create: true, read: true, update: true, delete: false };
+      } else if (['home', 'ai', 'broadcasts', 'templates', 'analytics', 'integrations'].includes(key)) {
+        result[key] = { create: false, read: true, update: false, delete: false };
+      } else {
+        result[key] = { create: false, read: false, update: false, delete: false };
       }
     } else {
       // VIEWER
-      if (['integrations', 'settings'].includes(page.key)) {
-        result[page.key] = { create: false, read: false, update: false, delete: false };
+      if (['inbox', 'contacts', 'home', 'ai', 'broadcasts', 'templates', 'analytics'].includes(key)) {
+        result[key] = { create: false, read: true, update: false, delete: false };
       } else {
-        result[page.key] = { create: false, read: true, update: false, delete: false };
+        result[key] = { create: false, read: false, update: false, delete: false };
       }
     }
   });
 
   return result;
 }
+
+export function getRoleDefaultLabel(role: string, areaKey: string): string {
+  const norm = (role || 'AGENT').toUpperCase();
+  const area = PERMISSION_AREAS.find((a) => a.key === areaKey);
+  if (area && 'adminOnly' in area && area.adminOnly && norm !== 'OWNER' && norm !== 'ADMIN') {
+    return 'Admin or Owner only';
+  }
+  const def = getDefaultPagePermissions(norm)[areaKey];
+  if (!def || (!def.read && !def.create && !def.update && !def.delete)) {
+    return 'No access';
+  }
+  if (def.read && def.create && def.update && def.delete) {
+    return 'Full access';
+  }
+  if (def.read && def.create && def.update && !def.delete) {
+    return 'View, create, edit';
+  }
+  if (def.read && !def.create && !def.update && !def.delete) {
+    return 'View only';
+  }
+  const parts: string[] = [];
+  if (def.read) parts.push('view');
+  if (def.create) parts.push('create');
+  if (def.update) parts.push('edit');
+  if (def.delete) parts.push('delete');
+  return parts.join(', ');
+}
+
+export interface PermissionDiff {
+  totalChanges: number;
+  summaryText: string;
+}
+
+export function calculatePermissionDiff(
+  current: Record<string, PageCrudPermissions>,
+  role: string
+): PermissionDiff {
+  const defaults = getDefaultPagePermissions(role);
+  let totalChanges = 0;
+  const footerPhrases: string[] = [];
+
+  PERMISSION_AREAS.forEach((area) => {
+    const cur = current[area.key] || { create: false, read: false, update: false, delete: false };
+    const def = defaults[area.key] || { create: false, read: false, update: false, delete: false };
+
+    if (cur.read !== def.read) totalChanges++;
+    if (cur.create !== def.create) totalChanges++;
+    if (cur.update !== def.update) totalChanges++;
+    if (cur.delete !== def.delete) totalChanges++;
+
+    const changedActions: string[] = [];
+    if (cur.create !== def.create) changedActions.push(cur.create ? 'create' : 'no create');
+    if (cur.update !== def.update) changedActions.push(cur.update ? 'edit' : 'no edit');
+    if (cur.delete !== def.delete) changedActions.push(cur.delete ? 'delete' : 'no delete');
+    if (cur.read !== def.read) changedActions.push(cur.read ? 'view' : 'no view');
+
+    if (changedActions.length > 0) {
+      footerPhrases.push(`${area.label} ${changedActions.join(' and ')}`);
+    }
+  });
+
+  return {
+    totalChanges,
+    summaryText: footerPhrases.join(', ') || 'No overrides',
+  };
+}
+
+export function formatJoinedDate(dateStr?: string): string {
+  if (!dateStr) return 'Joined recently';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return 'Joined recently';
+    const day = d.getDate();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `Joined ${day} ${months[d.getMonth()]} ${d.getFullYear()}`;
+  } catch {
+    return 'Joined recently';
+  }
+}
+
+export interface RoleCardConfig {
+  role: 'OWNER' | 'ADMIN' | 'AGENT' | 'VIEWER';
+  label: string;
+  description: string;
+  allowedPills: string[];
+  deniedPills: string[];
+}
+
+export const ROLES_CONFIG: RoleCardConfig[] = [
+  {
+    role: 'OWNER',
+    label: 'Owner',
+    description: 'Everything, including billing and deleting the workspace.',
+    allowedPills: ['Full workspace control', 'Manage billing & subscription', 'Delete workspace', 'Manage all roles & permissions'],
+    deniedPills: [],
+  },
+  {
+    role: 'ADMIN',
+    label: 'Admin',
+    description: 'Runs the workspace: channels, flows, AI agent, team. Billing is view-only.',
+    allowedPills: ['Manage channels & routing', 'Create & edit flows', 'Invite & manage team', 'Configure AI agent', 'Broadcast campaigns', 'Manage contacts'],
+    deniedPills: ['View billing only', 'Cannot delete workspace'],
+  },
+  {
+    role: 'AGENT',
+    label: 'Agent',
+    description: 'Answers customers in their teams and languages. Sees campaigns and reports.',
+    allowedPills: ['Reply in assigned and team chats', 'Edit contacts', 'Take over from AI', 'View campaigns'],
+    deniedPills: ['No flows', 'No settings', 'No billing'],
+  },
+  {
+    role: 'VIEWER',
+    label: 'Viewer',
+    description: 'Read-only access to conversations, contacts and reports.',
+    allowedPills: ['View conversations', 'View contacts', 'View reports & analytics', 'View campaigns'],
+    deniedPills: ['No flows', 'No settings', 'No billing'],
+  },
+];
 
 export function getMemberPagePermissions(member: TeamMember): Record<string, PageCrudPermissions> {
   const defaults = getDefaultPagePermissions(member.role);
@@ -110,13 +332,13 @@ export function getMemberPagePermissions(member: TeamMember): Record<string, Pag
     return defaults;
   }
   const merged: Record<string, PageCrudPermissions> = { ...defaults };
-  WORKSPACE_PAGES.forEach((page) => {
-    if (stored[page.key]) {
-      merged[page.key] = {
-        create: Boolean(stored[page.key].create),
-        read: Boolean(stored[page.key].read),
-        update: Boolean(stored[page.key].update),
-        delete: Boolean(stored[page.key].delete),
+  [...WORKSPACE_PAGES.map((p) => p.key), ...PERMISSION_AREAS.map((a) => a.key)].forEach((key) => {
+    if (stored[key]) {
+      merged[key] = {
+        create: Boolean(stored[key].create),
+        read: Boolean(stored[key].read),
+        update: Boolean(stored[key].update),
+        delete: Boolean(stored[key].delete),
       };
     }
   });
@@ -241,30 +463,21 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
   const isTargetAdmin = roleUpper === 'ADMIN';
 
   const actorRole = (dbUser?.role || 'AGENT').toUpperCase();
+  const isActorOwner = actorRole === 'OWNER';
   const isActorAdmin = actorRole === 'ADMIN';
   const isSelf = Boolean(
     dbUser && (member.id === dbUser.id || (member.email && dbUser.email && member.email.toLowerCase() === dbUser.email.toLowerCase()))
   );
 
-  // Locking rules:
-  // 1. Workspace Owner permissions are permanent and cannot be modified (Owner always has full unrestricted CRUD).
-  // 2. When logged in as Admin:
-  //    - An Admin cannot modify their own permissions (self-editing locked).
-  //    - An Admin cannot modify any Admin or Owner's permissions (only Owner can modify Admin permissions).
-  const isPermissionsLocked = isTargetOwner || (isActorAdmin && (isSelf || isTargetAdmin));
-  const canEdit = canManage && !isPermissionsLocked;
+  const isTargetAgentOrViewer = roleUpper === 'AGENT' || roleUpper === 'VIEWER';
 
-  // Ensure Workspace Owner always displays 100% full granted access across all pages
-  const effectivePermissions = useMemo(() => {
-    if (isTargetOwner) {
-      const full: Record<string, PageCrudPermissions> = {};
-      WORKSPACE_PAGES.forEach((p) => {
-        full[p.key] = { create: true, read: true, update: true, delete: true };
-      });
-      return full;
-    }
-    return permissions;
-  }, [isTargetOwner, permissions]);
+  // Permission edit rules:
+  // - Owner can edit CRUD permissions for all members
+  // - Admin can edit custom CRUD permissions for Agent and Viewer roles
+  const canEdit = isActorOwner || (isActorAdmin && isTargetAgentOrViewer);
+  const isPermissionsLocked = !canEdit;
+
+  const effectivePermissions = permissions;
 
   const toggleCell = (pageKey: string, action: keyof PageCrudPermissions) => {
     if (!canEdit || isSaving) return;
@@ -367,7 +580,7 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
           </div>
           <p className="text-[11px] text-slate-500 mt-0.5">
             {isPermissionsLocked
-              ? 'Page Create, Read, Update, and Delete permissions are locked in read-only mode for this role.'
+              ? 'Page permissions are in read-only mode. Only Workspace Owners can edit member roles and CRUD permissions.'
               : 'Configure individual Create, Read, Update, and Delete permissions across all pages for this user.'}
           </p>
         </div>
@@ -415,41 +628,20 @@ export const PagePermissionsMatrix: React.FC<PagePermissionsMatrixProps> = ({
         )}
       </div>
 
-      {isTargetOwner && (
+      {isPermissionsLocked && (
         <div className="p-2.5 sm:p-3 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-start gap-2.5 text-xs text-amber-900 shadow-2xs">
           <div className="w-6 h-6 rounded-lg bg-amber-100 border border-amber-200 flex items-center justify-center shrink-0 text-amber-700 mt-0.5">
             <Lock className="w-3.5 h-3.5 stroke-[2.5]" />
           </div>
           <div className="min-w-0">
             <p className="font-bold text-amber-950 flex items-center gap-1.5">
-              <span>Workspace Owner · Permissions Locked</span>
+              <span>Page Permissions · Read-Only Mode</span>
               <span className="px-1.5 py-0.5 bg-amber-200/70 text-amber-900 rounded text-[10px] uppercase font-bold tracking-wider">
-                Immutable
-              </span>
-            </p>
-            <p className="text-amber-800/90 mt-0.5 leading-relaxed">
-              Workspace Owners inherently possess unrestricted Create, Read, Update, and Delete access across all workspace pages. These root permissions cannot be modified or revoked.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {!isTargetOwner && isPermissionsLocked && (
-        <div className="p-2.5 sm:p-3 bg-slate-100 border border-slate-200 rounded-xl flex items-start gap-2.5 text-xs text-slate-800 shadow-2xs">
-          <div className="w-6 h-6 rounded-lg bg-slate-200 flex items-center justify-center shrink-0 text-slate-600 mt-0.5">
-            <Lock className="w-3.5 h-3.5 stroke-[2.5]" />
-          </div>
-          <div className="min-w-0">
-            <p className="font-bold text-slate-900 flex items-center gap-1.5">
-              <span>{isSelf ? 'Your Admin Permissions are Locked' : 'Administrator Permissions Locked'}</span>
-              <span className="px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded text-[10px] uppercase font-bold tracking-wider">
                 Locked
               </span>
             </p>
-            <p className="text-slate-600 mt-0.5 leading-relaxed">
-              {isSelf
-                ? 'As an Administrator, you cannot modify your own page permissions. Only the Workspace Owner has authority to alter Administrator permissions.'
-                : 'Administrators cannot modify permissions for other Administrators. Only the Workspace Owner can alter these permissions.'}
+            <p className="text-amber-800/90 mt-0.5 leading-relaxed">
+              Only users logged in as <strong>Workspace Owner</strong> have permission to edit member roles and customize CRUD page permissions.
             </p>
           </div>
         </div>
@@ -762,6 +954,8 @@ export const TeamRolesSection: React.FC = () => {
   const [editLanguages, setEditLanguages] = useState<string[]>([]);
   const [editStores, setEditStores] = useState<string[]>([]);
   const [editStatus, setEditStatus] = useState<string>('active');
+  const [editTab, setEditTab] = useState<'role' | 'permissions'>('role');
+  const [editPermissions, setEditPermissions] = useState<Record<string, PageCrudPermissions>>({});
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
 
   // Upgrading state
@@ -804,10 +998,13 @@ export const TeamRolesSection: React.FC = () => {
   const { hasPermission, dbUser, refreshDbUser, can } = useAuth();
   const canManageBilling = hasPermission('manage_billing_and_integrations');
 
+  const actorRoleUpper = (dbUser?.role || currentRole || '').toUpperCase();
+  const isActorOwner = actorRoleUpper === 'OWNER';
+  const isActorAdmin = actorRoleUpper === 'ADMIN';
+
   const canManage = useMemo(() => {
-    const norm = currentRole.toUpperCase();
-    return norm === 'OWNER' || norm === 'ADMIN';
-  }, [currentRole]);
+    return isActorOwner || isActorAdmin;
+  }, [isActorOwner, isActorAdmin]);
 
   const canCreateMember = canManage && can('settings', 'create');
   const canUpdateMember = canManage && can('settings', 'update');
@@ -1001,10 +1198,12 @@ export const TeamRolesSection: React.FC = () => {
     setEditingMember(member);
     setEditName(member.name);
     setEditRole(member.role);
-    setEditTeams(member.teams || []);
-    setEditLanguages(member.languages || ['EN']);
+    setEditTeams(member.teams && member.teams.length > 0 ? member.teams : ['Support']);
+    setEditLanguages(member.languages && member.languages.length > 0 ? member.languages : ['EN']);
     setEditStores(member.stores || []);
     setEditStatus(member.status || 'active');
+    setEditTab('role');
+    setEditPermissions(getMemberPagePermissions(member));
     setIsEditOpen(true);
   };
 
@@ -1015,6 +1214,12 @@ export const TeamRolesSection: React.FC = () => {
 
     try {
       setIsSubmittingEdit(true);
+      const existingCustom = (editingMember.customPermissions as Record<string, any>) || {};
+      const updatedCustom = {
+        ...existingCustom,
+        pagePermissions: editPermissions,
+      };
+
       const res = await apiClient.patch(`/api/team/${editingMember.id}`, {
         name: editName.trim(),
         role: editRole,
@@ -1022,10 +1227,14 @@ export const TeamRolesSection: React.FC = () => {
         languages: editLanguages,
         stores: editStores,
         status: editStatus,
+        customPermissions: updatedCustom,
       });
 
       if (res.data?.success) {
         gooeyToast.success(`Updated ${editingMember.name}`);
+        if (dbUser && (editingMember.id === dbUser.id || editingMember.email === dbUser.email)) {
+          refreshDbUser();
+        }
         setIsEditOpen(false);
         setEditingMember(null);
         fetchTeamData();
@@ -1036,6 +1245,27 @@ export const TeamRolesSection: React.FC = () => {
       setIsSubmittingEdit(false);
     }
   };
+
+  const editDiff = useMemo(() => {
+    return calculatePermissionDiff(editPermissions, editRole);
+  }, [editPermissions, editRole]);
+
+  const currentRoleConfig = useMemo(() => {
+    return (
+      ROLES_CONFIG.find((rc) => rc.role === editRole.toUpperCase()) ||
+      ROLES_CONFIG[2]
+    );
+  }, [editRole]);
+
+  const firstName = useMemo(() => {
+    return editingMember?.name ? editingMember.name.trim().split(/\s+/)[0] : 'Member';
+  }, [editingMember]);
+
+  const isEditingMemberOwner = editingMember?.role?.toUpperCase() === 'OWNER';
+  const isEditingMemberAdmin = editingMember?.role?.toUpperCase() === 'ADMIN';
+  const isEditingSelf = Boolean(
+    dbUser && editingMember && (editingMember.id === dbUser.id || (editingMember.email && dbUser.email && editingMember.email.toLowerCase() === dbUser.email.toLowerCase()))
+  );
 
   // Handle removing a member
   const handleDeleteMember = async (member: TeamMember) => {
@@ -1152,7 +1382,6 @@ export const TeamRolesSection: React.FC = () => {
     }
   };
 
-  const actorRoleUpper = (dbUser?.role || currentRole || '').toUpperCase();
   const isAgentOrViewer = actorRoleUpper === 'AGENT' || actorRoleUpper === 'VIEWER';
 
   if (isAgentOrViewer) {
@@ -1392,7 +1621,9 @@ export const TeamRolesSection: React.FC = () => {
                       dbUser && (member.id === dbUser.id || (member.email && dbUser.email && member.email.toLowerCase() === dbUser.email.toLowerCase()))
                     );
                     const isActorAdmin = actorRoleUpper === 'ADMIN';
-                    const isMemberPermissionsLocked = isMemberOwner || (isActorAdmin && (isSelf || isMemberAdmin));
+                    const isTargetAgentOrViewer = roleNormalized === 'AGENT' || roleNormalized === 'VIEWER';
+                    const canManageThisMember = isActorOwner || (isActorAdmin && isTargetAgentOrViewer);
+                    const isMemberPermissionsLocked = !canManageThisMember;
 
                     const statusLower = (member.status || '').toLowerCase();
                     const isOnline = member.isOnline || statusLower === 'online' || statusLower === 'active';
@@ -1464,7 +1695,7 @@ export const TeamRolesSection: React.FC = () => {
                               }`}
                               title={
                                 isMemberPermissionsLocked
-                                  ? 'View locked permissions'
+                                  ? 'View read-only permissions (Owner required to edit)'
                                   : 'Click to view & configure page-by-page Create, Read, Update, and Delete permissions'
                               }
                             >
@@ -1474,13 +1705,13 @@ export const TeamRolesSection: React.FC = () => {
                                 <Sliders className="w-3.5 h-3.5" />
                               )}
                               <span>
-                                {isMemberOwner
-                                  ? 'Owner (Locked)'
-                                  : isMemberAdmin && isActorAdmin
-                                    ? 'Admin (Locked)'
-                                    : hasCustom
-                                      ? 'Custom CRUD'
-                                      : 'Permissions'}
+                                {isMemberPermissionsLocked
+                                  ? hasCustom
+                                    ? 'Custom CRUD (View)'
+                                    : 'Permissions (View)'
+                                  : hasCustom
+                                    ? 'Custom CRUD'
+                                    : 'Permissions'}
                               </span>
                               <ChevronDown
                                 className={`w-3.5 h-3.5 transition-transform duration-200 ${
@@ -1570,16 +1801,16 @@ export const TeamRolesSection: React.FC = () => {
                                       }}
                                       className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-indigo-50 text-[#1e2a78] font-medium text-left cursor-pointer"
                                     >
-                                      {isMemberPermissionsLocked ? (
-                                        <Lock className="w-3.5 h-3.5 text-slate-500 stroke-[2.2]" />
-                                      ) : (
+                                      {canManageThisMember ? (
                                         <Sliders className="w-3.5 h-3.5 text-[#1e2a78]" />
+                                      ) : (
+                                        <Lock className="w-3.5 h-3.5 text-slate-500 stroke-[2.2]" />
                                       )}
-                                      {isMemberPermissionsLocked ? 'Page permissions (Locked)' : 'Page permissions (CRUD)'}
+                                      {canManageThisMember ? 'Page permissions (CRUD)' : 'View permissions (Read-only)'}
                                     </button>
 
-                                    {/* Edit details & role: Not allowed for Owner, nor can an Admin edit other Admins or their own role */}
-                                    {!isMemberOwner && (!isActorAdmin || (!isMemberAdmin && !isSelf)) && (
+                                    {/* Edit details & role: Owner can edit all; Admin can edit Agent and Viewer */}
+                                    {canManageThisMember && (
                                       <button
                                         type="button"
                                         onClick={() => {
@@ -2311,174 +2542,605 @@ export const TeamRolesSection: React.FC = () => {
         </div>
       </Modal>
 
-      {/* ─── Modal: Edit Member ────────────────────────────────────────────────── */}
+      {/* ─── Modal: Edit Member (Role & Access / Permissions) ───────────────────── */}
       <Modal
         isOpen={isEditOpen}
         onClose={() => {
           setIsEditOpen(false);
           setEditingMember(null);
         }}
-        title={`Edit ${editingMember?.name || 'Member'}`}
-      >
-        <form onSubmit={handleEditSubmit} className="space-y-4 pt-1">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Name</label>
-            <input
-              type="text"
-              required
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:border-[#1e2a78] focus:ring-1 focus:ring-[#1e2a78]"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Role</label>
-            <div className="grid grid-cols-4 gap-1.5">
-              {(['OWNER', 'ADMIN', 'AGENT', 'VIEWER'] as const).map((r) => {
-                const isSelected = editRole.toUpperCase() === r;
-                return (
-                  <button
-                    key={r}
-                    type="button"
-                    onClick={() => setEditRole(r)}
-                    className={`py-2 px-2 rounded-xl border text-xs font-semibold text-center cursor-pointer transition-colors ${
-                      isSelected
-                        ? 'border-[#1e2a78] bg-[#eef0fb] text-[#1e2a78]'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    {r.charAt(0) + r.slice(1).toLowerCase()}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Stores</label>
-            <div className="flex flex-wrap gap-1.5">
+        maxWidth="3xl"
+        className="max-h-[92vh] flex flex-col p-5"
+        bodyClassName="flex flex-col flex-1 min-h-0"
+        header={
+          <div className="shrink-0 border-b border-slate-200 pb-0">
+            <div className="flex items-start justify-between gap-3 mb-3.5">
+              <div className="flex items-center gap-3 min-w-0">
+                <div
+                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 border ${getAvatarColor(
+                    editingMember?.name || ''
+                  )}`}
+                >
+                  {getInitials(editingMember?.name || 'Member')}
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-bold text-slate-900 text-base leading-tight truncate">
+                    Edit {editingMember?.name || 'Member'}
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium truncate mt-0.5">
+                    {editingMember?.email || ''} · {formatJoinedDate(editingMember?.createdAt)}
+                  </p>
+                </div>
+              </div>
               <button
                 type="button"
-                onClick={() => setEditStores([])}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer transition-colors ${
-                  editStores.length === 0 ? 'bg-[#1e2a78] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                onClick={() => {
+                  setIsEditOpen(false);
+                  setEditingMember(null);
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Tab navigation */}
+            <div className="flex items-center gap-6">
+              <button
+                type="button"
+                onClick={() => setEditTab('role')}
+                className={`pb-2.5 text-xs font-bold transition-colors cursor-pointer border-b-2 ${
+                  editTab === 'role'
+                    ? 'border-[#1e2a78] text-[#1e2a78]'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
                 }`}
               >
-                All Stores
+                Role & access
               </button>
-              {stores.map((s) => {
-                const selected = editStores.includes(s.domain);
-                return (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => {
-                      const next = selected
-                        ? editStores.filter((d) => d !== s.domain)
-                        : [...editStores, s.domain];
-                      setEditStores(next);
-                    }}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer transition-colors ${
-                      selected ? 'bg-[#1e2a78] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    {s.name || s.domain}
-                  </button>
-                );
-              })}
+              <button
+                type="button"
+                onClick={() => setEditTab('permissions')}
+                className={`pb-2.5 text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer border-b-2 ${
+                  editTab === 'permissions'
+                    ? 'border-[#1e2a78] text-[#1e2a78]'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <span>Permissions</span>
+                {editDiff.totalChanges > 0 && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                    {editDiff.totalChanges} {editDiff.totalChanges === 1 ? 'change' : 'changes'}
+                  </span>
+                )}
+              </button>
             </div>
           </div>
+        }
+      >
+        <form onSubmit={handleEditSubmit} className="flex flex-col flex-1 min-h-0 pt-2">
+          {/* Scrollable content container */}
+          <div className="overflow-y-auto flex-1 min-h-0 pr-1 space-y-4">
+            {editTab === 'role' ? (
+              <>
+                {/* Name */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="w-full px-3.5 py-2 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#1e2a78] focus:ring-1 focus:ring-[#1e2a78]"
+                  />
+                </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Teams</label>
-            <div className="flex flex-wrap gap-1.5">
-              {AVAILABLE_TEAMS.map((team) => {
-                const selected = editTeams.includes(team);
-                return (
+                {/* Role selection 2x2 grid */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">
+                    Role · sets what {firstName} can do
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {ROLES_CONFIG.map((rc) => {
+                      const isSelected = editRole.toUpperCase() === rc.role;
+                      const isCardDisabled = isActorAdmin && rc.role === 'OWNER';
+                      return (
+                        <div
+                          key={rc.role}
+                          onClick={() => {
+                            if (!isCardDisabled) {
+                              setEditRole(rc.role);
+                              setEditPermissions(getDefaultPagePermissions(rc.role));
+                            }
+                          }}
+                          className={`relative p-3 rounded-xl border text-left transition-all ${
+                            isCardDisabled
+                              ? 'opacity-60 cursor-not-allowed border-slate-200 bg-slate-50/50'
+                              : 'cursor-pointer'
+                          } ${
+                            isSelected
+                              ? 'border-indigo-600 ring-1.5 ring-indigo-600 bg-indigo-50/10'
+                              : 'border-slate-200 hover:border-slate-300 bg-white'
+                          }`}
+                        >
+                          <div className="flex items-start gap-2.5">
+                            <div className="mt-0.5">
+                              <div
+                                className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
+                                  isSelected
+                                    ? 'border-indigo-600 bg-indigo-600'
+                                    : 'border-slate-300 bg-white'
+                                }`}
+                              >
+                                {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                              </div>
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-xs text-slate-900">{rc.label}</span>
+                                {isCardDisabled && rc.role === 'OWNER' && (
+                                  <span className="text-[10px] text-slate-400 font-medium">
+                                    (Owner only)
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-500 leading-snug mt-0.5">
+                                {rc.description}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Role Capabilities summary box */}
+                <div className="bg-slate-50/80 rounded-xl p-3 border border-slate-200/80 space-y-2">
+                  <div className="text-xs font-bold text-slate-800">
+                    As {currentRoleConfig.label}, {firstName} can
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {currentRoleConfig.allowedPills.map((pill) => (
+                      <span
+                        key={pill}
+                        className="px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
+                      >
+                        {pill}
+                      </span>
+                    ))}
+                    {currentRoleConfig.deniedPills.map((pill) => (
+                      <span
+                        key={pill}
+                        className="px-2.5 py-1 rounded-full text-xs font-medium border border-dashed border-slate-300 text-slate-400 bg-white/50"
+                      >
+                        {pill}
+                      </span>
+                    ))}
+                  </div>
+
+                  {/* Overrides notice */}
+                  {editDiff.totalChanges > 0 && (
+                    <div className="mt-2.5 p-2.5 rounded-lg bg-amber-50/80 border border-amber-200 text-xs text-amber-900 flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <span className="font-semibold">
+                          Plus {editDiff.totalChanges} extra permission{editDiff.totalChanges === 1 ? '' : 's'} for {firstName}:
+                        </span>{' '}
+                        <span className="text-amber-800">{editDiff.summaryText}.</span>{' '}
+                        <button
+                          type="button"
+                          onClick={() => setEditTab('permissions')}
+                          className="font-bold underline text-indigo-700 hover:text-indigo-900 cursor-pointer ml-1 inline-block"
+                        >
+                          Review in Permissions
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Works on */}
+                <div className="space-y-3 pt-1">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">Works on</h4>
+                    <p className="text-[11px] text-slate-500">
+                      Limits which conversations, contacts and reports {firstName} sees. Applies on top of the role.
+                    </p>
+                  </div>
+
+                  {/* Stores Row */}
+                  <div className="flex items-center gap-3">
+                    <span className="w-18 text-xs font-semibold text-slate-600 shrink-0">Stores</span>
+                    <div className="flex items-center flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditStores([])}
+                        className={`px-3 py-1 rounded-full text-xs font-semibold cursor-pointer transition-colors ${
+                          editStores.length === 0
+                            ? 'bg-[#1e2a78] text-white shadow-2xs'
+                            : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                        }`}
+                      >
+                        All stores
+                      </button>
+                      <span className="text-xs text-slate-400">New stores are included automatically</span>
+                    </div>
+                  </div>
+
+                  {/* Teams Row */}
+                  <div className="flex items-center gap-3">
+                    <span className="w-18 text-xs font-semibold text-slate-600 shrink-0">Teams</span>
+                    <div className="flex items-center flex-wrap gap-1.5">
+                      {['Support', 'Sales', 'Wholesale', 'Marketing', 'Billing'].map((t) => {
+                        const isSelected = editTeams.includes(t) || (t === 'Support' && editTeams.length === 0);
+                        return (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => {
+                              if (isSelected) {
+                                const next = editTeams.filter((item) => item !== t);
+                                setEditTeams(next.length === 0 ? ['Support'] : next);
+                              } else {
+                                setEditTeams([...editTeams.filter((item) => item !== 'All'), t]);
+                              }
+                            }}
+                            className={`px-3 py-1 rounded-full text-xs font-semibold cursor-pointer transition-colors ${
+                              isSelected
+                                ? 'bg-[#1e2a78] text-white shadow-2xs'
+                                : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                            }`}
+                          >
+                            {t}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Languages Row */}
+                  <div className="flex items-center gap-3">
+                    <span className="w-18 text-xs font-semibold text-slate-600 shrink-0">Languages</span>
+                    <div className="flex items-center flex-wrap gap-1.5">
+                      {AVAILABLE_LANGUAGES.map((lang) => {
+                        const isSelected = editLanguages.includes(lang);
+                        return (
+                          <button
+                            key={lang}
+                            type="button"
+                            onClick={() => {
+                              if (isSelected) {
+                                const next = editLanguages.filter((l) => l !== lang);
+                                setEditLanguages(next.length === 0 ? ['EN'] : next);
+                              } else {
+                                setEditLanguages([...editLanguages, lang]);
+                              }
+                            }}
+                            className={`px-3 py-1 rounded-full text-xs font-semibold cursor-pointer transition-colors ${
+                              isSelected
+                                ? 'bg-[#1e2a78] text-white shadow-2xs'
+                                : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                            }`}
+                          >
+                            {lang}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Status Row */}
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-3">
+                      <span className="w-18 text-xs font-semibold text-slate-600 shrink-0">Status</span>
+                      <div className="inline-flex rounded-full border border-slate-200 p-0.5 bg-slate-50">
+                        <button
+                          type="button"
+                          onClick={() => setEditStatus('active')}
+                          className={`px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                            editStatus === 'active' || editStatus === 'online'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900 border border-transparent'
+                          }`}
+                        >
+                          Active
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditStatus('away')}
+                          className={`px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                            editStatus === 'away' || editStatus === 'offline' || editStatus === 'deactivated'
+                              ? 'bg-white text-slate-900 border border-slate-200 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900 border border-transparent'
+                          }`}
+                        >
+                          Deactivated
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-slate-400 pl-21">
+                      Deactivated members can&apos;t sign in and keep no seat.
+                    </p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              /* ─── Permissions Tab ──────────────────────────────────────────────────── */
+              <div className="space-y-4">
+                {/* Notice banner */}
+                <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-xs font-bold text-amber-950">
+                      {editRole.charAt(0) + editRole.slice(1).toLowerCase()} role, customized for {firstName}
+                    </h4>
+                    <p className="text-[11px] text-amber-800 mt-0.5">
+                      Ticked boxes are what {firstName} can do. Boxes marked <span className="font-semibold text-amber-900">Changed</span> differ from the {editRole.charAt(0) + editRole.slice(1).toLowerCase()} defaults. Other {editRole.charAt(0) + editRole.slice(1).toLowerCase()}s are not affected.
+                    </p>
+                  </div>
                   <button
-                    key={team}
                     type="button"
                     onClick={() => {
-                      if (team === 'All') {
-                        setEditTeams(['All']);
-                      } else {
-                        const next = selected
-                          ? editTeams.filter((t) => t !== team)
-                          : [...editTeams.filter((t) => t !== 'All'), team];
-                        setEditTeams(next.length === 0 ? ['Support'] : next);
+                      setEditPermissions(getDefaultPagePermissions(editRole));
+                      gooeyToast.info(`Reset to standard ${editRole.charAt(0) + editRole.slice(1).toLowerCase()} defaults`);
+                    }}
+                    className="px-3 py-1.5 rounded-lg border border-amber-300 bg-white text-xs font-semibold text-amber-900 hover:bg-amber-50 shadow-2xs cursor-pointer shrink-0 transition-colors"
+                  >
+                    Reset to {editRole.charAt(0) + editRole.slice(1).toLowerCase()} defaults
+                  </button>
+                </div>
+
+                {/* Permissions Table */}
+                <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-50/80 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                          <th className="py-2.5 px-3 w-[30%]">Area</th>
+                          <th className="py-2.5 px-2 text-center w-[11%]">View</th>
+                          <th className="py-2.5 px-2 text-center w-[11%]">Create</th>
+                          <th className="py-2.5 px-2 text-center w-[11%]">Edit</th>
+                          <th className="py-2.5 px-2 text-center w-[11%]">Delete</th>
+                          <th className="py-2.5 px-3 w-[26%]">{editRole.toUpperCase()} Default</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {PERMISSION_AREAS.map((area) => {
+                          const defaults = getDefaultPagePermissions(editRole)[area.key] || {
+                            create: false,
+                            read: false,
+                            update: false,
+                            delete: false,
+                          };
+                          const current = editPermissions[area.key] || {
+                            create: false,
+                            read: false,
+                            update: false,
+                            delete: false,
+                          };
+
+                          const isAreaLocked =
+                            Boolean(area.adminOnly) &&
+                            editRole.toUpperCase() !== 'OWNER' &&
+                            editRole.toUpperCase() !== 'ADMIN';
+
+                          const defaultLabel = getRoleDefaultLabel(editRole, area.key);
+
+                          return (
+                            <tr key={area.key} className="hover:bg-slate-50/60 transition-colors">
+                              {/* Area name & description */}
+                              <td className="py-2.5 px-3 align-middle">
+                                <div className="font-semibold text-xs text-slate-900">{area.label}</div>
+                                <div className="text-[11px] text-slate-500">{area.subtext(editRole)}</div>
+                              </td>
+
+                              {/* VIEW (read) */}
+                              <td className="py-2.5 px-2 text-center align-middle">
+                                <div className="flex flex-col items-center justify-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(current.read)}
+                                    disabled={isAreaLocked}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      setEditPermissions((prev) => ({
+                                        ...prev,
+                                        [area.key]: {
+                                          ...(prev[area.key] || {
+                                            create: false,
+                                            read: false,
+                                            update: false,
+                                            delete: false,
+                                          }),
+                                          read: checked,
+                                        },
+                                      }));
+                                    }}
+                                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                  />
+                                  {!isAreaLocked && current.read !== defaults.read && (
+                                    <span className="block text-[9px] font-bold text-amber-700 mt-0.5 leading-none">
+                                      Changed
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* CREATE (create) */}
+                              <td className="py-2.5 px-2 text-center align-middle">
+                                <div className="flex flex-col items-center justify-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(current.create)}
+                                    disabled={isAreaLocked}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      setEditPermissions((prev) => ({
+                                        ...prev,
+                                        [area.key]: {
+                                          ...(prev[area.key] || {
+                                            create: false,
+                                            read: false,
+                                            update: false,
+                                            delete: false,
+                                          }),
+                                          create: checked,
+                                        },
+                                      }));
+                                    }}
+                                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                  />
+                                  {!isAreaLocked && current.create !== defaults.create && (
+                                    <span className="block text-[9px] font-bold text-amber-700 mt-0.5 leading-none">
+                                      Changed
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* EDIT (update) */}
+                              <td className="py-2.5 px-2 text-center align-middle">
+                                <div className="flex flex-col items-center justify-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(current.update)}
+                                    disabled={isAreaLocked}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      setEditPermissions((prev) => ({
+                                        ...prev,
+                                        [area.key]: {
+                                          ...(prev[area.key] || {
+                                            create: false,
+                                            read: false,
+                                            update: false,
+                                            delete: false,
+                                          }),
+                                          update: checked,
+                                        },
+                                      }));
+                                    }}
+                                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                  />
+                                  {!isAreaLocked && current.update !== defaults.update && (
+                                    <span className="block text-[9px] font-bold text-amber-700 mt-0.5 leading-none">
+                                      Changed
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* DELETE (delete) */}
+                              <td className="py-2.5 px-2 text-center align-middle">
+                                <div className="flex flex-col items-center justify-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(current.delete)}
+                                    disabled={isAreaLocked}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      setEditPermissions((prev) => ({
+                                        ...prev,
+                                        [area.key]: {
+                                          ...(prev[area.key] || {
+                                            create: false,
+                                            read: false,
+                                            update: false,
+                                            delete: false,
+                                          }),
+                                          delete: checked,
+                                        },
+                                      }));
+                                    }}
+                                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                  />
+                                  {!isAreaLocked && current.delete !== defaults.delete && (
+                                    <span className="block text-[9px] font-bold text-amber-700 mt-0.5 leading-none">
+                                      Changed
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* DEFAULT Column */}
+                              <td className="py-2.5 px-3 align-middle text-slate-600 font-medium">
+                                {area.adminOnly &&
+                                editRole.toUpperCase() !== 'OWNER' &&
+                                editRole.toUpperCase() !== 'ADMIN' ? (
+                                  <span className="inline-flex items-center gap-1 text-slate-400 text-xs font-medium">
+                                    <Lock className="w-3 h-3 text-slate-400 stroke-[2]" />
+                                    Admin or Owner only
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-slate-600">{defaultLabel}</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Bottom Note */}
+                <div className="text-[11px] text-slate-500 leading-relaxed">
+                  Permissions apply only inside {firstName}&apos;s stores, teams and languages from Role & access. To give someone settings or billing rights, change their role to Admin.
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Sticky Footer */}
+          <div className="flex items-center justify-between pt-3 mt-2 border-t border-slate-200 shrink-0">
+            {editTab === 'role' ? (
+              <div>
+                {!isEditingMemberOwner && !isEditingSelf && canDeleteMember && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (editingMember) {
+                        handleDeleteMember(editingMember);
+                        setIsEditOpen(false);
                       }
                     }}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer transition-colors ${
-                      selected ? 'bg-[#1e2a78] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
+                    className="text-xs font-semibold text-red-600 hover:text-red-700 cursor-pointer transition-colors"
                   >
-                    {team}
+                    Remove from workspace
                   </button>
-                );
-              })}
+                )}
+              </div>
+            ) : (
+              <div className="text-xs text-slate-600 min-w-0 pr-3">
+                {editDiff.totalChanges > 0 ? (
+                  <span className="font-medium text-slate-700 truncate block">
+                    <strong className="text-slate-900">{editDiff.totalChanges} {editDiff.totalChanges === 1 ? 'change' : 'changes'}</strong> from {editRole.charAt(0) + editRole.slice(1).toLowerCase()}: {editDiff.summaryText}
+                  </span>
+                ) : (
+                  <span className="text-slate-400">Standard {editRole.charAt(0) + editRole.slice(1).toLowerCase()} permissions</span>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 shrink-0 ml-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditOpen(false);
+                  setEditingMember(null);
+                }}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmittingEdit}
+                className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-[#1e2a78] hover:bg-[#16205e] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer shadow-sm transition-all"
+              >
+                {isSubmittingEdit && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                Save changes
+              </button>
             </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Languages</label>
-            <div className="flex flex-wrap gap-1.5">
-              {AVAILABLE_LANGUAGES.map((lang) => {
-                const selected = editLanguages.includes(lang);
-                return (
-                  <button
-                    key={lang}
-                    type="button"
-                    onClick={() => {
-                      const next = selected
-                        ? editLanguages.filter((l) => l !== lang)
-                        : [...editLanguages, lang];
-                      setEditLanguages(next.length === 0 ? ['EN'] : next);
-                    }}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer transition-colors ${
-                      selected ? 'bg-[#1e2a78] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    {lang}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Status</label>
-            <select
-              value={editStatus}
-              onChange={(e) => setEditStatus(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:border-[#1e2a78] focus:ring-1 focus:ring-[#1e2a78]"
-            >
-              <option value="active">Active</option>
-              <option value="online">Online</option>
-              <option value="away">Away</option>
-              <option value="invited">Invited</option>
-            </select>
-          </div>
-
-          <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={() => {
-                setIsEditOpen(false);
-                setEditingMember(null);
-              }}
-              className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmittingEdit}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1e2a78] hover:bg-[#16205e] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer shadow-sm"
-            >
-              {isSubmittingEdit && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              Save changes
-            </button>
           </div>
         </form>
       </Modal>
