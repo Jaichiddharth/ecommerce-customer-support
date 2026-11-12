@@ -1,6 +1,5 @@
 import { normalizeKeywords } from "./keywords";
-import { automationMediaOf } from "./media";
-import {
+import { automationMediaOf } from "./media";import {
   CONTACT_UPDATE_FIELDS,
   NO_VALUE_OPERATORS,
   OPERATOR_LABELS,
@@ -53,9 +52,6 @@ export const VARIABLE_FIELDS: Record<string, string[]> = {
 
 const text = (d: Record<string, unknown>, key: string) => String(d[key] ?? "").trim();
 
-/** Values a Send Template step fills in, by template field id (`body:1`, `header`, `button:0`). */
-const templateValues = (d: Record<string, unknown>): Record<string, string> =>
-  d.templateValues && typeof d.templateValues === "object" ? (d.templateValues as Record<string, string>) : {};
 
 /** One field-level problem; `field` is the node data key the message is about. */
 export interface NodeFieldIssue {
@@ -133,13 +129,14 @@ export function nodeConfigFieldIssues(type: string, d: Record<string, unknown>, 
         push("templateName", text(d, "templateId") ? "Choose the template again from the list." : "Choose an approved template.");
         break;
       }
-      const values = templateValues(d);
-      const fieldIds = Array.isArray(d.templateFieldIds) ? (d.templateFieldIds as string[]) : [];
-      if (fieldIds.some((id) => !String(values[id] ?? "").trim())) push("templateValues", "Fill in every template variable.");
-      else {
-        const [first] = fieldIds.flatMap((id) => variableProblems(values[id], scope));
-        if (first) push("templateValues", first);
+      // A header file is sent as approved, looked up by the template's Meta id
+      if (text(d, "templateHeaderFormat") && !text(d, "templateMetaId")) {
+        push("templateName", "Choose the template again from the list.");
+        break;
       }
+      // Automations only send templates without variables; older steps may still use one that has them
+      const fieldIds = (Array.isArray(d.templateFieldIds) ? (d.templateFieldIds as string[]) : []).filter((id) => id !== "header_media");
+      if (fieldIds.length) push("templateName", "This template has variables, which an automation can't fill. Choose a template without variables.");
       break;
     }
 

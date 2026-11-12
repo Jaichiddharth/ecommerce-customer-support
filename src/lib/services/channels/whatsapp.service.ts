@@ -35,6 +35,10 @@ import {
 
 const log = createLogger("WhatsAppService");
 
+/** Uploaded template header samples by `${phoneNumberId}:${templateId}` (see uploadTemplateHeaderSample). */
+const templateHeaderMediaCache = new Map<string, { mediaId: string; expiresAt: number }>();
+const TEMPLATE_HEADER_MEDIA_TTL_MS = 24 * 60 * 60 * 1000;
+
 /** WhatsApp's customer service window: free-form messages are allowed for 24h after the customer's last message */
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -560,6 +564,19 @@ export class WhatsAppService {
       });
     }
     const { phoneNumberId, token } = this.requireCredentials(channel);
+    const mediaId = await this.uploadTemplateHeaderSample(phoneNumberId, token, templateId);
+    log.info("Template header sample uploaded", { channelId, templateId, mediaId });
+    return { mediaId };
+  }
+
+  /**
+   * Uploads a template's approved header sample to `phoneNumberId` and returns the media id. Automations
+   * reuse the id for a day (Meta keeps uploaded media for 30), so every run doesn't re-upload the file.
+   */
+  private async uploadTemplateHeaderSample(phoneNumberId: string, token: string, templateId: string, reuse = false): Promise<string> {
+    const cacheKey = `${phoneNumberId}:${templateId}`;
+    const cached = reuse ? templateHeaderMediaCache.get(cacheKey) : undefined;
+    if (cached && cached.expiresAt > Date.now()) return cached.mediaId;
 
     const template = await metaApi.getTemplate(templateId, token);
     const header = template.components?.find((c) => c.type === "HEADER");
@@ -584,8 +601,8 @@ export class WhatsAppService {
     const extension = mimeType.split("/")[1].replace("jpeg", "jpg").replace("3gpp", "3gp");
 
     const { id } = await metaApi.uploadWhatsAppMedia(phoneNumberId, token, file, mimeType, `${template.name}.${extension}`);
-    log.info("Template header sample uploaded", { channelId, templateId, mediaId: id });
-    return { mediaId: id };
+    templateHeaderMediaCache.set(cacheKey, { mediaId: id, expiresAt: Date.now() + TEMPLATE_HEADER_MEDIA_TTL_MS });
+    return id;
   }
 
   /** Decrypted credentials for calls made on a number's behalf; throws when the channel can't reach Meta */
@@ -737,6 +754,11 @@ export class WhatsAppService {
     templateName?: string;
     languageCode?: string;
     components?: Array<Record<string, unknown>>;
+    /**
+     * Meta template id whose approved image/video/document header is sent as-is (automations). The sample
+     * is uploaded to the number the template is sent from, and its media id fills the `header` component.
+     */
+    templateHeaderSampleOf?: string;
     /** The template's buttons, stored so the thread shows them like the customer sees them (display only) */
     templateButtons?: TemplateMessageButton[];
     metadata?: MessageMetadata | null;
@@ -961,18 +983,34 @@ export class WhatsAppService {
           params.filename
         );
       } else if (params.type === 'template' && params.templateName) {
+        let components = params.components || [];
+        if (params.templateHeaderSampleOf) {
+          // WhatsApp needs the header file on every send: use the one approved with the template
+          const mediaId = await this.uploadTemplateHeaderSample(
+            targetChannel.metaPhoneNumberId,
+            rawToken,
+            params.templateHeaderSampleOf,
+            true
+          );
+          components = components.map((c) => {
+            if (c.type !== 'header') return c;
+            const format = (c.parameters as Array<Record<string, unknown>> | undefined)?.[0]?.type;
+            if (format !== 'image' && format !== 'video' && format !== 'document') return c;
+            return { ...c, parameters: [{ type: format, [format]: { id: mediaId } }] };
+          });
+        }
         metaRes = await metaApi.sendWhatsAppTemplateMessage(
           targetChannel.metaPhoneNumberId,
           rawToken,
           cleanTo,
           params.templateName,
           params.languageCode || 'en_US',
-          params.components || []
+          components
         );
         storedMediaType = 'template';
 
         // Keep the header file (sent by media id) so the thread can show it like the customer sees it
-        const headerParam = (params.components ?? [])
+        const headerParam = components
           .find((c) => c.type === 'header')
           ?.parameters as Array<Record<string, any>> | undefined;
         const headerFormat = headerParam?.[0]?.type as 'image' | 'video' | 'document' | undefined;

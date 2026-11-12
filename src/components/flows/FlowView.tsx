@@ -33,7 +33,7 @@ import { DRAG_TYPE } from './NodeCatalogList';
 import { BuilderContext, type BuilderActions, type PickerRequest } from './builder-context';
 import { themeOf } from './palette-config';
 import {
-  NODE_WIDTH, appendAfter, createNode, freeHandles, insertOnEdge, newEdgeId, styleEdge,
+  END_SIZE, NODE_WIDTH, STEP_GAP_Y, appendAfter, createNode, freeHandles, insertOnEdge, newEdgeId, styleEdge,
 } from './graph-ops';
 import type { AutomationNodeData, WorkflowGraph } from './flow-types';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
@@ -128,7 +128,7 @@ const INITIAL_EDGES: Edge[] = [
   { id: 'e5', source: 'n4', target: 'n5' },
 ].map(styleEdge);
 
-/** Starting canvas for a new automation: a single trigger to build from. */
+/** Starting canvas for a new automation: a trigger connected to an End step, ready to build between. */
 const NEW_AUTOMATION_NODES: Node[] = [
   {
     id: 'n1',
@@ -136,7 +136,16 @@ const NEW_AUTOMATION_NODES: Node[] = [
     position: { x: 352, y: 80 },
     data: { type: 'trigger_incoming_message', label: 'Incoming Message', configured: true },
   },
+  {
+    id: 'n2',
+    type: 'flow_end',
+    // Centred under the trigger card
+    position: { x: 352 + (NODE_WIDTH - END_SIZE) / 2, y: 80 + STEP_GAP_Y },
+    data: { type: 'flow_end', label: 'End Workflow', configured: true },
+  },
 ];
+
+const NEW_AUTOMATION_EDGES: Edge[] = [{ id: 'e1', source: 'n1', target: 'n2' }].map(styleEdge);
 
 // ─── Persistence helpers ──────────────────────────────────────────────────────
 
@@ -841,7 +850,7 @@ export default function FlowView({ automationId, startFrom = 'blank', onBack, on
         isActive: false,
         archived: false,
         nodes: example ? INITIAL_NODES : NEW_AUTOMATION_NODES,
-        edges: example ? INITIAL_EDGES : [],
+        edges: example ? INITIAL_EDGES : NEW_AUTOMATION_EDGES,
       });
       return;
     }
