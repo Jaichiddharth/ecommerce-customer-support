@@ -11,7 +11,7 @@ const log = createLogger('MetaApi');
  */
 const getAppCredentials = () => {
   const appId = process.env.META_APP_ID || process.env.NEXT_PUBLIC_META_APP_ID;
-  const appSecret = process.env.META_APP_SECRET || process.env.NEXT_PUBLIC_META_APP_SECRET;
+  const appSecret = process.env.META_APP_SECRET;
 
   if (!appId || !appSecret) {
     log.warn('META_APP_ID or META_APP_SECRET is not configured in environment variables.');

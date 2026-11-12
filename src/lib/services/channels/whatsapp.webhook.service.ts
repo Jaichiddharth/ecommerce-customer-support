@@ -84,7 +84,7 @@ export class WhatsAppWebhookService {
    * Validates Meta HMAC-SHA256 signature in X-Hub-Signature-256 header
    */
   verifySignature(rawBody: string, signatureHeader: string | null): boolean {
-    const appSecret = process.env.META_APP_SECRET || process.env.NEXT_PUBLIC_META_APP_SECRET;
+    const appSecret = process.env.META_APP_SECRET;
 
     if (!appSecret) {
       // Without the secret anyone could post fake messages — only tolerated in development
@@ -461,9 +461,9 @@ export class WhatsAppWebhookService {
       // Display only, so a failed lookup falls back to the plain summary instead of losing the message.
       const flowView = isFlowReply
         ? await whatsappFlowSubmissionService.describeReply(orgId, msg).catch((err) => {
-            log.warn('Could not label Flow response; storing plain summary', { err, wamid: messageId });
-            return null;
-          })
+          log.warn('Could not label Flow response; storing plain summary', { err, wamid: messageId });
+          return null;
+        })
         : null;
 
       const rawBody =
