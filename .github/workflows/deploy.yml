@@ -28,6 +28,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 1.5 Debug GitHub OIDC context
+      - name: Debug GitHub OIDC context
+        run: |
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Branch reference: $GITHUB_REF"
+          echo "Event: $GITHUB_EVENT_NAME"
+
       # 2. Authenticate with AWS using GitHub OIDC
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
