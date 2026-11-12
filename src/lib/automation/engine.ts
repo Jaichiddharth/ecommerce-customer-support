@@ -653,6 +653,11 @@ export class AutomationEngine {
               return { ...p, [field]: value };
             }),
           }));
+          // Image/video/document header: sent exactly as approved (the sample is re-uploaded to the sending number)
+          if (d.templateHeaderFormat && !d.templateMetaId) {
+            throw new Error(`Template "${d.templateName}" has a header file. Choose the template again in the step.`);
+          }
+          const templateHeaderSampleOf = d.templateHeaderFormat ? String(d.templateMetaId) : undefined;
           await this.quickRetry(() =>
             whatsAppService.sendMessage({
               organizationId: x.run.organizationId,
@@ -662,6 +667,7 @@ export class AutomationEngine {
               templateName: String(d.templateName),
               languageCode: String(d.templateLanguage || "en_US"),
               components,
+              templateHeaderSampleOf,
               text: d.templatePreview ? render(String(d.templatePreview), x) : undefined,
               templateButtons: sanitizeTemplateButtons(d.templateButtons),
               metadata,

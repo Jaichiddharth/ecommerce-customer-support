@@ -67,7 +67,7 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     type: 'action_send_template',
     label: 'Send Template',
     category: 'actions',
-    description: 'Sends an approved WhatsApp template, with its variables filled in.',
+    description: 'Sends an approved WhatsApp template exactly as it was approved.',
     icon: 'FileText',
     keywords: ['whatsapp', 'hsm'],
   },
