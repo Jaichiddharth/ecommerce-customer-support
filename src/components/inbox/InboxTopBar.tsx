@@ -11,7 +11,6 @@ interface InboxTopBarProps {
   conversations: InboxConversation[];
   onOpenConversation: (conv: InboxConversation) => void;
   onNewContact: (prefill: string) => void;
-  primaryNumber: string | null;
   isLive: boolean;
   isChannelsCollapsed: boolean;
   onExpandChannels: () => void;
@@ -22,13 +21,11 @@ export const InboxTopBar: React.FC<InboxTopBarProps> = ({
   conversations,
   onOpenConversation,
   onNewContact,
-  primaryNumber,
   isLive,
   isChannelsCollapsed,
   onExpandChannels,
 }) => (
   <TopBar
-    primaryNumber={primaryNumber}
     isLive={isLive}
     search={<ContactSearch conversations={conversations} onOpenConversation={onOpenConversation} onNewContact={onNewContact} />}
   >

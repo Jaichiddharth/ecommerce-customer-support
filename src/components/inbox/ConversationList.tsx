@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ListFilter, Plus, Search, User, Lock } from 'lucide-react';
+import { Check, ChevronLeft, ListFilter, Plus, Search, User, Lock } from 'lucide-react';
 import { ErrorState } from '@/components/ui/states';
 import type { ApiError } from '@/lib/api/api-error';
 import { ChannelIcon } from './ChannelIcon';
@@ -10,7 +10,9 @@ import {
   CHANNEL_LABELS,
   InboxConversation,
   ListTab,
+  TicketView,
   conversationChannelType,
+  isTicketClosed,
   formatHandle,
   formatListTime,
   formatPhone,
@@ -34,13 +36,29 @@ interface ConversationListProps {
   isLoading: boolean;
   error: ApiError | null;
   onRetry: () => void;
+  /** Unassigned / Closed list the tickets of that view instead of the inbox tabs */
+  ticketView?: TicketView;
+  onExitTicketView?: () => void;
+  /** The signed-in teammate, so tickets they own read "You" */
+  currentUserId?: number | null;
 }
 
-const TABS: { key: ListTab; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'ai', label: 'AI' },
-  { key: 'needs_human', label: 'Needs human' },
-  { key: 'mine', label: 'Mine' },
+const TICKET_VIEW_COPY: Record<Exclude<TicketView, 'inbox'>, { title: string; emptyTitle: string; emptyHint: string }> = {
+  unassigned: {
+    title: 'Unassigned',
+    emptyTitle: 'No unassigned tickets',
+    emptyHint: 'New customer conversations land here until a teammate replies or takes over.',
+  },
+  closed: {
+    title: 'Closed',
+    emptyTitle: 'No closed tickets',
+    emptyHint: 'Tickets marked Resolved show up here.',
+  },
+};
+
+const TABS: { key: ListTab; label: string; hint: string }[] = [
+  { key: 'mine', label: 'Mine', hint: 'Open tickets assigned to you' },
+  { key: 'all', label: 'All', hint: 'Every open ticket of your team' },
 ];
 
 interface AvatarProps {
@@ -116,10 +134,16 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   isLoading,
   error,
   onRetry,
+  ticketView = 'inbox',
+  onExitTicketView,
+  currentUserId = null,
 }) => {
   const [showFilters, setShowFilters] = useState(false);
+  // In Mine every ticket is yours: the assignee chip would only repeat that
+  const showAssignee = !(ticketView === 'inbox' && tab === 'mine');
   const filtersRef = useRef<HTMLDivElement>(null);
   const filtersActive = unreadOnly;
+  const viewCopy = ticketView === 'inbox' ? null : TICKET_VIEW_COPY[ticketView];
 
   useEffect(() => {
     if (!showFilters) return;
@@ -132,13 +156,29 @@ export const ConversationList: React.FC<ConversationListProps> = ({
 
   return (
     <div className="w-[285px] bg-white border-r border-slate-200 flex flex-col shrink-0 h-full select-none">
-      {/* Tabs */}
+      {/* Tabs, or the ticket view's title */}
+      {viewCopy ? (
+        <div className="px-3 flex items-center gap-2 border-b border-slate-200 text-[13px] shrink-0">
+          <button
+            type="button"
+            onClick={onExitTicketView}
+            title="Back to the inbox"
+            className="w-7 h-7 -ml-0.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 flex items-center justify-center cursor-pointer"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <span className="py-3 -mb-px border-b-2 border-[#3440a8] text-[#3440a8] font-bold whitespace-nowrap">
+            {viewCopy.title} <span className="font-bold">{conversations.length}</span>
+          </span>
+        </div>
+      ) : (
       <div className="px-4 flex items-center gap-4 border-b border-slate-200 text-[13px] shrink-0">
-        {TABS.map(({ key, label }) => {
+        {TABS.map(({ key, label, hint }) => {
           const active = tab === key;
           return (
             <button
               key={key}
+              title={hint}
               onClick={() => onTabChange(key)}
               className={`py-3 -mb-px border-b-2 whitespace-nowrap cursor-pointer transition-colors ${
                 active ? 'border-[#3440a8] text-[#3440a8] font-bold' : 'border-transparent text-slate-800 font-medium hover:text-black'
@@ -149,6 +189,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
           );
         })}
       </div>
+      )}
 
       {/* Search + filter */}
       <div className="p-3 flex items-center gap-2 border-b border-slate-100 shrink-0">
@@ -204,14 +245,33 @@ export const ConversationList: React.FC<ConversationListProps> = ({
           </div>
         ) : error && conversations.length === 0 ? (
           <ErrorState error={error} title="Couldn't load conversations" onRetry={onRetry} />
+        ) : conversations.length === 0 && viewCopy ? (
+          <div className="p-8 text-center flex flex-col items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+              <Check className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="font-semibold text-slate-700 text-[13px]">{viewCopy.emptyTitle}</p>
+              <p className="text-xs text-slate-400 mt-0.5">{viewCopy.emptyHint}</p>
+            </div>
+          </div>
         ) : conversations.length === 0 ? (
           <div className="p-8 text-center flex flex-col items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
               <User className="w-5 h-5" />
             </div>
             <div>
-              <p className="font-semibold text-slate-700 text-[13px]">No conversations</p>
-              <p className="text-xs text-slate-400 mt-0.5">Nothing matches this view yet.</p>
+              <p className="font-semibold text-slate-700 text-[13px]">
+                {tab === 'mine' && !search && !unreadOnly ? 'No tickets assigned to you' : 'No conversations'}
+              </p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                {tab === 'mine' && !search && !unreadOnly ? 'Tickets you take over or are assigned show up here.' : 'Nothing matches this view yet.'}
+              </p>
+              {tab === 'mine' && (
+                <button type="button" onClick={() => onTabChange('all')} className="mt-1.5 text-xs font-semibold text-[#3440a8] hover:underline cursor-pointer">
+                  View all team tickets
+                </button>
+              )}
             </div>
             <button
               onClick={canCreate ? onNewContact : undefined}
@@ -279,6 +339,11 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                       Disconnected
                     </span>
                   )}
+                  {isTicketClosed(conv) && (
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-medium">
+                      Resolved
+                    </span>
+                  )}
                   {!conv.hasConversation && (
                     <span className="px-1.5 py-0.5 rounded bg-slate-50 text-slate-500 border border-slate-200 text-[10px] font-medium">
                       New contact
@@ -289,11 +354,15 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                       Opted out
                     </span>
                   )}
-                  {conv.handledBy === 'ai' && (
-                    <span className="px-1.5 py-0.5 rounded bg-[#eef0fb] text-[#3440a8] text-[11px] font-medium">AI</span>
-                  )}
-                  {conv.needsHuman && (
-                    <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 text-[11px] font-medium">Needs human</span>
+                  {/* Who owns the ticket, so the All tab shows the team's split at a glance */}
+                  {showAssignee && conv.hasConversation && !isTicketClosed(conv) && conv.assigneeId != null && (
+                    <span
+                      title={`Assigned to ${conv.assigneeId === currentUserId ? 'you' : conv.assigneeName || 'a teammate'}`}
+                      className="inline-flex items-center gap-1 max-w-[140px] px-1.5 py-0.5 rounded bg-[#eef0fb] text-[#3440a8] text-[11px] font-medium"
+                    >
+                      <User className="w-3 h-3 shrink-0" />
+                      <span className="truncate">{conv.assigneeId === currentUserId ? 'You' : conv.assigneeName || 'Teammate'}</span>
+                    </span>
                   )}
                   {conv.tags.map((tag) => (
                     <span key={tag} className="px-1.5 py-0.5 rounded bg-[#fde8ef] text-[#c0365f] text-[11px]">

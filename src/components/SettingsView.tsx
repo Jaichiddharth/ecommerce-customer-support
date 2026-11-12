@@ -34,7 +34,7 @@ import { notifyError } from '@/lib/api/notify';
 import { useRealtime } from '@/lib/hooks/useRealtime';
 import { AddChannelModal } from './channels/AddChannelModal';
 import { ChannelIcon } from './inbox/ChannelIcon';
-import { InboxConversation, formatPhone, isChannelHealthy } from './inbox/inbox-types';
+import { InboxConversation, formatPhone } from './inbox/inbox-types';
 import { ContactSearch, TopBar } from './TopBar';
 import { Channel, STATUS_META, fmtDate, needsReconnect, useDisconnectChannel } from './settings/channel-settings';
 import { WhatsAppNumberHealth } from './settings/WhatsAppNumberHealth';
@@ -503,26 +503,12 @@ interface SettingsViewProps {
   onOpenConversation?: (id: string) => void;
 }
 
-/** Top-bar data: the live WhatsApp number, and contacts for the search (loaded on first use) */
+/** Top-bar data: live-updates status, and contacts for the search (loaded on first use) */
 function useSettingsTopBar() {
-  const [whatsappChannels, setWhatsappChannels] = useState<Channel[]>([]);
   const [conversations, setConversations] = useState<InboxConversation[]>([]);
   const conversationsRequested = useRef(false);
 
-  const fetchChannels = useCallback(async () => {
-    try {
-      const res = await apiClient.get<{ channels: Channel[] }>('/api/channels', { params: { type: 'whatsapp' } });
-      setWhatsappChannels(res.data.channels ?? []);
-    } catch {
-      // The number pill is decorative here; the sections below show their own load errors
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchChannels();
-  }, [fetchChannels]);
-
-  const { isConnected } = useRealtime({ onChannelUpdated: () => fetchChannels() });
+  const { isConnected } = useRealtime();
 
   const loadConversations = useCallback(async () => {
     if (conversationsRequested.current) return;
@@ -536,8 +522,7 @@ function useSettingsTopBar() {
     }
   }, []);
 
-  const primaryNumber = (whatsappChannels.find(isChannelHealthy) || whatsappChannels[0])?.phoneNumber ?? null;
-  return { primaryNumber, isLive: isConnected, conversations, loadConversations };
+  return { isLive: isConnected, conversations, loadConversations };
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }) => {
@@ -593,7 +578,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
   return (
     <div className="flex flex-col h-full bg-[#f8f9fc]">
       <TopBar
-        primaryNumber={topBar.primaryNumber}
         isLive={topBar.isLive}
         search={
           <ContactSearch

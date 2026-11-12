@@ -60,7 +60,8 @@ interface CustomerPanelProps {
   /** The channel and contact products are shared through, so the products come from that channel's store */
   productStoreScope?: ProductStoreScope;
   onShareProduct: (args: ShareProductArgs) => Promise<boolean>;
-  onInsertProductText: (text: string) => void;
+  /** Absent while the reply box is locked (24-hour window closed, opted out, number disconnected) */
+  onInsertProductText?: (text: string) => void;
   shareDisabledReason?: string | null;
   /** A teammate changed the contact's WhatsApp consent */
   onConsentChange?: (customerId: number, isOptedOut: boolean) => void;

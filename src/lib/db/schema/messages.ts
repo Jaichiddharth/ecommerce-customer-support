@@ -7,6 +7,7 @@ import { tickets } from "./tickets";
 import { users } from "./users";
 import { messageReactions } from "./message_reactions";
 import type { ConsentChange, ConsentStatus } from "../../../types/consent";
+import type { TicketEvent } from "../../../types/ticket";
 
 export type SenderType = "customer" | "agent" | "ai" | "system";
 
@@ -63,6 +64,8 @@ export interface MessageMetadata {
   consent?: ConsentChange;
   /** Set on the automatic reply confirming an opt-out / opt-in to the customer */
   consentConfirmation?: ConsentStatus;
+  /** Set on the team-only system note that records a ticket change (the ticket's audit log) */
+  ticketEvent?: TicketEvent;
   [key: string]: unknown;
 }
 

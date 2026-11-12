@@ -9,6 +9,7 @@ import { notifyError } from '@/lib/api/notify';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 import { notifyShopifyChanged } from '@/components/shopify/useShopifyStore';
 import { Modal } from '@/components/ui/Modal';
+import { SearchableSelect } from '@/components/ui/SearchableSelect';
 import type {
   ShopifyChannelStoreStatus,
   ShopifyChannelUnmapImpact,
@@ -50,7 +51,7 @@ const NO_STORE = 'none';
 /**
  * Which Shopify store this number works with: products shared, customers matched and orders shown in its
  * conversations all come from that store. There is no default store: until the number is connected (synced) to
- * a store, its conversations show no Shopify data. "Not connected" removes the connection.
+ * a store, its conversations show no Shopify data. "No store linked" removes the connection.
  */
 export function ChannelShopifyStore({
   channelId,
@@ -142,34 +143,38 @@ export function ChannelShopifyStore({
     ? { text: "Couldn't read which store this number uses. Choose one to sync it.", className: 'text-slate-500', icon: null }
     : effective && effective.status !== 'connected'
       ? {
-          text: `Synced with ${storeLabel(effective)}, but the store needs to be reconnected before its data shows in the inbox.`,
-          className: 'text-amber-700',
-          icon: <AlertTriangle className="w-3.5 h-3.5 shrink-0" />,
-        }
+        text: `Synced with ${storeLabel(effective)}, but the store needs to be reconnected before its data shows in the inbox.`,
+        className: 'text-amber-700',
+        icon: <AlertTriangle className="w-3.5 h-3.5 shrink-0" />,
+      }
       : effective
         ? { text: `Synced with ${storeLabel(effective)}`, className: 'text-emerald-700', icon: <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> }
         : status.mappingId
           ? { text: 'Its store was disconnected. Choose another store and sync.', className: 'text-amber-700', icon: null }
-          : { text: 'Not connected: this number’s conversations show no Shopify data. Choose a store and sync.', className: 'text-slate-500', icon: null };
+          : { text: 'No store linked: this number’s conversations show no Shopify data. Choose a store and sync.', className: 'text-slate-500', icon: null };
 
   return (
     <div className="space-y-2">
       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-        <select
+        <SearchableSelect
+          className="flex-1 min-w-0"
           value={choice}
-          onChange={(e) => setChoice(e.target.value)}
+          onChange={setChoice}
           disabled={syncing}
           aria-label="Shopify store for this number"
-          className="flex-1 min-w-0 px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3440a8]/20 focus:border-[#3440a8] cursor-pointer disabled:opacity-60"
-        >
-          <option value={NO_STORE}>Not connected</option>
-          {stores.map((s) => (
-            <option key={s.id} value={String(s.id)}>
-              {storeLabel(s)} · {s.shopDomain}
-              {s.status !== 'connected' ? ' · reconnect needed' : ''}
-            </option>
-          ))}
-        </select>
+          placeholder="Choose a Shopify store"
+          searchPlaceholder="Search stores by name or domain"
+          emptyText="No store matches your search"
+          options={[
+            { value: NO_STORE, label: 'No store linked', description: 'Conversations on this number show no Shopify data', dividerAfter: true },
+            ...stores.map((s) => ({
+              value: String(s.id),
+              label: storeLabel(s),
+              description: s.shopDomain,
+              badge: s.status !== 'connected' ? { text: 'Reconnect needed', tone: 'warning' as const } : undefined,
+            })),
+          ]}
+        />
         <button
           type="button"
           onClick={onSyncClick}
@@ -314,7 +319,7 @@ function LeaveStoreConfirm({
       )}
 
       {!loading && (
-        <p className="text-[11.5px] text-slate-500 leading-relaxed">
+        <p className="text-[11.5px] text-slate-500 leading-relaxed mt-2">
           Your Shopify data isn&apos;t changed. Contacts who also message you on another number connected to {storeName} keep their links.
           {hasLinks || failed
             ? ` If this number is connected to ${storeName} again, contacts are re-matched automatically by phone and email where there is exactly one match; links and orders your team added manually have to be added again.`
@@ -324,7 +329,7 @@ function LeaveStoreConfirm({
       )}
 
       {needsAck && !loading && (
-        <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer select-none">
+        <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer select-none mt-2">
           <input
             type="checkbox"
             checked={acknowledged}
