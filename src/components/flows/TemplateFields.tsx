@@ -1,52 +1,68 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { AlertTriangle, FileText, Film, Image as ImageIcon, Loader2 } from 'lucide-react';
 import apiClient from '@/lib/api/client';
 import { toApiError } from '@/lib/api/api-error';
-import type { WhatsAppTemplate } from '@/types/templates';
+import { isMediaHeader, type MediaHeaderType, type WhatsAppTemplate } from '@/types/templates';
 import {
   buildTemplateSendComponents,
   getTemplateSendBlocker,
   getTemplateSendFields,
   renderTemplateMessage,
 } from '@/lib/whatsapp-templates';
-import { VariableInput } from './VariableInput';
 import type { FieldLikeProps } from './whatsapp/AutomationFlowFields';
 
-/** Approved templates, loaded once per page. */
-let cache: Promise<WhatsAppTemplate[]> | null = null;
-
-function loadTemplates(): Promise<WhatsAppTemplate[]> {
-  cache ??= apiClient
-    .get('/api/channels/whatsapp/templates', { params: { status: 'APPROVED' } })
-    .then((res) => {
-      if (res.data?.connected === false) throw new Error('No WhatsApp number is connected.');
-      if (res.data?.error) throw new Error(res.data.error);
-      return ((res.data?.templates ?? []) as WhatsAppTemplate[])
-        .filter((t) => t.status?.toUpperCase() === 'APPROVED')
-        .sort((a, b) => a.name.localeCompare(b.name));
-    })
-    .catch((err) => {
-      cache = null;
-      throw err;
-    });
-  return cache;
+/** Approved templates from the Templates page's source; loaded each time the step opens so new ones show up. */
+async function loadTemplates(): Promise<WhatsAppTemplate[]> {
+  const res = await apiClient.get('/api/channels/whatsapp/templates', { params: { status: 'APPROVED' } });
+  if (res.data?.connected === false) throw new Error('No WhatsApp number is connected.');
+  if (res.data?.error) throw new Error(res.data.error);
+  return ((res.data?.templates ?? []) as WhatsAppTemplate[])
+    .filter((t) => t.status?.toUpperCase() === 'APPROVED')
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Why an automation can't send `tpl`, or null. Flow templates go through Send WhatsApp Flow (tracked responses). */
+/**
+ * Why an automation can't send `tpl`, or null. Templates with variables are left out: an automation
+ * has nothing to fill them with. Flow templates go through Send WhatsApp Flow (tracked responses).
+ */
 function automationBlocker(tpl: WhatsAppTemplate): string | null {
   const blocker = getTemplateSendBlocker(tpl);
   if (blocker) return blocker;
   const buttons = tpl.components?.find((c) => c.type === 'BUTTONS')?.buttons ?? [];
   if (buttons.some((b) => b.type === 'FLOW')) return 'Opens a WhatsApp Flow: use the Send WhatsApp Flow step.';
-  if (getTemplateSendFields(tpl).some((f) => f.kind === 'header_media')) return 'Has a media header, not supported in automations yet.';
+  if (getTemplateSendFields(tpl).some((f) => f.kind !== 'header_media')) return 'Has variables, which an automation can’t fill.';
   return null;
+}
+
+/** The template's image/video/document header format, if it has one. */
+function mediaHeaderOf(tpl: WhatsAppTemplate): MediaHeaderType | null {
+  const format = tpl.components?.find((c) => c.type === 'HEADER')?.format;
+  return isMediaHeader(format) ? format : null;
+}
+
+/** Meta's link to the approved header file; fine to display, not to send. */
+const headerSampleOf = (tpl: WhatsAppTemplate): string | undefined =>
+  tpl.components?.find((c) => c.type === 'HEADER')?.example?.header_handle?.[0];
+
+function HeaderPreview({ format, src }: { format: MediaHeaderType; src?: string }) {
+  if (format === 'IMAGE' && src) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={src} alt="Approved header image" className="w-full max-h-48 object-cover bg-white" />;
+  }
+  const Icon = format === 'VIDEO' ? Film : format === 'IMAGE' ? ImageIcon : FileText;
+  return (
+    <div className="flex items-center gap-2 px-3 py-2.5 border-b border-emerald-100 text-[11.5px] text-slate-600">
+      <Icon className="w-4 h-4 text-emerald-700" />
+      Approved header {format.toLowerCase()}
+    </div>
+  );
 }
 
 const keyOf = (t: { name: string; language: string }) => `${t.name}|${t.language}`;
 
-/** Config fields for Send Template: pick an approved template, then fill each of its variables. */
+/** Config fields for Send Template: pick an approved template without variables (and its header file, if any). */
 export function TemplateFields({
   local,
   set,
@@ -77,9 +93,10 @@ export function TemplateFields({
 
   const { usable, hidden } = useMemo(() => {
     const usable: WhatsAppTemplate[] = [];
-    let hidden = 0;
+    const hidden: { key: string; name: string; reason: string }[] = [];
     for (const t of templates ?? []) {
-      if (automationBlocker(t)) hidden++;
+      const reason = automationBlocker(t);
+      if (reason) hidden.push({ key: keyOf(t), name: `${t.name} (${t.language})`, reason });
       else usable.push(t);
     }
     return { usable, hidden };
@@ -87,20 +104,21 @@ export function TemplateFields({
 
   const selectedKey = local.templateName ? keyOf({ name: String(local.templateName), language: String(local.templateLanguage ?? '') }) : '';
   const selected = usable.find((t) => keyOf(t) === selectedKey) ?? null;
-  const values = (local.templateValues && typeof local.templateValues === 'object' ? local.templateValues : {}) as Record<string, string>;
-  const fields = useMemo(() => (selected ? getTemplateSendFields(selected).filter((f) => f.kind !== 'header_media') : []), [selected]);
+  const hiddenSelected = selected ? null : hidden.find((h) => h.key === selectedKey) ?? null;
+  const headerFormat = selected ? mediaHeaderOf(selected) : null;
 
   /** Stores everything the engine needs, so runs never have to fetch the template from Meta. */
-  const commit = (tpl: WhatsAppTemplate, nextValues: Record<string, string>) => {
-    const ids = getTemplateSendFields(tpl).map((f) => f.id);
-    const kept = Object.fromEntries(ids.map((id) => [id, nextValues[id] ?? '']));
+  const choose = (tpl: WhatsAppTemplate) => {
     set('templateName', tpl.name);
     set('templateLanguage', tpl.language);
     set('templateId', undefined); // older steps stored a typed name here
-    set('templateFieldIds', ids);
-    set('templateValues', kept);
-    set('templateComponents', buildTemplateSendComponents(tpl, kept));
-    set('templatePreview', renderTemplateMessage(tpl, kept));
+    // A header file is sent as approved: the engine looks it up by the template's Meta id
+    set('templateHeaderFormat', mediaHeaderOf(tpl) ?? undefined);
+    set('templateMetaId', tpl.id);
+    set('templateFieldIds', []);
+    set('templateValues', {});
+    set('templateComponents', buildTemplateSendComponents(tpl, {}));
+    set('templatePreview', renderTemplateMessage(tpl, {}));
     set(
       'templateButtons',
       (tpl.components?.find((c) => c.type === 'BUTTONS')?.buttons ?? []).map((b) => ({ type: b.type, text: b.text })),
@@ -120,12 +138,17 @@ export function TemplateFields({
 
   return (
     <>
-      <Field label="Template" name="templateName" required>
+      <Field
+        label="Template"
+        name="templateName"
+        required
+        hint="Approved templates from the Templates page that have no variables."
+      >
         <select
           value={selected ? selectedKey : ''}
           onChange={(e) => {
             const tpl = usable.find((t) => keyOf(t) === e.target.value);
-            if (tpl) commit(tpl, {});
+            if (tpl) choose(tpl);
           }}
           className={inputCls}
         >
@@ -135,42 +158,37 @@ export function TemplateFields({
           ))}
         </select>
         {error && warn(error)}
-        {!error && usable.length === 0 && warn('No approved templates an automation can send. Create one under Templates.')}
-        {hidden > 0 && (
-          <p className="text-[10.5px] text-slate-400">
-            {hidden} template{hidden === 1 ? '' : 's'} not listed: media headers aren’t supported yet, and Flow templates are sent with Send WhatsApp Flow.
-          </p>
+        {!error && usable.length === 0 && warn('No approved templates without variables. Create one under Templates.')}
+        {hiddenSelected && warn(`“${hiddenSelected.name}” can’t be sent by an automation: ${hiddenSelected.reason} Choose another template.`)}
+        {!selected && !hiddenSelected && selectedKey && warn(`“${String(local.templateName)}” is no longer approved or available. Choose another template.`)}
+        {!selected && !selectedKey && !!local.templateId && warn(`This step used the typed name “${String(local.templateId)}”. Choose it from the list so its language is sent correctly.`)}
+        {hidden.length > 0 && (
+          <details className="text-[10.5px] text-slate-400">
+            <summary className="cursor-pointer hover:text-slate-600">
+              {hidden.length} template{hidden.length === 1 ? '' : 's'} not listed
+            </summary>
+            <ul className="mt-1 space-y-0.5 pl-3 leading-snug">
+              {hidden.map((h) => (
+                <li key={h.key}>
+                  <span className="font-medium text-slate-500">{h.name}</span>: {h.reason}
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
-        {!selected && selectedKey && warn(`“${String(local.templateName)}” is no longer approved or available. Choose another template.`)}
-        {!selected && !selectedKey && !!local.templateId && warn(`This step used the typed name “${String(local.templateId)}”. Choose it from the list so its language and variables are sent correctly.`)}
       </Field>
 
-      {selected && fields.length > 0 && (
-        <Field label="Template variables" name="templateValues" required hint="Type a fixed value or insert a variable. Every value must be filled for each contact.">
-          <div className="space-y-2.5">
-            {fields.map((f) => (
-              <div key={f.id} className="space-y-1">
-                <label className="text-[11px] text-slate-600">
-                  {f.label}
-                  {f.example && <span className="text-slate-400"> · e.g. {f.example}</span>}
-                </label>
-                <VariableInput
-                  value={values[f.id] ?? ''}
-                  onChange={(v) => commit(selected, { ...values, [f.id]: v })}
-                  placeholder={f.kind === 'button_url' ? 'Rest of the link' : f.kind === 'coupon_code' ? 'Coupon code' : '{{contact.name}}'}
-                  className={inputCls}
-                />
-              </div>
-            ))}
-          </div>
-        </Field>
-      )}
-
       {selected && (
-        <Field label="Preview">
-          <p className="whitespace-pre-wrap break-words text-[12px] text-slate-700 bg-[#f0fdf4] border border-emerald-100 rounded-lg px-3 py-2.5">
-            {renderTemplateMessage(selected, values)}
-          </p>
+        <Field
+          label="Preview"
+          hint={headerFormat ? `Sent exactly as approved, with the template’s approved header ${headerFormat.toLowerCase()}.` : 'Sent exactly as approved.'}
+        >
+          <div className="bg-[#f0fdf4] border border-emerald-100 rounded-lg overflow-hidden">
+            {headerFormat && <HeaderPreview format={headerFormat} src={headerSampleOf(selected)} />}
+            <p className="whitespace-pre-wrap break-words text-[12px] text-slate-700 px-3 py-2.5">
+              {renderTemplateMessage(selected, {})}
+            </p>
+          </div>
         </Field>
       )}
     </>

@@ -1,7 +1,7 @@
 'use client';
 
-import React, { createContext, useContext, useMemo, useState } from 'react';
-import { AlertTriangle, Check, Info, Loader2, Trash2, X } from 'lucide-react';
+import React, { createContext, useContext, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, Check, Info, Loader2, Pencil, Trash2, X } from 'lucide-react';
 import type { AutomationNodeData } from './flow-types';
 import { SendWhatsAppFlowFields } from './whatsapp/AutomationFlowFields';
 import { nodeConfigFieldIssues } from '@/lib/automation/validate';
@@ -79,6 +79,59 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h4 className="text-[10.5px] font-semibold uppercase tracking-wider text-slate-500 mb-3">{title}</h4>
       <div className="space-y-4">{children}</div>
     </section>
+  );
+}
+
+/** Step label: read-only until the pencil is clicked; Enter, Esc or leaving the field locks it again. */
+function LabelInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const startEditing = () => {
+    setEditing(true);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+  };
+
+  return (
+    <div className="relative">
+      <input
+        ref={inputRef}
+        value={value}
+        readOnly={!editing}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={() => setEditing(false)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            setEditing(false);
+          } else if (e.key === 'Escape' && editing) {
+            e.stopPropagation(); // stop editing without closing the panel
+            setEditing(false);
+          }
+        }}
+        className={`${inputCls} pr-9 ${editing ? '' : 'bg-slate-50 text-slate-700 cursor-default focus:ring-0'}`}
+        placeholder={placeholder}
+        maxLength={80}
+        aria-label="Step label"
+      />
+      <button
+        type="button"
+        // Keep focus in the input so clicking the pencil while editing doesn't blur-then-reopen
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => (editing ? inputRef.current?.blur() : startEditing())}
+        className={`absolute right-1.5 top-1/2 -translate-y-1/2 w-6 h-6 rounded-md flex items-center justify-center transition-colors ${
+          editing ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+        }`}
+        title={editing ? 'Done editing' : 'Edit label'}
+        aria-label={editing ? 'Done editing label' : 'Edit label'}
+        aria-pressed={editing}
+      >
+        <Pencil className="w-3.5 h-3.5" />
+      </button>
+    </div>
   );
 }
 
@@ -221,12 +274,10 @@ export function ConfigPanel({ nodeId, data, issues = [], flowContext, onUpdate, 
         <FieldErrorsContext.Provider value={errors}>
           <Section title="General">
             <Field label="Label" hint="Shown on the canvas so others can tell steps apart.">
-              <input
+              <LabelInput
                 value={String(local.label ?? '')}
-                onChange={(e) => set('label', e.target.value)}
-                className={inputCls}
+                onChange={(v) => set('label', v)}
                 placeholder={item?.label ?? 'Step name'}
-                maxLength={80}
               />
             </Field>
           </Section>
