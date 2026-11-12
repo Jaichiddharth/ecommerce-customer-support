@@ -269,6 +269,7 @@ export class CustomerRepository {
             channelId: number | null;
             phone: string | null;
             email: string | null;
+            language: string | null;
             avatarUrl: string | null;
             shopifyCustomerId: string | null;
             tags: string[];

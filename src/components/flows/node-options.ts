@@ -1,4 +1,6 @@
 import type { AutomationNodeData } from './flow-types';
+import { BASE_ATTRIBUTES, CONTACT_UPDATE_FIELDS, NO_VALUE_OPERATORS, OPERATOR_LABELS, type OperatorId } from '@/lib/automation/variables';
+import { automationMediaOf } from '@/lib/automation/media';
 
 export interface Option {
   value: string;
@@ -13,36 +15,11 @@ export const EVENT_OPTIONS: Option[] = [
   { value: 'contact_created', label: 'Contact created' },
 ];
 
-export const ATTRIBUTE_OPTIONS: Option[] = [
-  { value: 'message', label: 'Message text' },
-  { value: 'phone', label: 'Phone number' },
-  { value: 'name', label: 'Contact name' },
-  { value: 'email', label: 'Email' },
-  { value: 'tag', label: 'Tag' },
-  { value: 'language', label: 'Language' },
-];
-
-export const OPERATOR_OPTIONS: Option[] = [
-  { value: 'equals', label: 'Equals' },
-  { value: 'not_equals', label: 'Not equals' },
-  { value: 'contains', label: 'Contains' },
-  { value: 'starts_with', label: 'Starts with' },
-  { value: 'is_empty', label: 'Is empty' },
-];
-
 export const ASSIGNEE_OPTIONS: Option[] = [
   { value: 'bot', label: 'AI Bot' },
   { value: 'support', label: 'Support Team' },
   { value: 'sales', label: 'Sales Team' },
   { value: 'agent_1', label: 'Agent 1' },
-];
-
-export const CONTACT_FIELD_OPTIONS: Option[] = [
-  { value: 'name', label: 'Name' },
-  { value: 'email', label: 'Email' },
-  { value: 'tag', label: 'Tag' },
-  { value: 'language', label: 'Language' },
-  { value: 'notes', label: 'Notes' },
 ];
 
 const labelFor = (options: Option[], value: unknown) =>
@@ -71,29 +48,43 @@ export function nodeSummary(data: AutomationNodeData): string {
     case 'condition_if_else':
     case 'condition_contact_attribute': {
       if (!d.attribute || !d.operator) return '';
-      const attr = labelFor(ATTRIBUTE_OPTIONS, d.attribute);
-      const op = labelFor(OPERATOR_OPTIONS, d.operator).toLowerCase();
-      if (d.operator === 'is_empty') return `${attr} is empty`;
-      return d.value ? `${attr} ${op} “${d.value}”` : '';
+      const attribute = String(d.attribute);
+      // Flow conditions store a readable label alongside (the questions aren't loaded on the canvas)
+      const attr = attribute.startsWith('flow.')
+        ? String(d.attributeLabel || attribute.slice(5))
+        : BASE_ATTRIBUTES.find((a) => a.value === attribute)?.label ?? attribute;
+      const op = (OPERATOR_LABELS[d.operator as OperatorId] ?? String(d.operator)).toLowerCase();
+      if (NO_VALUE_OPERATORS.has(String(d.operator))) return `${attr} ${op}`;
+      const value = d.valueLabel || d.value;
+      return value ? `${attr} ${op} “${value}”` : '';
     }
     case 'condition_keyword_match': {
       const k = keywordList(d.keywords);
       return k.length ? `Message contains ${quoteList(k)}` : '';
     }
-    case 'action_send_message':
-      return d.messageContent ? `“${String(d.messageContent).trim()}”` : '';
+    case 'action_send_message': {
+      const text = String(d.messageContent ?? '').trim();
+      const media = automationMediaOf(d as Record<string, unknown>);
+      if (media) return text ? `📎 ${media.filename} · “${text}”` : `📎 ${media.filename}`;
+      return text ? `“${text}”` : '';
+    }
     case 'action_send_template':
-      return d.templateId ? `Template: ${d.templateId}` : '';
+      return d.templateName ? `Template: ${d.templateName}` : d.templateId ? `Template: ${d.templateId}` : '';
     case 'action_assign_conversation':
       return d.assignTo ? `Assign to ${labelFor(ASSIGNEE_OPTIONS, d.assignTo)}` : '';
-    case 'action_update_contact':
-      return d.updateField
-        ? `Set ${labelFor(CONTACT_FIELD_OPTIONS, d.updateField).toLowerCase()} to “${d.updateValue || '…'}”`
-        : '';
+    case 'action_update_contact': {
+      if (!d.updateField) return '';
+      const value = d.updateValue || '…';
+      if (d.updateField === 'tag') return `Add tag “${value}”`;
+      if (d.updateField === 'remove_tag') return `Remove tag “${value}”`;
+      return `Set ${labelFor(CONTACT_UPDATE_FIELDS, d.updateField).toLowerCase()} to “${value}”`;
+    }
     case 'action_send_whatsapp_flow':
       return d.flowName
         ? `${d.flowName}${d.sendMethod === 'interactive' ? ' · interactive' : d.templateName ? ` · ${d.templateName}` : ''}`
         : '';
+    case 'flow_wait_flow_submission':
+      return 'Continues when the customer submits the Flow';
     case 'flow_end':
       return 'The automation stops here';
     default:

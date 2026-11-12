@@ -47,11 +47,11 @@ export const PALETTE_ITEMS: PaletteItem[] = [
   },
   {
     type: 'condition_contact_attribute',
-    label: 'Contact Attribute',
+    label: 'Filter',
     category: 'conditions',
-    description: 'Continues only when a contact field matches a value.',
-    icon: 'UserCheck',
-    keywords: ['filter', 'field', 'tag'],
+    description: 'Removed. Replace it with If / Else.',
+    icon: 'Filter',
+    hidden: true,
   },
 
   // ── Actions ───────────────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     type: 'action_send_template',
     label: 'Send Template',
     category: 'actions',
-    description: 'Sends an approved WhatsApp template message.',
+    description: 'Sends an approved WhatsApp template, with its variables filled in.',
     icon: 'FileText',
     keywords: ['whatsapp', 'hsm'],
   },
@@ -91,12 +91,20 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     type: 'action_update_contact',
     label: 'Update Contact',
     category: 'actions',
-    description: 'Sets a field on the contact, like a tag or email.',
+    description: 'Adds or removes a tag, or saves a name, email or language.',
     icon: 'PenLine',
     keywords: ['field', 'tag', 'crm'],
   },
 
   // ── Flow Controls ─────────────────────────────────────────────────────────
+  {
+    type: 'flow_wait_flow_submission',
+    label: 'Wait for Flow Submission',
+    category: 'flow-controls',
+    description: 'Pauses until the customer submits the Flow, so later steps can use the answers.',
+    icon: 'Hourglass',
+    keywords: ['form', 'response', 'answers', 'pause'],
+  },
   {
     type: 'flow_end',
     label: 'End Workflow',
@@ -106,6 +114,9 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     keywords: ['stop', 'finish', 'terminate'],
   },
 ];
+
+/** Step types that can be added (palette and node picker). */
+export const PICKABLE_ITEMS = PALETTE_ITEMS.filter((i) => !i.hidden);
 
 export const CATEGORY_ORDER: NodeCategory[] = ['triggers', 'conditions', 'actions', 'flow-controls'];
 

@@ -9,13 +9,18 @@ import {
   type AutomationRunContext,
   type Channel,
   type Customer,
+  sanitizeTemplateButtons,
 } from "../db/schema";
 import { whatsAppService } from "../services/channels/whatsapp.service";
 import { whatsappFlowSendService } from "../services/whatsapp-flows/flow-send.service";
 import { matchConsentKeyword, normalizeKeyword } from "../services/consent.service";
 import { mapLimit, sleep } from "@/lib/concurrency";
 import { keywordPattern, matchesKeywords, normalizeKeywords } from "./keywords";
-import { toAppError } from "@/lib/errors";
+import { EMAIL_RE } from "./variables";
+import { formatFlowResponse } from "@/lib/whatsapp-flows/flow-response-format";
+import { AppError, toAppError } from "@/lib/errors";
+import { getObject } from "@/lib/storage/s3";
+import { automationMediaOf, automationMediaPrefix } from "./media";
 import { createLogger } from "@/lib/logger";
 
 /**
@@ -64,6 +69,9 @@ const REPLAY_AFTER_MS = 2 * 60_000;
 const REPLAY_MAX_AGE_MS = 60 * 60_000;
 
 export const SEND_FLOW_NODE = "action_send_whatsapp_flow";
+export const WAIT_FLOW_NODE = "flow_wait_flow_submission";
+/** How long Wait for Flow Submission waits when the Flow send has no response window. */
+const DEFAULT_FLOW_WAIT_MS = 24 * 60 * 60_000;
 
 type StepResult =
   | { kind: "next"; handle?: string } // follow the outgoing edge (optionally a specific handle)
@@ -92,36 +100,51 @@ function render(text: string, x: Exec): string {
     const key = rest.join(".");
     let value: unknown;
     if (scope === "contact") value = (x.customer as unknown as Record<string, unknown>)[key];
-    else if (scope === "flow") value = x.run.context.flow?.[key];
+    // Readable answers (option titles, Yes/No, formatted dates): raw option ids mean nothing to a customer
+    else if (scope === "flow") value = x.run.context.flowDisplay?.[key] ?? x.run.context.flow?.[key];
     else if (scope === "message" && key === "text") value = x.run.context.trigger.text;
     if (Array.isArray(value)) return value.join(", ");
     return value === undefined || value === null ? "" : String(value);
   });
 }
 
-function attributeValue(attribute: string, x: Exec): string {
+/** Raw value(s) a condition checks: lists for tags and multi-choice answers, one string otherwise. */
+function attributeValue(attribute: string, x: Exec): string | string[] {
   if (attribute === "message") return x.run.context.trigger.text ?? "";
-  if (attribute === "tag") return (x.customer.tags ?? []).join(",");
-  if (attribute.startsWith("flow.")) {
-    const v = x.run.context.flow?.[attribute.slice(5)];
-    return Array.isArray(v) ? v.join(",") : v === undefined || v === null ? "" : String(v);
-  }
-  const v = (x.customer as unknown as Record<string, unknown>)[attribute];
+  if (attribute === "tag") return x.customer.tags ?? [];
+  const v = attribute.startsWith("flow.")
+    ? x.run.context.flow?.[attribute.slice(5)]
+    : (x.customer as unknown as Record<string, unknown>)[attribute];
+  if (Array.isArray(v)) return v.map(String);
   return v === undefined || v === null ? "" : String(v);
 }
 
-function compare(actual: string, operator: string, expected: string): boolean {
+function compare(actual: string | string[], operator: string, expected: string): boolean {
+  const e = expected.trim().toLowerCase();
+  if (Array.isArray(actual)) {
+    const items = actual.map((a) => a.trim().toLowerCase());
+    switch (operator) {
+      case "has": return items.includes(e);
+      case "not_has": return !items.includes(e);
+      case "is_empty": return items.length === 0;
+      case "is_not_empty": return items.length > 0;
+      default: return compare(items.join(","), operator, expected); // older steps (e.g. Tag contains)
+    }
+  }
   const a = actual.toLowerCase();
-  const e = expected.toLowerCase();
   switch (operator) {
-    case "equals": return a === e;
-    case "not_equals": return a !== e;
+    case "equals": case "has": return a === e;
+    case "not_equals": case "not_has": return a !== e;
     case "contains": return a.includes(e);
     case "starts_with": return a.startsWith(e);
     case "is_empty": return a.trim() === "";
+    case "is_not_empty": return a.trim() !== "";
     default: return false;
   }
 }
+
+/** Meta rejects template parameters with line breaks, tabs or long runs of spaces. */
+const templateParam = (value: string) => value.replace(/\s+/g, " ").trim();
 
 // ─── Active automations per organization (cached, triggers precompiled) ─────────────────────
 
@@ -281,7 +304,7 @@ export class AutomationEngine {
     const automation = await automationRepository.find(claimed.automationId, claimed.organizationId);
     if (!automation) return null;
     const waitNodeId = claimed.waitingFor?.nodeId ?? claimed.currentNodeId!;
-    claimed.context = { ...claimed.context, flow: response };
+    claimed.context = { ...claimed.context, ...(await this.flowAnswers(executionId, claimed.organizationId, response)) };
     claimed.waitingFor = null;
     await this.advance(claimed, automation, { after: waitNodeId });
     return claimed.id;
@@ -551,6 +574,16 @@ export class AutomationEngine {
     }
   }
 
+  /** Run context for a Flow submission: raw answers (conditions) and readable ones (message variables). */
+  private async flowAnswers(executionId: number, organizationId: number, response: Record<string, unknown>) {
+    const execution = await whatsappFlowRepository.findExecution(executionId, organizationId);
+    const version = execution ? await whatsappFlowRepository.findVersion(execution.flowVersionId, organizationId) : null;
+    const flowDisplay = Object.fromEntries(
+      formatFlowResponse(response, version?.definition).map((a) => [a.key, a.value === "—" ? "" : a.value])
+    );
+    return { flow: response, flowDisplay };
+  }
+
   private async execute(node: AutomationGraphNode, x: Exec): Promise<StepResult> {
     const d = node.data;
     // An opted-out contact receives nothing until they reply START: end the run quietly instead of failing at the send
@@ -561,6 +594,8 @@ export class AutomationEngine {
       case "trigger_incoming_message":
       case "trigger_keyword":
       case "trigger_conversation_event":
+        return { kind: "next" }; // runs start after their trigger; nothing to evaluate
+
       case "condition_if_else": {
         const ok = compare(attributeValue(String(d.attribute ?? ""), x), String(d.operator ?? ""), String(d.value ?? ""));
         return { kind: "next", handle: ok ? "true" : "false" };
@@ -574,27 +609,71 @@ export class AutomationEngine {
 
       case "action_send_message": {
         const text = render(String(d.messageContent ?? ""), x).trim();
-        if (!text) throw new Error("Send Message has no content.");
+        const media = automationMediaOf(d);
+        if (!text && !media) throw new Error("Send Message has no content.");
         const preloaded = await this.preloaded(x);
+        const base = {
+          organizationId: x.run.organizationId,
+          customerId: x.customer.id,
+          to: x.customer.phone ?? "",
+          metadata: { automation: { automationId: x.automation.id, runId: x.run.id, nodeId: node.id } },
+          preloaded,
+        };
+        if (!media) {
+          await this.quickRetry(() => whatsAppService.sendMessage({ ...base, text }));
+          return { kind: "next" };
+        }
+        // Only this organization's files: the key comes from the saved graph
+        if (!media.key.startsWith(automationMediaPrefix(x.run.organizationId))) {
+          throw new AppError("MEDIA_NOT_FOUND", { message: "The attached file isn't available. Attach it again.", expected: true });
+        }
+        // Read from S3 on every run and upload to Meta like an inbox attachment; the message stores Meta's media id
+        const file = await this.quickRetry(() => getObject(media.key));
+        // WhatsApp drops captions on audio, so the text follows as its own message
+        const caption = media.kind === "audio" ? undefined : text || undefined;
         await this.quickRetry(() =>
-          whatsAppService.sendMessage({
-            organizationId: x.run.organizationId,
-            customerId: x.customer.id,
-            to: x.customer.phone ?? "",
-            text,
-            metadata: { automation: { automationId: x.automation.id, runId: x.run.id, nodeId: node.id } },
-            preloaded,
-          })
+          whatsAppService.sendMessage({ ...base, text: caption, mediaFile: file, mimeType: media.mimeType, filename: media.filename })
         );
+        if (media.kind === "audio" && text) await this.quickRetry(() => whatsAppService.sendMessage({ ...base, text }));
         return { kind: "next" };
       }
 
       case "action_send_template": {
-        // Builder stores either a template record id or a raw template name
+        const preloaded = await this.preloaded(x);
+        const metadata = { automation: { automationId: x.automation.id, runId: x.run.id, nodeId: node.id } };
+        if (d.templateName) {
+          // Components were built when the step was configured; only their text parameters hold variables
+          const components = (Array.isArray(d.templateComponents) ? (d.templateComponents as Record<string, unknown>[]) : []).map((c) => ({
+            ...c,
+            parameters: (Array.isArray(c.parameters) ? (c.parameters as Record<string, unknown>[]) : []).map((p) => {
+              if (p.type !== "text" && p.type !== "coupon_code") return p;
+              const field = p.type === "text" ? "text" : "coupon_code";
+              const value = templateParam(render(String(p[field] ?? ""), x));
+              if (!value) throw new Error(`A variable of template "${d.templateName}" is empty for this contact, so WhatsApp would reject it.`);
+              return { ...p, [field]: value };
+            }),
+          }));
+          await this.quickRetry(() =>
+            whatsAppService.sendMessage({
+              organizationId: x.run.organizationId,
+              customerId: x.customer.id,
+              to: x.customer.phone ?? "",
+              type: "template",
+              templateName: String(d.templateName),
+              languageCode: String(d.templateLanguage || "en_US"),
+              components,
+              text: d.templatePreview ? render(String(d.templatePreview), x) : undefined,
+              templateButtons: sanitizeTemplateButtons(d.templateButtons),
+              metadata,
+              preloaded,
+            })
+          );
+          return { kind: "next" };
+        }
+        // Older steps: a template record id or a typed name, without variables
         const ref = String(d.templateId ?? "").trim();
         if (!ref) throw new Error("Send Template has no template.");
         const record = /^\d+$/.test(ref) ? await whatsappFlowRepository.findTemplate(Number(ref), x.run.organizationId) : null;
-        const preloaded = await this.preloaded(x);
         await this.quickRetry(() =>
           whatsAppService.sendMessage({
             organizationId: x.run.organizationId,
@@ -603,7 +682,7 @@ export class AutomationEngine {
             type: "template",
             templateName: record?.name ?? ref,
             languageCode: record?.language ?? "en_US",
-            metadata: { automation: { automationId: x.automation.id, runId: x.run.id, nodeId: node.id } },
+            metadata,
             preloaded,
           })
         );
@@ -613,20 +692,19 @@ export class AutomationEngine {
       case "action_update_contact": {
         const field = String(d.updateField ?? "");
         const value = render(String(d.updateValue ?? ""), x).trim();
-        if (field === "name" || field === "email" || field === "language") {
-          if (value) {
-            const updated = await customerRepository.updateCustomer(x.customer.id, x.run.organizationId, { [field]: value });
-            if (updated) x.customer = updated;
-          }
-        } else if (field === "tag") {
-          if (value && !(x.customer.tags ?? []).includes(value)) {
-            const updated = await customerRepository.updateCustomer(x.customer.id, x.run.organizationId, {
-              tags: [...(x.customer.tags ?? []), value],
-            });
-            if (updated) x.customer = updated;
-          }
-        } else {
-          return { kind: "next" }; // fields without storage (e.g. notes) are skipped
+        if (!value) return { kind: "next" }; // e.g. a variable that's empty for this contact: keep what's there
+        const tags = x.customer.tags ?? [];
+        let patch: Parameters<typeof customerRepository.updateCustomer>[2] | null = null;
+        if (field === "name" || field === "language") patch = { [field]: value };
+        else if (field === "email") patch = EMAIL_RE.test(value) ? { email: value } : null;
+        else if (field === "tag") patch = tags.some((t) => t.toLowerCase() === value.toLowerCase()) ? null : { tags: [...tags, value] };
+        else if (field === "remove_tag") {
+          const kept = tags.filter((t) => t.toLowerCase() !== value.toLowerCase());
+          patch = kept.length === tags.length ? null : { tags: kept };
+        }
+        if (patch) {
+          const updated = await customerRepository.updateCustomer(x.customer.id, x.run.organizationId, patch);
+          if (updated) x.customer = updated;
         }
         return { kind: "next" };
       }
@@ -654,6 +732,22 @@ export class AutomationEngine {
         );
         x.run.context = { ...x.run.context, lastFlowExecutionId: execution.id };
         return { kind: "next" };
+      }
+
+      case WAIT_FLOW_NODE: {
+        const executionId = x.run.context.lastFlowExecutionId;
+        if (!executionId) throw new Error("Wait for Flow Submission needs a Send WhatsApp Flow step before it.");
+        // The customer may have answered before the run reached this step
+        const existing = await whatsappFlowRepository.findSubmissionByExecution(executionId);
+        if (existing) {
+          x.run.context = { ...x.run.context, ...(await this.flowAnswers(executionId, x.run.organizationId, existing.response)) };
+          return { kind: "next" };
+        }
+        const execution = await whatsappFlowRepository.findExecution(executionId, x.run.organizationId);
+        if (execution?.status === WaFlowExecutionStatus.FAILED) throw new Error("The Flow could not be sent.");
+        // Waits exactly as long as the customer can answer (the Send WhatsApp Flow response window)
+        const wakeAt = execution?.expiresAt ?? new Date(Date.now() + DEFAULT_FLOW_WAIT_MS);
+        return { kind: "wait", run: { waitingFor: { kind: "flow_submission", executionId, nodeId: node.id }, wakeAt } };
       }
 
       case "flow_end":

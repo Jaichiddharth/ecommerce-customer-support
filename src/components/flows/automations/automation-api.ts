@@ -92,11 +92,12 @@ export const NODE_TYPE_LABELS: Record<string, string> = {
   trigger_conversation_event: 'Conversation Event',
   condition_if_else: 'If / Else',
   condition_keyword_match: 'Keyword Match',
-  condition_contact_attribute: 'Contact Attribute',
+  condition_contact_attribute: 'Filter',
   action_send_message: 'Send Message',
   action_send_template: 'Send Template',
   action_assign_conversation: 'Assign Conversation',
   action_update_contact: 'Update Contact',
   action_send_whatsapp_flow: 'Send WhatsApp Flow',
+  flow_wait_flow_submission: 'Wait for Flow Submission',
   flow_end: 'End Workflow',
 };

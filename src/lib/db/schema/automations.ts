@@ -94,6 +94,8 @@ export interface AutomationRunContext {
   trigger: { type: string; messageId?: number | null; wamid?: string | null; text?: string | null };
   /** Values from the latest Flow submission, referenced as {{flow.<field>}}. */
   flow?: Record<string, unknown>;
+  /** The same answers made readable (option titles, Yes/No, formatted dates), used when rendering {{flow.<field>}}. */
+  flowDisplay?: Record<string, string>;
   /** Execution of the most recent Send WhatsApp Flow step in this run. */
   lastFlowExecutionId?: number;
   /** Short step log for debugging (capped). */

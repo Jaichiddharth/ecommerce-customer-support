@@ -3,7 +3,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type { PaletteItem } from './flow-types';
-import { PALETTE_ITEMS } from './palette-config';
+import { PICKABLE_ITEMS } from './palette-config';
 import { NodeCatalogList } from './NodeCatalogList';
 import type { PickerRequest } from './builder-context';
 
@@ -15,15 +15,15 @@ const MARGIN = 12;
 function itemsFor(request: PickerRequest): PaletteItem[] {
   switch (request.kind) {
     case 'start':
-      return PALETTE_ITEMS.filter((i) => i.category === 'triggers');
+      return PICKABLE_ITEMS.filter((i) => i.category === 'triggers');
     case 'append':
       // Triggers can't have anything leading into them
-      return PALETTE_ITEMS.filter((i) => i.category !== 'triggers');
+      return PICKABLE_ITEMS.filter((i) => i.category !== 'triggers');
     case 'insert':
       // …and an End step in the middle would cut off the steps after it
-      return PALETTE_ITEMS.filter((i) => i.category !== 'triggers' && i.type !== 'flow_end');
+      return PICKABLE_ITEMS.filter((i) => i.category !== 'triggers' && i.type !== 'flow_end');
     default:
-      return PALETTE_ITEMS;
+      return PICKABLE_ITEMS;
   }
 }
 

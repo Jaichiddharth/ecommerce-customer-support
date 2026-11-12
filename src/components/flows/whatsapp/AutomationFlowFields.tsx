@@ -2,7 +2,9 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
-import { flowsApi, templatesApi, type PublishedFlowOption, type WaTemplate } from './wa-api';
+import { templatesApi, type WaTemplate } from './wa-api';
+import { usePublishedFlows } from '../use-published-flows';
+import { VariableInput } from '../VariableInput';
 
 /** Field wrapper the host form provides; `name` lets it show that field's validation error. */
 export type FieldLikeProps = { label: string; children: React.ReactNode; name?: string; required?: boolean; hint?: string };
@@ -23,12 +25,10 @@ export function SendWhatsAppFlowFields({
   inputCls: string;
   Field: React.FC<FieldLikeProps>;
 }) {
-  const [flows, setFlows] = useState<PublishedFlowOption[] | null>(null);
+  const { flows, failed: loadFailed } = usePublishedFlows();
   const [templates, setTemplates] = useState<WaTemplate[]>([]);
-  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
-    flowsApi.published().then(setFlows).catch(() => { setFlows([]); setLoadFailed(true); });
     templatesApi.list({ status: 'APPROVED' }).then(setTemplates).catch(() => setTemplates([]));
   }, []);
 
@@ -101,11 +101,12 @@ export function SendWhatsAppFlowFields({
       ) : (
         <>
           <Field label="Message text" name="flowBody" required>
-            <textarea
-              value={String(local.flowBody ?? '')}
-              onChange={(e) => set('flowBody', e.target.value)}
+            <VariableInput
+              multiline
               rows={3}
-              className={`${inputCls} resize-none`}
+              value={String(local.flowBody ?? '')}
+              onChange={(v) => set('flowBody', v)}
+              className={inputCls}
               placeholder="Hi {{contact.name}}, please fill in this short form."
             />
           </Field>
@@ -128,41 +129,8 @@ export function SendWhatsAppFlowFields({
           onChange={(e) => set('expiresInHours', Number(e.target.value))}
           className={inputCls}
         />
-        {hint('A unique flow token is generated for every send and links the response back to this run.')}
+        {hint('How long the customer can submit the form. A Wait for Flow Submission step after this one waits exactly this long.')}
       </Field>
-    </>
-  );
-}
-
-export function WaitForFlowSubmissionFields({
-  local,
-  set,
-  inputCls,
-  Field,
-}: {
-  local: Record<string, unknown>;
-  set: (k: string, v: unknown) => void;
-  inputCls: string;
-  Field: React.FC<{ label: string; children: React.ReactNode }>;
-}) {
-  return (
-    <>
-      <Field label="Timeout (hours)">
-        <input
-          type="number"
-          min={1}
-          max={720}
-          value={Number(local.timeoutHours ?? 24)}
-          onChange={(e) => set('timeoutHours', Number(e.target.value))}
-          className={inputCls}
-        />
-      </Field>
-      <p className="text-[11px] text-slate-500 leading-relaxed">
-        Pauses this automation until the customer submits the Flow sent by the previous “Send WhatsApp Flow” step.
-        The answers are then available to later steps as <code className="text-[10px] bg-slate-100 px-1 rounded">{'{{flow.field_name}}'}</code>,
-        and in conditions as the attribute <code className="text-[10px] bg-slate-100 px-1 rounded">flow.field_name</code>.
-        If no response arrives in time, the run ends as timed out.
-      </p>
     </>
   );
 }

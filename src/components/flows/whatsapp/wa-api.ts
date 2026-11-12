@@ -1,6 +1,7 @@
 import apiClient from '@/lib/api/client';
 import type { WaFlow } from '@/lib/whatsapp-flows/wa-flow-types';
 import { readListResult, type ListResult } from '@/lib/listing';
+import type { FlowField } from '@/lib/automation/variables';
 
 // ─── Response shapes (mirror lib/services/whatsapp-flows) ────────────────────
 
@@ -64,6 +65,8 @@ export interface PublishedFlowOption {
     wabaId: string;
     entryScreen: string | null;
     screens: { id: string; title: string }[];
+    /** Questions of this version: {{flow.<name>}} variables and Flow conditions in automations */
+    fields: FlowField[];
   } | null;
 }
 
