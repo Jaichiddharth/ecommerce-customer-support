@@ -153,7 +153,7 @@ export const ShopifyIntegrationView: React.FC<ShopifyIntegrationViewProps> = ({ 
                   <Lock className="w-3.5 h-3.5 text-slate-400" /> Ask a workspace admin to connect your Shopify store or request create permissions.
                 </p>
               ) : (
-                <ShopAddressForm isConnecting={isConnecting} onSubmit={startConnect} />
+                <ShopAddressForm isConnecting={isConnecting} onSubmit={startConnect} connectedStores={stores} />
               )}
               {configured && distribution === 'private' && <ShopifyAppAccessNote distribution={distribution} />}
               <section className="rounded-lg border border-slate-200 p-5">
@@ -369,13 +369,30 @@ const WhatWeReadCard: React.FC = () => (
 );
 
 /** "<handle>.myshopify.com" input; the server also accepts a full domain or admin URL pasted here */
-const ShopAddressForm: React.FC<{ isConnecting: boolean; onSubmit: (shop: string) => void }> = ({ isConnecting, onSubmit }) => {
+/** "My-Store", "my-store.myshopify.com", "https://my-store.myshopify.com/admin" or an admin.shopify.com/store/... link → "my-store.myshopify.com" */
+function toShopDomain(input: string): string {
+  let value = input.trim().toLowerCase();
+  const adminMatch = value.match(/admin\.shopify\.com\/store\/([a-z0-9][a-z0-9-]*)/);
+  if (adminMatch) return `${adminMatch[1]}.myshopify.com`;
+  value = value.replace(/^https?:\/\//, '').split(/[/?#]/)[0];
+  return /^[a-z0-9][a-z0-9-]*$/.test(value) ? `${value}.myshopify.com` : value;
+}
+
+const ShopAddressForm: React.FC<{
+  isConnecting: boolean;
+  onSubmit: (shop: string) => void;
+  /** This workspace's live stores: typing one of them is blocked until it's disconnected */
+  connectedStores: ShopifyStoreInfo[];
+}> = ({ isConnecting, onSubmit, connectedStores }) => {
   const [shopInput, setShopInput] = useState('');
+  const typedDomain = shopInput.trim() ? toShopDomain(shopInput) : '';
+  const alreadyConnected = typedDomain ? connectedStores.find((s) => s.shopDomain.toLowerCase() === typedDomain) : undefined;
 
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
+        if (alreadyConnected) return;
         onSubmit(shopInput);
       }}
     >
@@ -396,10 +413,23 @@ const ShopAddressForm: React.FC<{ isConnecting: boolean; onSubmit: (shop: string
           />
           {!shopInput.includes('.') && <span className="pr-3 text-[13px] text-slate-400">.myshopify.com</span>}
         </div>
-        <button type="submit" disabled={isConnecting || !shopInput.trim()} className={`sm:w-44 py-2.5 ${primaryButtonClass}`}>
+        <button type="submit" disabled={isConnecting || !shopInput.trim() || Boolean(alreadyConnected)} className={`sm:w-44 py-2.5 ${primaryButtonClass}`}>
           {isConnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} Install app
         </button>
       </div>
+      {alreadyConnected && (
+        <p role="alert" className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 mt-0.5 text-amber-600 shrink-0" />
+          <span>
+            <span className="font-semibold">{alreadyConnected.name || alreadyConnected.shopDomain}</span> is already connected to this
+            workspace. Disconnect it first to connect it again
+            {alreadyConnected.status === 'reauth_required' ? ', or reconnect it from its page' : ''}.{' '}
+            <Link href={`/integrations/shopify/stores/${alreadyConnected.id}`} className="font-semibold underline">
+              Open store
+            </Link>
+          </span>
+        </p>
+      )}
     </form>
   );
 };

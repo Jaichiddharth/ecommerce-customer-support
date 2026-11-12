@@ -25,25 +25,26 @@ const formatWhen = (iso?: string | null) => {
   return d.toLocaleString([], { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
 
-const EVENT_STYLE: Record<TicketEventAction, { icon: React.ElementType; className: string }> = {
-  opened: { icon: TicketPlus, className: 'bg-[#eef0fb]/70 border-[#dfe2f6] text-[#3440a8]' },
-  resolved: { icon: CircleCheck, className: 'bg-emerald-50/60 border-emerald-100 text-emerald-800' },
-  reopened: { icon: RotateCcw, className: 'bg-slate-50 border-slate-200 text-slate-700' },
-  status: { icon: CircleDot, className: 'bg-slate-50 border-slate-200 text-slate-700' },
-  assigned: { icon: UserPlus, className: 'bg-slate-50 border-slate-200 text-slate-700' },
-  unassigned: { icon: UserMinus, className: 'bg-slate-50 border-slate-200 text-slate-700' },
-  ai_on: { icon: Sparkles, className: 'bg-[#eef0fb]/70 border-[#dfe2f6] text-[#3440a8]' },
-  ai_off: { icon: CirclePause, className: 'bg-slate-50 border-slate-200 text-slate-700' },
-  billable: { icon: Coins, className: 'bg-amber-50/60 border-amber-100 text-amber-800' },
+const EVENT_ICON: Record<TicketEventAction, React.ElementType> = {
+  opened: TicketPlus,
+  resolved: CircleCheck,
+  reopened: RotateCcw,
+  status: CircleDot,
+  assigned: UserPlus,
+  unassigned: UserMinus,
+  ai_on: Sparkles,
+  ai_off: CirclePause,
+  billable: Coins,
 };
 
 /** Ticket audit entry in the thread: what changed, who changed it and when. Only the team sees it. */
 export const TicketEventRow: React.FC<{ event: TicketEvent; text: string }> = ({ event, text }) => {
-  const { icon: Icon, className } = EVENT_STYLE[event.action] ?? EVENT_STYLE.status;
+  const Icon = EVENT_ICON[event.action] ?? EVENT_ICON.status;
   return (
     <div className="flex justify-center py-1">
-      <div className={`max-w-[85%] rounded-lg border px-3 py-1.5 text-center text-[11.5px] leading-snug ${className}`}>
-        <p className="font-semibold inline-flex items-center gap-1">
+      {/* Team-only entries share one amber style so they never read as something the customer sees */}
+      <div className="max-w-[85%] rounded-lg border px-3 py-1.5 text-center text-[11.5px] leading-snug bg-amber-50/60 border-amber-100">
+        <p className="font-bold text-amber-800 inline-flex items-center gap-1">
           <Icon className="w-3.5 h-3.5 shrink-0" />
           {text}
         </p>
@@ -71,7 +72,9 @@ export const TicketStatusMenu: React.FC<{
   status: string | null;
   disabled?: boolean;
   onChange: (status: MenuStatus) => void;
-}> = ({ status, disabled, onChange }) => {
+  /** Classes for the "Open" / "Resolved" text, e.g. to hide it in a narrow header (the icon and tooltip stay) */
+  labelClassName?: string;
+}> = ({ status, disabled, onChange, labelClassName = '' }) => {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const closed = isClosedTicketStatus(status);
@@ -94,13 +97,13 @@ export const TicketStatusMenu: React.FC<{
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={open}
-        title={disabled ? 'You do not have permission to update conversations' : 'Ticket status'}
+        title={disabled ? 'You do not have permission to update conversations' : `Ticket status: ${closed ? 'Resolved' : 'Open'}`}
         className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg border text-[13px] font-medium whitespace-nowrap transition-colors ${
           closed ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-slate-300 bg-white text-slate-900'
         } ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-slate-50'}`}
       >
         {closed ? <CircleCheck className="w-4 h-4 text-emerald-600" /> : <CircleDot className="w-4 h-4 text-[#3440a8]" />}
-        {closed ? 'Resolved' : 'Open'}
+        <span className={labelClassName}>{closed ? 'Resolved' : 'Open'}</span>
         {disabled ? <Lock className="w-3.5 h-3.5 text-slate-400" /> : <ChevronDown className="w-3.5 h-3.5" />}
       </button>
       {open && (

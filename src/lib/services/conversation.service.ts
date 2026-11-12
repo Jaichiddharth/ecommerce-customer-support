@@ -1,5 +1,6 @@
 import {
   conversationRepository,
+  type AssignableTeammate,
   type ConversationListItem,
   type ConversationUpdate,
   type TicketEventInput,
@@ -26,6 +27,11 @@ export class ConversationService {
 
   async ticketCredits(organizationId: number): Promise<TicketCredits> {
     return await conversationRepository.ticketCredits(organizationId);
+  }
+
+  /** Teammates the inbox's assignee menu lists */
+  async listAssignees(organizationId: number): Promise<AssignableTeammate[]> {
+    return await conversationRepository.listAssignableTeammates(organizationId);
   }
 
   /**
@@ -63,11 +69,24 @@ export class ConversationService {
       }
     }
 
-    // Only a teammate of this workspace can own its tickets
+    // Only a teammate of this workspace can own its tickets; someone else must also be able to work it
+    // (joined, not a viewer)
     let assigneeName: string | null = null;
     if (changes.assigneeId != null) {
-      assigneeName = (await conversationRepository.userNames(organizationId, [changes.assigneeId])).get(changes.assigneeId) ?? null;
-      if (assigneeName === null) throw AppError.validation("That teammate isn't in this workspace.", "assigneeId");
+      const assigneeId = changes.assigneeId;
+      if (assigneeId === actor.id) {
+        assigneeName = (await conversationRepository.userNames(organizationId, [assigneeId])).get(assigneeId) ?? null;
+      } else {
+        const teammate = (await conversationRepository.listAssignableTeammates(organizationId)).find((t) => t.id === assigneeId);
+        assigneeName = teammate?.name ?? null;
+      }
+      if (assigneeName === null) throw AppError.validation("That teammate can't be assigned tickets in this workspace.", "assigneeId");
+
+      // A teammate owning the ticket handles it: the AI agent stops replying (unless the request says otherwise)
+      if (input.handledBy === undefined) {
+        changes.handledBy = ConversationHandler.HUMAN;
+        changes.needsHuman = false;
+      }
     }
 
     if (input.status !== undefined) {
@@ -131,7 +150,9 @@ function ticketEvents(
     );
   }
 
-  if (handlerChanged) {
+  // Assigning a teammate pauses the AI agent as part of the hand-off; the assignment note says it all
+  const handOffToTeammate = assigneeChanged && after.assigneeId !== null && after.handledBy === ConversationHandler.HUMAN;
+  if (handlerChanged && !handOffToTeammate) {
     events.push({ ...by, action: after.handledBy === ConversationHandler.AI ? "ai_on" : "ai_off" });
   }
 

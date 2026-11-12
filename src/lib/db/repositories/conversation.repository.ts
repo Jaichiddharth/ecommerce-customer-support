@@ -105,6 +105,16 @@ export interface ConversationListItem {
   } | null;
 }
 
+/** A teammate the inbox can assign tickets to (GET /api/conversations/assignees) */
+export interface AssignableTeammate {
+  id: number;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  role: string;
+  isOnline: boolean;
+}
+
 export type ConversationUpdate = Partial<{
   handledBy: string;
   needsHuman: boolean;
@@ -371,6 +381,21 @@ export class ConversationRepository {
       .from(users)
       .where(and(eq(users.organizationId, organizationId), inArray(users.id, wanted)));
     return new Map(rows.map((r) => [r.id, r.name]));
+  }
+
+  /**
+   * Teammates a ticket can be assigned to: members who joined the workspace and can reply (viewers can't),
+   * by name
+   */
+  async listAssignableTeammates(organizationId: number): Promise<AssignableTeammate[]> {
+    const rows = await db
+      .select({ id: users.id, name: users.name, email: users.email, avatarUrl: users.avatarUrl, role: users.role, isOnline: users.isOnline, status: users.status })
+      .from(users)
+      .where(eq(users.organizationId, organizationId));
+    return rows
+      .filter((u) => (u.role || "AGENT").toUpperCase() !== "VIEWER" && (u.status || "active") !== "invited")
+      .map((u) => ({ id: u.id, name: u.name, email: u.email, avatarUrl: u.avatarUrl, role: (u.role || "AGENT").toUpperCase(), isOnline: Boolean(u.isOnline) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Mock billing: tickets made billable by a teammate's first reply, against the fixed allowance */

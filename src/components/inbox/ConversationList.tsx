@@ -39,6 +39,8 @@ interface ConversationListProps {
   /** Unassigned / Closed list the tickets of that view instead of the inbox tabs */
   ticketView?: TicketView;
   onExitTicketView?: () => void;
+  /** The signed-in teammate, so tickets they own read "You" */
+  currentUserId?: number | null;
 }
 
 const TICKET_VIEW_COPY: Record<Exclude<TicketView, 'inbox'>, { title: string; emptyTitle: string; emptyHint: string }> = {
@@ -54,11 +56,9 @@ const TICKET_VIEW_COPY: Record<Exclude<TicketView, 'inbox'>, { title: string; em
   },
 };
 
-const TABS: { key: ListTab; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'ai', label: 'AI' },
-  { key: 'needs_human', label: 'Needs human' },
-  { key: 'mine', label: 'Mine' },
+const TABS: { key: ListTab; label: string; hint: string }[] = [
+  { key: 'mine', label: 'Mine', hint: 'Open tickets assigned to you' },
+  { key: 'all', label: 'All', hint: 'Every open ticket of your team' },
 ];
 
 interface AvatarProps {
@@ -136,8 +136,11 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   onRetry,
   ticketView = 'inbox',
   onExitTicketView,
+  currentUserId = null,
 }) => {
   const [showFilters, setShowFilters] = useState(false);
+  // In Mine every ticket is yours: the assignee chip would only repeat that
+  const showAssignee = !(ticketView === 'inbox' && tab === 'mine');
   const filtersRef = useRef<HTMLDivElement>(null);
   const filtersActive = unreadOnly;
   const viewCopy = ticketView === 'inbox' ? null : TICKET_VIEW_COPY[ticketView];
@@ -170,11 +173,12 @@ export const ConversationList: React.FC<ConversationListProps> = ({
         </div>
       ) : (
       <div className="px-4 flex items-center gap-4 border-b border-slate-200 text-[13px] shrink-0">
-        {TABS.map(({ key, label }) => {
+        {TABS.map(({ key, label, hint }) => {
           const active = tab === key;
           return (
             <button
               key={key}
+              title={hint}
               onClick={() => onTabChange(key)}
               className={`py-3 -mb-px border-b-2 whitespace-nowrap cursor-pointer transition-colors ${
                 active ? 'border-[#3440a8] text-[#3440a8] font-bold' : 'border-transparent text-slate-800 font-medium hover:text-black'
@@ -257,8 +261,17 @@ export const ConversationList: React.FC<ConversationListProps> = ({
               <User className="w-5 h-5" />
             </div>
             <div>
-              <p className="font-semibold text-slate-700 text-[13px]">No conversations</p>
-              <p className="text-xs text-slate-400 mt-0.5">Nothing matches this view yet.</p>
+              <p className="font-semibold text-slate-700 text-[13px]">
+                {tab === 'mine' && !search && !unreadOnly ? 'No tickets assigned to you' : 'No conversations'}
+              </p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                {tab === 'mine' && !search && !unreadOnly ? 'Tickets you take over or are assigned show up here.' : 'Nothing matches this view yet.'}
+              </p>
+              {tab === 'mine' && (
+                <button type="button" onClick={() => onTabChange('all')} className="mt-1.5 text-xs font-semibold text-[#3440a8] hover:underline cursor-pointer">
+                  View all team tickets
+                </button>
+              )}
             </div>
             <button
               onClick={canCreate ? onNewContact : undefined}
@@ -341,11 +354,15 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                       Opted out
                     </span>
                   )}
-                  {conv.handledBy === 'ai' && (
-                    <span className="px-1.5 py-0.5 rounded bg-[#eef0fb] text-[#3440a8] text-[11px] font-medium">AI</span>
-                  )}
-                  {conv.needsHuman && (
-                    <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 text-[11px] font-medium">Needs human</span>
+                  {/* Who owns the ticket, so the All tab shows the team's split at a glance */}
+                  {showAssignee && conv.hasConversation && !isTicketClosed(conv) && conv.assigneeId != null && (
+                    <span
+                      title={`Assigned to ${conv.assigneeId === currentUserId ? 'you' : conv.assigneeName || 'a teammate'}`}
+                      className="inline-flex items-center gap-1 max-w-[140px] px-1.5 py-0.5 rounded bg-[#eef0fb] text-[#3440a8] text-[11px] font-medium"
+                    >
+                      <User className="w-3 h-3 shrink-0" />
+                      <span className="truncate">{conv.assigneeId === currentUserId ? 'You' : conv.assigneeName || 'Teammate'}</span>
+                    </span>
                   )}
                   {conv.tags.map((tag) => (
                     <span key={tag} className="px-1.5 py-0.5 rounded bg-[#fde8ef] text-[#c0365f] text-[11px]">

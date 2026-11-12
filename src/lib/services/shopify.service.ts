@@ -81,7 +81,7 @@ const PRODUCT_DETAIL_QUERY = /* GraphQL */ `
   query ProductDetail($id: ID!) {
     product(id: $id) {
       id title handle status vendor productType description onlineStoreUrl
-      options { name position optionValues { name } }
+      options { name position optionValues { name hasVariants } }
       media(first: 20) { nodes { ... on MediaImage { image { url(transform: { maxWidth: 800 }) altText } } } }
       priceRangeV2 { minVariantPrice { currencyCode } }
       variants(first: 100) { nodes { ${VARIANT_FIELDS} } pageInfo { hasNextPage } }
@@ -358,13 +358,55 @@ export class ShopifyService {
 
   /* ---------------- Connection lifecycle ---------------- */
 
-  /** Connects another store, or re-authorizes one already connected (expired token, missing scopes) */
-  async startInstall(user: AuthUser, shop: string) {
+  /**
+   * Connects another store, or (reauthorize) re-authorizes one this workspace already has (expired token,
+   * missing scopes). A store that is still connected can't be added again until it's disconnected.
+   */
+  async startInstall(user: AuthUser, shop: string, { reauthorize = false }: { reauthorize?: boolean } = {}) {
+    await this.assertShopCanConnect(user.organizationId, shop, { allowSameWorkspace: reauthorize });
     return buildAuthorizeUrl({ organizationId: user.organizationId, userId: user.id, shop });
   }
 
-  /** OAuth callback: every check has to pass before a token is requested or stored. */
-  async completeInstall(searchParams: URLSearchParams, nonceCookie: string | undefined): Promise<ShopifyStore> {
+  /**
+   * Blocks connecting a shop that is live in another workspace (disconnecting there would revoke this workspace's
+   * access too), and, unless re-authorizing, one this workspace already has.
+   */
+  private async assertShopCanConnect(organizationId: number, shop: string, { allowSameWorkspace }: { allowSameWorkspace: boolean }) {
+    const live = await shopifyRepository.findActiveStoresByDomain(shop);
+
+    // 409 CONFLICT with `details.reason: "store_already_connected"` tells callers apart from other conflicts
+    if (live.some((s) => s.organizationId !== organizationId)) {
+      throw new AppError("CONFLICT", {
+        message: `${shop} is already connected to another UnoCX workspace. Disconnect it there first, then connect it here.`,
+        details: { shop, reason: "store_already_connected", connectedTo: "other_workspace" },
+        expected: true,
+      });
+    }
+
+    const own = live.find((s) => s.organizationId === organizationId);
+    if (own && !allowSameWorkspace) {
+      const label = own.name ? `${own.name} (${shop})` : shop;
+      throw new AppError("CONFLICT", {
+        message:
+          own.status === ShopifyStoreStatus.REAUTH_REQUIRED
+            ? `${label} is already connected to this workspace and needs to be reconnected. Open the store and use Reconnect store.`
+            : `${label} is already connected to this workspace. Disconnect it first to connect it again.`,
+        details: { shop, storeId: own.id, reason: "store_already_connected", connectedTo: "this_workspace" },
+        expected: true,
+      });
+    }
+    // This workspace's live row for the shop, if any: connecting it again is a re-authorization
+    return own ?? null;
+  }
+
+  /**
+   * OAuth callback: every check has to pass before a token is requested or stored.
+   * `reconnected` is true when the workspace already had this store (a re-authorization), false for a new connection.
+   */
+  async completeInstall(
+    searchParams: URLSearchParams,
+    nonceCookie: string | undefined
+  ): Promise<{ store: ShopifyStore; reconnected: boolean }> {
     const shop = searchParams.get("shop") || "";
     const code = searchParams.get("code") || "";
 
@@ -378,6 +420,9 @@ export class ShopifyService {
     if (!code) {
       throw new AppError("SHOPIFY_OAUTH_FAILED", { details: { reason: "missing_code" }, expected: true });
     }
+    // Checked again here: another workspace may have connected the shop while this one was on Shopify's approval
+    // page. This workspace's own row is fine (the install was allowed to start, e.g. a re-authorization).
+    const existing = await this.assertShopCanConnect(state.o, shop, { allowSameWorkspace: true });
 
     const token = await exchangeCodeForToken(shop, code);
     const missing = SHOPIFY_REQUIRED_SCOPES.filter((s) => !hasScope(token.scopes, s));
@@ -405,8 +450,9 @@ export class ShopifyService {
       scopes: token.scopes.join(","),
       connectedById: state.u,
     });
-    log.info("Shopify store connected", { organizationId: state.o, shop, storeId: store.id });
-    return store;
+    const reconnected = existing !== null;
+    log.info(reconnected ? "Shopify store re-authorized" : "Shopify store connected", { organizationId: state.o, shop, storeId: store.id });
+    return { store, reconnected };
   }
 
   /** Revokes and clears the token. Channel mappings and links stay, so reconnecting the shop restores them. */
@@ -671,7 +717,12 @@ export class ShopifyService {
         .map((m: Node) => ({ url: m.image.url, altText: m.image.altText ?? null })),
       options: [...(p.options ?? [])]
         .sort((a: Node, b: Node) => a.position - b.position)
-        .map((o: Node) => ({ name: o.name, values: (o.optionValues ?? []).map((v: Node) => v.name) })),
+        // A value can be defined on the product without any variant using it (e.g. a size not stocked): only offer real ones
+        .map((o: Node) => ({
+          name: o.name,
+          values: (o.optionValues ?? []).filter((v: Node) => v.hasVariants !== false).map((v: Node) => v.name),
+        }))
+        .filter((o: { values: string[] }) => o.values.length > 0),
       variants: (p.variants?.nodes ?? []).map(mapVariant),
       hasMoreVariants: Boolean(p.variants?.pageInfo?.hasNextPage),
       productUrl: p.onlineStoreUrl ?? null,

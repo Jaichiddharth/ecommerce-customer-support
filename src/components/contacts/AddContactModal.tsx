@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { UserPlus } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
+import { SearchableSelect } from '@/components/ui/SearchableSelect';
 import { apiClient } from '@/lib/api/client';
 import { notifyError } from '@/lib/api/notify';
 import { gooeyToast } from '@/components/ui/goey-toaster';
@@ -78,18 +79,22 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
             <label htmlFor="add-contact-number" className="block font-semibold text-slate-700 mb-1">
               WhatsApp number
             </label>
-            <select
+            <SearchableSelect
               id="add-contact-number"
-              value={channelId ?? ''}
-              onChange={(e) => setChannelId(Number(e.target.value))}
-              className={`${inputClass} bg-white cursor-pointer`}
-            >
-              {numbers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} {c.phoneNumber ? `(${c.phoneNumber})` : ''}
-                </option>
-              ))}
-            </select>
+              size="md"
+              value={channelId != null ? String(channelId) : null}
+              onChange={(v) => setChannelId(Number(v))}
+              aria-label="WhatsApp number"
+              placeholder="Choose a WhatsApp number"
+              searchPlaceholder="Search by name or number"
+              emptyText="No WhatsApp number matches your search"
+              options={numbers.map((c) => ({
+                value: String(c.id),
+                label: c.name,
+                description: c.phoneNumber ? formatPhone(c.phoneNumber) : undefined,
+                keywords: c.phoneNumber ?? undefined,
+              }))}
+            />
             <p className="text-[11px] text-slate-400 mt-1">The contact belongs to this number, with its own consent.</p>
           </div>
 

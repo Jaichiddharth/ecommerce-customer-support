@@ -359,7 +359,7 @@ const ManageConnectionCard: React.FC<{ store: ShopifyStoreWithChannels; onStoreC
   const reconnect = async () => {
     setBusy('reconnect');
     try {
-      const res = await apiClient.post('/api/integrations/shopify/install', { shop: store.shopDomain });
+      const res = await apiClient.post('/api/integrations/shopify/install', { shop: store.shopDomain, reauthorize: true });
       window.open(res.data.authorizeUrl, '_blank', 'noopener,noreferrer');
     } catch (err) {
       setBusy(null);

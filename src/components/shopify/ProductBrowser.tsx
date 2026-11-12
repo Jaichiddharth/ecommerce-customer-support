@@ -184,6 +184,23 @@ export const ProductBrowser: React.FC<ProductBrowserProps> = ({ storeScope, onSh
     if (idx >= 0) setImageIndex(idx);
   }, [product, selectedVariant]);
 
+  /**
+   * Options to show, with only the values some variant actually uses (the server drops unused ones too; this
+   * also covers stores that don't report it). With over 100 variants not all are loaded, so nothing is dropped.
+   */
+  const visibleOptions = useMemo(() => {
+    if (!product) return [];
+    if (product.hasMoreVariants) return product.options;
+    return product.options
+      .map((option) => ({
+        ...option,
+        values: option.values.filter((value) =>
+          product.variants.some((v) => v.selectedOptions.some((o) => o.name === option.name && o.value === value))
+        ),
+      }))
+      .filter((option) => option.values.length > 0);
+  }, [product]);
+
   const images = useMemo(() => {
     if (!product) return [];
     if (product.images.length > 0) return product.images;
@@ -332,6 +349,9 @@ export const ProductBrowser: React.FC<ProductBrowserProps> = ({ storeScope, onSh
       ? formatShopifyPrice(selectedVariant.compareAtPrice, product.currencyCode)
       : null;
   const variantUrl = product && selectedVariant ? sharedFor(product, selectedVariant).productUrl : null;
+  // Sending is blocked (24-hour window closed, opted out, …) and the reply box can't take the text either:
+  // the product can't be shared at all right now
+  const shareBlocked = Boolean(shareDisabledReason) && !onInsertText;
 
   return (
     <div className={`flex flex-col min-h-0 ${className}`}>
@@ -467,7 +487,13 @@ export const ProductBrowser: React.FC<ProductBrowserProps> = ({ storeScope, onSh
 
             {/* Options from Shopify (Size, Color, Material…) */}
             {showOptions &&
-              product.options.map((option) => (
+              visibleOptions.map((option) =>
+                // Nothing to choose: one value is a fact about the product, not a picker
+                option.values.length === 1 ? (
+                  <p key={option.name} className="text-[11.5px] text-slate-500">
+                    {option.name}: <span className="text-slate-800 font-medium">{option.values[0]}</span>
+                  </p>
+                ) : (
                 <div key={option.name}>
                   <p className="text-[11.5px] text-slate-500 mb-1">
                     {option.name}: <span className="text-slate-800 font-medium">{selection[option.name] ?? '—'}</span>
@@ -496,7 +522,8 @@ export const ProductBrowser: React.FC<ProductBrowserProps> = ({ storeScope, onSh
                     })}
                   </div>
                 </div>
-              ))}
+                )
+              )}
 
             {product.hasMoreVariants && (
               <p className="text-[11px] text-slate-400">Only the first 100 variants are listed for this product.</p>
@@ -509,10 +536,14 @@ export const ProductBrowser: React.FC<ProductBrowserProps> = ({ storeScope, onSh
             {/* Share */}
             {(onShare || onInsertText) && (
               <div className="pt-1 space-y-1.5">
+                {shareBlocked && (
+                  <p role="status" className="text-[11.5px] text-amber-700 bg-amber-50 rounded-lg px-2.5 py-2">{shareDisabledReason}</p>
+                )}
                 <button
                   type="button"
                   onClick={openReview}
-                  disabled={!selectedVariant}
+                  disabled={!selectedVariant || shareBlocked}
+                  title={shareBlocked ? shareDisabledReason ?? undefined : undefined}
                   className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#3440a8] hover:bg-[#2b3590] text-white text-[13px] font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <Send className="w-3.5 h-3.5" /> Share in conversation

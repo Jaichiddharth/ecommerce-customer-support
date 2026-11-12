@@ -80,7 +80,18 @@ export interface InboxChannel {
   optedOutCount?: number;
 }
 
-export type ListTab = 'all' | 'ai' | 'needs_human' | 'mine';
+/** Mine: open tickets assigned to the signed-in teammate (the default); All: every open ticket the team can see */
+export type ListTab = 'mine' | 'all';
+
+/** Row returned by GET /api/conversations/assignees: a teammate a ticket can be assigned to */
+export interface InboxTeammate {
+  id: number;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  role: string;
+  isOnline: boolean;
+}
 
 /**
  * Which tickets the list shows: the inbox (open tickets, split by the tabs), open tickets nobody owns yet,

@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, CircleHelp, Plus, Search } from 'lucide-react';
 import { ChannelIcon } from './inbox/ChannelIcon';
 import { Avatar } from './inbox/ConversationList';
-import { InboxConversation, contactIdentifier, conversationChannelType, formatPhone } from './inbox/inbox-types';
+import { InboxConversation, contactIdentifier, conversationChannelType } from './inbox/inbox-types';
 
 const MAX_RESULTS = 8;
 
@@ -146,27 +146,29 @@ interface TopBarProps {
   children: React.ReactNode;
   /** Usually a <ContactSearch /> */
   search?: React.ReactNode;
-  primaryNumber: string | null;
+  /** Live updates connected; when they drop, a "Reconnecting…" notice shows (new messages may be delayed) */
   isLive: boolean;
 }
 
-/** Page header shared by the inbox and settings: title on the left; search, live number, notifications and help on the right */
-export const TopBar: React.FC<TopBarProps> = ({ children, search, primaryNumber, isLive }) => (
+/**
+ * Page header shared by the inbox and settings: title on the left; search, notifications and help on the right.
+ * The WhatsApp number isn't repeated here: the inbox's scope chip and the Channels pane already show it.
+ */
+export const TopBar: React.FC<TopBarProps> = ({ children, search, isLive }) => (
   <header className="h-16 bg-white border-b border-slate-200 px-5 flex items-center justify-between gap-4 shrink-0">
     <div className="flex items-center gap-3 min-w-0">{children}</div>
 
     <div className="flex items-center gap-3 shrink-0">
       {search}
 
-      {primaryNumber && (
+      {!isLive && (
         <span
-          title={isLive ? 'WhatsApp number connected · live updates on' : 'Reconnecting live updates…'}
-          className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-[13px] font-medium ${
-            isLive ? 'bg-[#ebf8f0] border-[#c9ecd6] text-[#17803d]' : 'bg-amber-50 border-amber-200 text-amber-700'
-          }`}
+          role="status"
+          title="Live updates are reconnecting. New messages may take a moment to appear."
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border bg-amber-50 border-amber-200 text-amber-700 text-xs font-medium"
         >
-          <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-[#22a453]' : 'bg-amber-500'}`} />
-          {formatPhone(primaryNumber)}
+          <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+          Reconnecting…
         </span>
       )}
 

@@ -166,52 +166,51 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
               const active = single ? isChannelActive(single.id) : false;
               const contactTotal = items.reduce((sum, c) => sum + (c.contactCount ?? 0), 0);
               const optedOutTotal = items.reduce((sum, c) => sum + (c.optedOutCount ?? 0), 0);
-              const rowClass = `w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${
-                single ? `cursor-pointer ${active ? 'bg-[#eef0fb]' : 'hover:bg-slate-50'}` : 'cursor-default'
-              }`;
+              const rowClass = `w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${single ? `cursor-pointer ${active ? 'bg-[#eef0fb]' : 'hover:bg-slate-50'}` : 'cursor-default'
+                }`;
 
               const rowBody = (
                 <>
-                    <ChannelIcon type={type} size="md" />
-                    <span className="flex-1 min-w-0">
-                      <span className={`block truncate text-slate-900 ${active ? 'font-semibold' : 'font-medium'}`}>
-                        {CHANNEL_LABELS[type]}
-                      </span>
-                      {needsReconnect ? (
-                        <span className="block whitespace-nowrap text-[11px] text-orange-600">
-                          Token expired ·{' '}
-                          <span
-                            role="link"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onConnect(type);
-                            }}
-                            className="font-medium hover:underline"
-                          >
-                            Reconnect
-                          </span>
-                        </span>
-                      ) : isDisconnected ? (
-                        <span className="block whitespace-nowrap text-[11px] text-amber-600">
-                          Disconnected ·{' '}
-                          <span
-                            role="link"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onConnect(type);
-                            }}
-                            className="font-medium hover:underline"
-                          >
-                            Reconnect
-                          </span>
-                        </span>
-                      ) : (
-                        subtitle && <span className="block truncate text-[11px] text-slate-500">{subtitle}</span>
-                      )}
-                      {!isDisconnected && <ContactsLine total={contactTotal} optedOut={optedOutTotal} />}
+                  <ChannelIcon type={type} size="md" />
+                  <span className="flex-1 min-w-0">
+                    <span className={`block truncate text-slate-900 ${active ? 'font-semibold' : 'font-medium'}`}>
+                      {CHANNEL_LABELS[type]}
                     </span>
-                    {/* Several accounts: the contacts line already summarises them, unread shows on each account below */}
-                    {single && <UnreadBadge unread={unreadByChannel.get(single.id) ?? 0} />}
+                    {needsReconnect ? (
+                      <span className="block whitespace-nowrap text-[11px] text-orange-600">
+                        Token expired ·{' '}
+                        <span
+                          role="link"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onConnect(type);
+                          }}
+                          className="font-medium hover:underline"
+                        >
+                          Reconnect
+                        </span>
+                      </span>
+                    ) : isDisconnected ? (
+                      <span className="block whitespace-nowrap text-[11px] text-amber-600">
+                        Disconnected ·{' '}
+                        <span
+                          role="link"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onConnect(type);
+                          }}
+                          className="font-medium hover:underline"
+                        >
+                          Reconnect
+                        </span>
+                      </span>
+                    ) : (
+                      subtitle && <span className="block truncate text-[11px] text-slate-500">{subtitle}</span>
+                    )}
+                    {!isDisconnected && <ContactsLine total={contactTotal} optedOut={optedOutTotal} />}
+                  </span>
+                  {/* Several accounts: the contacts line already summarises them, unread shows on each account below */}
+                  {single && <UnreadBadge unread={unreadByChannel.get(single.id) ?? 0} />}
                 </>
               );
 
@@ -237,18 +236,16 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                             onClick={() => onSelectChannel(channel.id)}
                             aria-pressed={channelActive}
                             title={channel.lastError || (channel.status === 'disconnected' ? 'Channel is disconnected' : undefined)}
-                            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left cursor-pointer transition-colors ${
-                              channelActive ? 'bg-[#eef0fb]' : 'hover:bg-slate-50'
-                            }`}
+                            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left cursor-pointer transition-colors ${channelActive ? 'bg-[#eef0fb]' : 'hover:bg-slate-50'
+                              }`}
                           >
                             <span
-                              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                channel.status === 'disconnected'
+                              className={`w-1.5 h-1.5 rounded-full shrink-0 ${channel.status === 'disconnected'
                                   ? 'bg-amber-500'
                                   : isChannelHealthy(channel)
-                                  ? 'bg-emerald-500'
-                                  : 'bg-orange-500'
-                              }`}
+                                    ? 'bg-emerald-500'
+                                    : 'bg-orange-500'
+                                }`}
                             />
                             <span className="flex-1 min-w-0">
                               <span className={`block truncate text-slate-800 ${channelActive ? 'font-semibold' : ''}`}>
@@ -274,34 +271,7 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
           </div>
         )}
 
-        {/* Available to connect */}
-        {available.length > 0 && (
-          <>
-            <div className="mt-5 mb-1.5 px-2.5 text-[11px] font-bold text-black tracking-wider">
-              AVAILABLE TO CONNECT
-            </div>
-            <div className="space-y-0.5">
-              {available.map((type) => (
-                <div key={type} className="flex items-center gap-2.5 px-2.5 py-2">
-                  <ChannelIcon type={type} size="md" className={type === 'email' ? '' : 'opacity-90'} />
-                  <span className="flex-1 min-w-0 truncate text-black font-medium">{CHANNEL_LABELS[type]}</span>
-                  <button
-                    onClick={canCreate ? () => onConnect(type) : undefined}
-                    disabled={!canCreate}
-                    title={!canCreate ? 'You do not have permission to connect channels' : undefined}
-                    className={`px-2 py-1 rounded-md border text-[12px] font-semibold shrink-0 transition-colors ${
-                      canCreate
-                        ? 'border-slate-300 text-[#3440a8] hover:bg-[#eef0fb] cursor-pointer'
-                        : 'border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed opacity-50'
-                    }`}
-                  >
-                    Connect
-                  </button>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
+
 
         {/* Ticket views of the selected channel; picking a channel above goes back to its inbox */}
         {groups.length > 0 && (
@@ -318,14 +288,12 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                     onClick={() => onSelectTicketView(active ? 'inbox' : key)}
                     aria-pressed={active}
                     title={hint}
-                    className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left cursor-pointer transition-colors ${
-                      active ? 'bg-[#eef0fb]' : 'hover:bg-slate-50'
-                    }`}
+                    className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left cursor-pointer transition-colors ${active ? 'bg-[#eef0fb]' : 'hover:bg-slate-50'
+                      }`}
                   >
                     <span
-                      className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                        active ? 'bg-white text-[#3440a8]' : 'bg-slate-100 text-slate-600'
-                      }`}
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${active ? 'bg-white text-[#3440a8]' : 'bg-slate-100 text-slate-600'
+                        }`}
                     >
                       <Icon className="w-4 h-4" />
                     </span>
@@ -333,15 +301,42 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
                       {label}
                     </span>
                     <span
-                      className={`min-w-5 h-5 px-1.5 rounded-full text-[11px] font-semibold flex items-center justify-center shrink-0 ${
-                        key === 'unassigned' && count > 0 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'
-                      }`}
+                      className={`min-w-5 h-5 px-1.5 rounded-full text-[11px] font-semibold flex items-center justify-center shrink-0 ${key === 'unassigned' && count > 0 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'
+                        }`}
                     >
                       {nf.format(count)}
                     </span>
                   </button>
                 );
               })}
+            </div>
+          </>
+        )}
+
+        {/* Available to connect */}
+        {available.length > 0 && (
+          <>
+            <div className="mt-5 mb-1.5 px-2.5 text-[11px] font-bold text-black tracking-wider">
+              AVAILABLE TO CONNECT
+            </div>
+            <div className="space-y-0.5">
+              {available.map((type) => (
+                <div key={type} className="flex items-center gap-2.5 px-2.5 py-2">
+                  <ChannelIcon type={type} size="md" className={type === 'email' ? '' : 'opacity-90'} />
+                  <span className="flex-1 min-w-0 truncate text-black font-medium">{CHANNEL_LABELS[type]}</span>
+                  <button
+                    onClick={canCreate ? () => onConnect(type) : undefined}
+                    disabled={!canCreate}
+                    title={!canCreate ? 'You do not have permission to connect channels' : undefined}
+                    className={`px-2 py-1 rounded-md border text-[12px] font-semibold shrink-0 transition-colors ${canCreate
+                        ? 'border-slate-300 text-[#3440a8] hover:bg-[#eef0fb] cursor-pointer'
+                        : 'border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed opacity-50'
+                      }`}
+                  >
+                    Connect
+                  </button>
+                </div>
+              ))}
             </div>
           </>
         )}
@@ -353,11 +348,10 @@ export const ChannelsPane: React.FC<ChannelsPaneProps> = ({
           onClick={canCreate ? () => onConnect('') : undefined}
           disabled={!canCreate}
           title={!canCreate ? 'You do not have permission to connect channels' : undefined}
-          className={`w-full flex items-center justify-center gap-1.5 py-2.5 rounded-lg border border-dashed text-[13px] font-medium transition-colors ${
-            canCreate
+          className={`w-full flex items-center justify-center gap-1.5 py-2.5 rounded-lg border border-dashed text-[13px] font-medium transition-colors ${canCreate
               ? 'border-slate-300 text-[#3440a8] hover:bg-[#eef0fb] cursor-pointer'
               : 'border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed opacity-60'
-          }`}
+            }`}
         >
           <Plus className="w-4 h-4" />
           Connect new channel
