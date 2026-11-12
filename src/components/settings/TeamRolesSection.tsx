@@ -9,31 +9,19 @@ import type { WorkspaceTrial } from '@/lib/trial';
 import {
   Plus,
   Users,
-  MoreHorizontal,
   Lock,
   Check,
   Shield,
-  Mail,
-  UserCheck,
-  Trash2,
-  Edit3,
   Loader2,
   Sparkles,
-  ChevronRight,
-  UserX,
   AlertCircle,
-  RefreshCw,
   Copy,
   Clock,
-  ArrowUpRight,
-  Store,
-  Globe,
   Sliders,
   Send,
   Zap,
   CheckCircle2,
   X,
-  ChevronDown,
   LayoutGrid,
   Inbox,
   Bot,
@@ -43,6 +31,8 @@ import {
   Plug,
   Settings,
   RotateCcw,
+  Search,
+  Trash2,
 } from 'lucide-react';
 
 export interface PageCrudPermissions {
@@ -155,6 +145,174 @@ export const PERMISSION_AREAS: PermissionAreaConfig[] = [
     },
   },
 ];
+
+export type RoleAccessLevel = 'full' | 'edit' | 'view' | 'none';
+
+export interface RoleOverviewAreaConfig {
+  key: string;
+  label: string;
+  subtitle: string;
+  defaults: {
+    OWNER: RoleAccessLevel;
+    ADMIN: RoleAccessLevel;
+    AGENT: RoleAccessLevel;
+    VIEWER: RoleAccessLevel;
+  };
+  notes?: Partial<Record<'OWNER' | 'ADMIN' | 'AGENT' | 'VIEWER', string>>;
+}
+
+export const ROLE_OVERVIEW_AREAS: RoleOverviewAreaConfig[] = [
+  {
+    key: 'inbox',
+    label: 'Conversations',
+    subtitle: 'Inbox, replies, assignment',
+    defaults: { OWNER: 'full', ADMIN: 'full', AGENT: 'edit', VIEWER: 'view' },
+    notes: { AGENT: 'Assigned and own teams' },
+  },
+  {
+    key: 'contacts',
+    label: 'Contacts',
+    subtitle: 'Profiles, tags, consent',
+    defaults: { OWNER: 'full', ADMIN: 'full', AGENT: 'edit', VIEWER: 'view' },
+  },
+  {
+    key: 'broadcasts',
+    label: 'Campaigns',
+    subtitle: 'Broadcasts and segments',
+    defaults: { OWNER: 'full', ADMIN: 'full', AGENT: 'view', VIEWER: 'view' },
+  },
+  {
+    key: 'templates',
+    label: 'Templates',
+    subtitle: 'WhatsApp message templates',
+    defaults: { OWNER: 'full', ADMIN: 'full', AGENT: 'view', VIEWER: 'none' },
+  },
+  {
+    key: 'flows',
+    label: 'Flows',
+    subtitle: 'Flow builder and automations',
+    defaults: { OWNER: 'full', ADMIN: 'full', AGENT: 'none', VIEWER: 'none' },
+  },
+  {
+    key: 'ai',
+    label: 'AI agent',
+    subtitle: 'Knowledge, actions, guardrails',
+    defaults: { OWNER: 'full', ADMIN: 'full', AGENT: 'view', VIEWER: 'none' },
+    notes: { AGENT: 'Can take over chats' },
+  },
+  {
+    key: 'integrations',
+    label: 'Catalog and payments',
+    subtitle: 'WhatsApp catalog, payment setup',
+    defaults: { OWNER: 'full', ADMIN: 'full', AGENT: 'view', VIEWER: 'none' },
+  },
+  {
+    key: 'analytics',
+    label: 'Analytics',
+    subtitle: 'Reports and exports',
+    defaults: { OWNER: 'full', ADMIN: 'full', AGENT: 'view', VIEWER: 'view' },
+    notes: { AGENT: 'Own and team stats' },
+  },
+  {
+    key: 'team',
+    label: 'Team and roles',
+    subtitle: 'Invites, roles, permissions',
+    defaults: { OWNER: 'full', ADMIN: 'edit', AGENT: 'none', VIEWER: 'none' },
+    notes: { ADMIN: "Can't change Owners" },
+  },
+  {
+    key: 'settings',
+    label: 'Channels and settings',
+    subtitle: 'Numbers, routing, hours, API',
+    defaults: { OWNER: 'full', ADMIN: 'full', AGENT: 'none', VIEWER: 'none' },
+  },
+  {
+    key: 'billing',
+    label: 'Billing',
+    subtitle: 'Plan, invoices, payment method',
+    defaults: { OWNER: 'full', ADMIN: 'view', AGENT: 'none', VIEWER: 'none' },
+  },
+];
+
+export type EditableRoleDefaultsMap = Record<string, Record<'ADMIN' | 'AGENT' | 'VIEWER', RoleAccessLevel>>;
+
+export function getInitialRoleOverviewDefaults(): EditableRoleDefaultsMap {
+  const map: EditableRoleDefaultsMap = {};
+  ROLE_OVERVIEW_AREAS.forEach((area) => {
+    map[area.key] = {
+      ADMIN: area.defaults.ADMIN,
+      AGENT: area.defaults.AGENT,
+      VIEWER: area.defaults.VIEWER,
+    };
+  });
+  return map;
+}
+
+export function accessLevelToCrud(level: RoleAccessLevel): PageCrudPermissions {
+  if (level === 'full') return { read: true, create: true, update: true, delete: true };
+  if (level === 'edit') return { read: true, create: true, update: true, delete: false };
+  if (level === 'view') return { read: true, create: false, update: false, delete: false };
+  return { read: false, create: false, update: false, delete: false };
+}
+
+export function crudToAccessLevel(crud: PageCrudPermissions): RoleAccessLevel {
+  if (crud.read && crud.create && crud.update && crud.delete) return 'full';
+  if (crud.create || crud.update || crud.delete) return 'edit';
+  if (crud.read) return 'view';
+  return 'none';
+}
+
+export type RoleKey = 'OWNER' | 'ADMIN' | 'AGENT' | 'VIEWER';
+export type RoleCrudDefaultsMap = Record<RoleKey, Record<string, PageCrudPermissions>>;
+export type RoleDescriptionsMap = Record<RoleKey, string>;
+
+export function getInitialRoleCrudDefaults(): RoleCrudDefaultsMap {
+  const result: RoleCrudDefaultsMap = { OWNER: {}, ADMIN: {}, AGENT: {}, VIEWER: {} };
+  (['OWNER', 'ADMIN', 'AGENT', 'VIEWER'] as RoleKey[]).forEach((role) => {
+    ROLE_OVERVIEW_AREAS.forEach((area) => {
+      result[role][area.key] = accessLevelToCrud(area.defaults[role]);
+    });
+  });
+  return result;
+}
+
+export function getInitialRoleDescriptions(): RoleDescriptionsMap {
+  return {
+    OWNER: 'Everything, including billing and deleting the workspace.',
+    ADMIN: 'Runs the workspace: channels, flows, AI agent, team. Billing is view-only.',
+    AGENT: 'Answers customers in their teams and languages. Sees campaigns and reports.',
+    VIEWER: 'Read-only access to conversations, contacts and reports.',
+  };
+}
+
+function RoleAccessBadge({ level }: { level: RoleAccessLevel }) {
+  if (level === 'full') {
+    return (
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#1e2a78] text-white">
+        Full
+      </span>
+    );
+  }
+  if (level === 'edit') {
+    return (
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-[#1e2a78]">
+        Edit
+      </span>
+    );
+  }
+  if (level === 'view') {
+    return (
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700">
+        View
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium border border-dashed border-slate-300 text-slate-400 bg-white">
+      No access
+    </span>
+  );
+}
 
 export function getDefaultPagePermissions(role: string): Record<string, PageCrudPermissions> {
   const norm = (role || 'AGENT').toUpperCase();
@@ -413,6 +571,111 @@ const PERMISSION_ROWS = [
 const AVAILABLE_TEAMS = ['All', 'Support', 'Sales', 'Wholesale', 'Marketing', 'Billing'];
 const AVAILABLE_LANGUAGES = ['EN', 'TA', 'HI', 'TE', 'KN', 'ML', 'ES', 'FR'];
 
+const LANGUAGE_LABELS: Record<string, string> = {
+  EN: 'English',
+  TA: 'Tamil',
+  HI: 'Hindi',
+  TE: 'Telugu',
+  KN: 'Kannada',
+  ML: 'Malayalam',
+  ES: 'Spanish',
+  FR: 'French',
+};
+
+function formatLanguageNames(languages?: string[]): string {
+  const list = languages && languages.length > 0 ? languages : ['EN'];
+  return list.map((code) => LANGUAGE_LABELS[code.toUpperCase()] || code).join(', ');
+}
+
+function formatStoresLabel(memberStores: string[] | undefined, allStores: ConnectedStore[]): string {
+  if (!memberStores || memberStores.length === 0 || memberStores.includes('All')) {
+    return 'All stores';
+  }
+  return memberStores
+    .map((domain) => allStores.find((s) => s.domain === domain)?.name || domain)
+    .join(', ');
+}
+
+function joinNaturalList(items: string[]): string {
+  if (items.length === 0) return '';
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+function formatRolePermissionSummary(
+  role: string,
+  current: Record<string, PageCrudPermissions>,
+  totalChanges: number
+): string {
+  const roleUpper = (role || 'AGENT').toUpperCase();
+  const roleLabel = roleUpper.charAt(0) + roleUpper.slice(1).toLowerCase();
+
+  if (roleUpper === 'OWNER') {
+    return 'Everything, including billing and deleting the workspace';
+  }
+
+  if (totalChanges === 0) {
+    if (roleUpper === 'ADMIN') {
+      return 'Runs the workspace: channels, flows, AI agent, team. Billing is view-only';
+    }
+    if (roleUpper === 'VIEWER') {
+      return 'Read-only access to conversations, contacts and reports';
+    }
+    return 'Answers customers in their teams and languages. Sees campaigns and reports';
+  }
+
+  const defaults = getDefaultPagePermissions(roleUpper);
+  const addedGroups = new Map<string, string[]>();
+  const removedGroups = new Map<string, string[]>();
+
+  PERMISSION_AREAS.forEach((area) => {
+    const cur = current[area.key] || { create: false, read: false, update: false, delete: false };
+    const def = defaults[area.key] || { create: false, read: false, update: false, delete: false };
+
+    const addedActions: string[] = [];
+    const removedActions: string[] = [];
+
+    if (cur.read && !def.read) addedActions.push('view');
+    if (cur.create && !def.create) addedActions.push('create');
+    if (cur.update && !def.update) addedActions.push('edit');
+    if (cur.delete && !def.delete) addedActions.push('delete');
+
+    if (!cur.read && def.read) removedActions.push('view');
+    if (!cur.create && def.create) removedActions.push('create');
+    if (!cur.update && def.update) removedActions.push('edit');
+    if (!cur.delete && def.delete) removedActions.push('delete');
+
+    if (addedActions.length > 0) {
+      const actionKey = joinNaturalList(addedActions);
+      const existing = addedGroups.get(actionKey) || [];
+      addedGroups.set(actionKey, [...existing, area.label]);
+    }
+
+    if (removedActions.length > 0) {
+      const actionKey = joinNaturalList(removedActions);
+      const existing = removedGroups.get(actionKey) || [];
+      removedGroups.set(actionKey, [...existing, area.label]);
+    }
+  });
+
+  const parts: string[] = [];
+  if (addedGroups.size > 0) {
+    const addedPhrases = Array.from(addedGroups.entries()).map(
+      ([actions, areas]) => `${actions} ${joinNaturalList(areas)}`
+    );
+    parts.push(`plus ${joinNaturalList(addedPhrases)}`);
+  }
+  if (removedGroups.size > 0) {
+    const removedPhrases = Array.from(removedGroups.entries()).map(
+      ([actions, areas]) => `${actions} ${joinNaturalList(areas)}`
+    );
+    parts.push(`without ${joinNaturalList(removedPhrases)}`);
+  }
+
+  return `${roleLabel} defaults, ${parts.join(', ')}`;
+}
+
 function getInitials(name: string) {
   if (!name) return 'U';
   const parts = name.trim().split(/\s+/);
@@ -422,12 +685,12 @@ function getInitials(name: string) {
 
 function getAvatarColor(name: string) {
   const colors = [
-    'bg-indigo-50 text-indigo-700 border-indigo-200',
-    'bg-emerald-50 text-emerald-700 border-emerald-200',
-    'bg-amber-50 text-amber-800 border-amber-200',
-    'bg-rose-50 text-rose-700 border-rose-200',
-    'bg-sky-50 text-sky-700 border-sky-200',
-    'bg-purple-50 text-purple-700 border-purple-200',
+    'bg-emerald-600 text-white',
+    'bg-indigo-100 text-indigo-700',
+    'bg-rose-600 text-white',
+    'bg-amber-500 text-white',
+    'bg-sky-600 text-white',
+    'bg-purple-600 text-white',
   ];
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
@@ -903,33 +1166,26 @@ export const TeamRolesSection: React.FC = () => {
     plan: 'Growth',
     available: 9,
   });
-  const [permissions, setPermissions] = useState<RolePermissionsMatrix | null>(null);
   const [currentRole, setCurrentRole] = useState<string>('ADMIN');
   const [isLoading, setIsLoading] = useState(true);
-  const [isSavingPermissions, setIsSavingPermissions] = useState(false);
   const [trial, setTrial] = useState<WorkspaceTrial | null>(null);
 
-  // Tabs state: 'members' | 'invitations'
+  // Tabs & filters state
   const [activeTab, setActiveTab] = useState<'members' | 'invitations'>('members');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState<string>('ALL');
 
   // Modals state
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [isUpgradeOpen, setIsUpgradeOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isEditReadOnly, setIsEditReadOnly] = useState(false);
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
-  const [activeMenuMemberId, setActiveMenuMemberId] = useState<number | null>(null);
-  const [activeInviteMenuId, setActiveInviteMenuId] = useState<number | null>(null);
-
-  // Page CRUD permissions state
-  const [expandedMemberId, setExpandedMemberId] = useState<number | null>(null);
-  const [memberPermissionsDraft, setMemberPermissionsDraft] = useState<Record<string, PageCrudPermissions>>({});
-  const [isSavingMemberPermissions, setIsSavingMemberPermissions] = useState(false);
-  const [permissionsModalMember, setPermissionsModalMember] = useState<TeamMember | null>(null);
 
   // Multi-email invite form state
   const [emailInput, setEmailInput] = useState('');
   const [emailChips, setEmailChips] = useState<string[]>([]);
-  const [inviteRole, setInviteRole] = useState<'ADMIN' | 'AGENT' | 'VIEWER'>('AGENT');
+  const [inviteRole, setInviteRole] = useState<'OWNER' | 'ADMIN' | 'AGENT' | 'VIEWER'>('AGENT');
   const [useCustomPermissions, setUseCustomPermissions] = useState(false);
   const [customPermissions, setCustomPermissions] = useState<Record<string, boolean>>({
     view_and_reply_chats: true,
@@ -961,6 +1217,17 @@ export const TeamRolesSection: React.FC = () => {
   // Upgrading state
   const [isUpgrading, setIsUpgrading] = useState(false);
 
+  // Role overview ("What each role can do") & Role defaults page state
+  const [orgPermissions, setOrgPermissions] = useState<Record<string, any> | null>(null);
+  const [roleOverviewDefaults, setRoleOverviewDefaults] = useState<EditableRoleDefaultsMap>(() => getInitialRoleOverviewDefaults());
+  const [roleCrudDefaults, setRoleCrudDefaults] = useState<RoleCrudDefaultsMap>(() => getInitialRoleCrudDefaults());
+  const [roleDescriptions, setRoleDescriptions] = useState<RoleDescriptionsMap>(() => getInitialRoleDescriptions());
+  const [isEditDefaultsOpen, setIsEditDefaultsOpen] = useState(false);
+  const [selectedDefaultsRole, setSelectedDefaultsRole] = useState<RoleKey>('AGENT');
+  const [draftRoleCrudDefaults, setDraftRoleCrudDefaults] = useState<RoleCrudDefaultsMap>(() => getInitialRoleCrudDefaults());
+  const [draftRoleDescriptions, setDraftRoleDescriptions] = useState<RoleDescriptionsMap>(() => getInitialRoleDescriptions());
+  const [isSavingRoleDefaults, setIsSavingRoleDefaults] = useState(false);
+
   const fetchTeamData = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -971,8 +1238,40 @@ export const TeamRolesSection: React.FC = () => {
         if (res.data.stores) setStores(res.data.stores);
         if (res.data.seats) setSeats(res.data.seats);
         if (res.data.trial) setTrial(res.data.trial);
-        if (res.data.permissions) setPermissions(res.data.permissions);
         if (res.data.currentRole) setCurrentRole(res.data.currentRole);
+        if (res.data.permissions) {
+          setOrgPermissions(res.data.permissions);
+          if (res.data.permissions.pageDefaults) {
+            const base = getInitialRoleOverviewDefaults();
+            const saved = res.data.permissions.pageDefaults as EditableRoleDefaultsMap;
+            const merged: EditableRoleDefaultsMap = {};
+            Object.keys(base).forEach((k) => {
+              merged[k] = {
+                ADMIN: saved[k]?.ADMIN || base[k].ADMIN,
+                AGENT: saved[k]?.AGENT || base[k].AGENT,
+                VIEWER: saved[k]?.VIEWER || base[k].VIEWER,
+              };
+            });
+            setRoleOverviewDefaults(merged);
+          }
+          if (res.data.permissions.roleCrudDefaults) {
+            const baseCrud = getInitialRoleCrudDefaults();
+            const savedCrud = res.data.permissions.roleCrudDefaults as Partial<RoleCrudDefaultsMap>;
+            const mergedCrud: RoleCrudDefaultsMap = {
+              OWNER: baseCrud.OWNER,
+              ADMIN: { ...baseCrud.ADMIN, ...(savedCrud.ADMIN || {}) },
+              AGENT: { ...baseCrud.AGENT, ...(savedCrud.AGENT || {}) },
+              VIEWER: { ...baseCrud.VIEWER, ...(savedCrud.VIEWER || {}) },
+            };
+            setRoleCrudDefaults(mergedCrud);
+          }
+          if (res.data.permissions.roleDescriptions) {
+            setRoleDescriptions({
+              ...getInitialRoleDescriptions(),
+              ...res.data.permissions.roleDescriptions,
+            });
+          }
+        }
       }
     } catch (err: any) {
       gooeyToast.error('Failed to load team and roles', { description: err.message });
@@ -981,19 +1280,72 @@ export const TeamRolesSection: React.FC = () => {
     }
   }, []);
 
+  const handleOpenEditDefaults = () => {
+    const crudCopy: RoleCrudDefaultsMap = { OWNER: {}, ADMIN: {}, AGENT: {}, VIEWER: {} };
+    (['OWNER', 'ADMIN', 'AGENT', 'VIEWER'] as RoleKey[]).forEach((r) => {
+      ROLE_OVERVIEW_AREAS.forEach((a) => {
+        const cur = roleCrudDefaults[r]?.[a.key] || accessLevelToCrud(a.defaults[r]);
+        crudCopy[r][a.key] = { ...cur };
+      });
+    });
+    setDraftRoleCrudDefaults(crudCopy);
+    setDraftRoleDescriptions({ ...roleDescriptions });
+    setSelectedDefaultsRole('AGENT');
+    setIsEditDefaultsOpen(true);
+  };
+
+  const handleSaveRoleDefaults = async () => {
+    try {
+      setIsSavingRoleDefaults(true);
+      const nextPageDefaults: EditableRoleDefaultsMap = {};
+      ROLE_OVERVIEW_AREAS.forEach((area) => {
+        nextPageDefaults[area.key] = {
+          ADMIN: crudToAccessLevel(draftRoleCrudDefaults.ADMIN[area.key] || accessLevelToCrud(area.defaults.ADMIN)),
+          AGENT: crudToAccessLevel(draftRoleCrudDefaults.AGENT[area.key] || accessLevelToCrud(area.defaults.AGENT)),
+          VIEWER: crudToAccessLevel(draftRoleCrudDefaults.VIEWER[area.key] || accessLevelToCrud(area.defaults.VIEWER)),
+        };
+      });
+
+      const payload = {
+        ...(orgPermissions || {}),
+        pageDefaults: nextPageDefaults,
+        roleCrudDefaults: draftRoleCrudDefaults,
+        roleDescriptions: draftRoleDescriptions,
+      };
+      const res = await apiClient.patch('/api/team/permissions', { permissions: payload });
+      if (res.data?.success) {
+        setRoleOverviewDefaults(nextPageDefaults);
+        setRoleCrudDefaults(draftRoleCrudDefaults);
+        setRoleDescriptions(draftRoleDescriptions);
+        if (res.data.permissions) setOrgPermissions(res.data.permissions);
+        setIsEditDefaultsOpen(false);
+        gooeyToast.success('Role defaults updated');
+      }
+    } catch (err: any) {
+      gooeyToast.error('Failed to update role defaults', {
+        description: err.response?.data?.message || err.message,
+      });
+    } finally {
+      setIsSavingRoleDefaults(false);
+    }
+  };
+
+  const handleResetSelectedRoleDefaults = () => {
+    const initialCrud = getInitialRoleCrudDefaults();
+    const initialDesc = getInitialRoleDescriptions();
+    setDraftRoleCrudDefaults((prev) => ({
+      ...prev,
+      [selectedDefaultsRole]: initialCrud[selectedDefaultsRole],
+    }));
+    setDraftRoleDescriptions((prev) => ({
+      ...prev,
+      [selectedDefaultsRole]: initialDesc[selectedDefaultsRole],
+    }));
+  };
+
   useEffect(() => {
     fetchTeamData();
   }, [fetchTeamData]);
-
-  // Close menus on outside click
-  useEffect(() => {
-    const handleClickOutside = () => {
-      setActiveMenuMemberId(null);
-      setActiveInviteMenuId(null);
-    };
-    window.addEventListener('click', handleClickOutside);
-    return () => window.removeEventListener('click', handleClickOutside);
-  }, []);
 
   const { hasPermission, dbUser, refreshDbUser, can } = useAuth();
   const canManageBilling = hasPermission('manage_billing_and_integrations');
@@ -1193,8 +1545,8 @@ export const TeamRolesSection: React.FC = () => {
     }
   };
 
-  // Open edit modal for member
-  const handleOpenEdit = (member: TeamMember) => {
+  // Open edit or view modal for member
+  const handleOpenEdit = (member: TeamMember, readOnly = false) => {
     setEditingMember(member);
     setEditName(member.name);
     setEditRole(member.role);
@@ -1204,13 +1556,14 @@ export const TeamRolesSection: React.FC = () => {
     setEditStatus(member.status || 'active');
     setEditTab('role');
     setEditPermissions(getMemberPagePermissions(member));
+    setIsEditReadOnly(readOnly);
     setIsEditOpen(true);
   };
 
   // Handle saving edited member
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingMember) return;
+    if (!editingMember || isEditReadOnly) return;
 
     try {
       setIsSubmittingEdit(true);
@@ -1262,13 +1615,25 @@ export const TeamRolesSection: React.FC = () => {
   }, [editingMember]);
 
   const isEditingMemberOwner = editingMember?.role?.toUpperCase() === 'OWNER';
-  const isEditingMemberAdmin = editingMember?.role?.toUpperCase() === 'ADMIN';
   const isEditingSelf = Boolean(
     dbUser && editingMember && (editingMember.id === dbUser.id || (editingMember.email && dbUser.email && editingMember.email.toLowerCase() === dbUser.email.toLowerCase()))
   );
 
+  const ownerCount = useMemo(
+    () => members.filter((m) => (m.role || '').toUpperCase() === 'OWNER').length,
+    [members]
+  );
+
   // Handle removing a member
   const handleDeleteMember = async (member: TeamMember) => {
+    const isTargetOwner = (member.role || '').toUpperCase() === 'OWNER';
+    if (isTargetOwner && ownerCount <= 1) {
+      gooeyToast.error('Cannot remove the only Owner', {
+        description: 'At least one Owner is required per workspace.',
+      });
+      return;
+    }
+
     if (!confirm(`Are you sure you want to remove ${member.name} from the workspace?`)) return;
 
     try {
@@ -1282,105 +1647,31 @@ export const TeamRolesSection: React.FC = () => {
     }
   };
 
-  // Handle toggling expandable member permissions row
-  const handleToggleMemberPermissions = (member: TeamMember) => {
-    if (expandedMemberId === member.id) {
-      setExpandedMemberId(null);
-    } else {
-      setExpandedMemberId(member.id);
-      setMemberPermissionsDraft(getMemberPagePermissions(member));
-    }
-  };
+  const filteredMembers = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return members.filter((member) => {
+      const roleNormalized = (member.role || 'AGENT').toUpperCase();
+      if (roleFilter !== 'ALL' && roleNormalized !== roleFilter) return false;
+      if (!q) return true;
+      return (
+        (member.name || '').toLowerCase().includes(q) ||
+        (member.email || '').toLowerCase().includes(q)
+      );
+    });
+  }, [members, searchQuery, roleFilter]);
 
-  // Handle opening dedicated permissions modal
-  const handleOpenPermissionsModal = (member: TeamMember) => {
-    setPermissionsModalMember(member);
-    setMemberPermissionsDraft(getMemberPagePermissions(member));
-  };
-
-  // Handle saving member's page CRUD permissions
-  const handleSaveMemberPermissions = async (
-    member: TeamMember,
-    permissionsToSave: Record<string, PageCrudPermissions>
-  ) => {
-    try {
-      setIsSavingMemberPermissions(true);
-      const existingCustom = (member.customPermissions as Record<string, any>) || {};
-      const updatedCustom = {
-        ...existingCustom,
-        pagePermissions: permissionsToSave,
-      };
-
-      const res = await apiClient.patch(`/api/team/${member.id}`, {
-        customPermissions: updatedCustom,
-      });
-
-      if (res.data?.success) {
-        gooeyToast.success(`Page permissions saved for ${member.name}`);
-        if (dbUser && (member.id === dbUser.id || member.email === dbUser.email)) {
-          refreshDbUser();
-        }
-        setMembers((prev) =>
-          prev.map((m) =>
-            m.id === member.id
-              ? { ...m, customPermissions: updatedCustom }
-              : m
-          )
-        );
-      }
-    } catch (err: any) {
-      gooeyToast.error('Failed to save permissions', {
-        description: err.response?.data?.message || err.message,
-      });
-    } finally {
-      setIsSavingMemberPermissions(false);
-    }
-  };
-
-  // Handle toggling permission matrix checkboxes
-  const handleTogglePermission = async (role: 'ADMIN' | 'AGENT' | 'VIEWER', permissionKey: string) => {
-    if (!canManage || !permissions) return;
-
-    const currentVal = Boolean(permissions[role]?.[permissionKey]);
-    const updatedPermissions: RolePermissionsMatrix = {
-      ...permissions,
-      [role]: {
-        ...permissions[role],
-        [permissionKey]: !currentVal,
-      },
-    };
-
-    setPermissions(updatedPermissions);
-
-    try {
-      setIsSavingPermissions(true);
-      await apiClient.patch('/api/team/permissions', { permissions: updatedPermissions });
-      gooeyToast.success('Permissions updated');
-    } catch (err: any) {
-      gooeyToast.error('Failed to update permissions', { description: err.message });
-      setPermissions(permissions);
-    } finally {
-      setIsSavingPermissions(false);
-    }
-  };
-
-  // Handle resetting permissions to defaults
-  const handleResetPermissions = async () => {
-    if (!canManage) return;
-    if (!confirm('Reset all role permissions to standard defaults?')) return;
-    try {
-      setIsSavingPermissions(true);
-      const res = await apiClient.patch('/api/team/permissions', { reset: true });
-      if (res.data?.success && res.data.permissions) {
-        setPermissions(res.data.permissions);
-        gooeyToast.success('Role permissions reset to defaults');
-      }
-    } catch (err: any) {
-      gooeyToast.error('Failed to reset permissions', { description: err.message });
-    } finally {
-      setIsSavingPermissions(false);
-    }
-  };
+  const filteredInvitations = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return pendingInvitations.filter((inv) => {
+      const roleNormalized = (inv.role || 'AGENT').toUpperCase();
+      if (roleFilter !== 'ALL' && roleNormalized !== roleFilter) return false;
+      if (!q) return true;
+      return (
+        (inv.email || '').toLowerCase().includes(q) ||
+        (inv.name || '').toLowerCase().includes(q)
+      );
+    });
+  }, [pendingInvitations, searchQuery, roleFilter]);
 
   const isAgentOrViewer = actorRoleUpper === 'AGENT' || actorRoleUpper === 'VIEWER';
 
@@ -1404,18 +1695,306 @@ export const TeamRolesSection: React.FC = () => {
     );
   }
 
-  return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 space-y-6 pb-16 font-sans">
-      {/* Top Header & Breadcrumb */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium mb-1">
-            <span>Settings</span>
-            <ChevronRight className="w-3.5 h-3.5" />
-            <span className="text-slate-700">Team & roles</span>
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Team & roles</h1>
+  if (isEditDefaultsOpen) {
+    const roleLabel = selectedDefaultsRole.charAt(0) + selectedDefaultsRole.slice(1).toLowerCase();
+    const isSelectedRoleLocked =
+      selectedDefaultsRole === 'OWNER' || (selectedDefaultsRole === 'ADMIN' && !isActorOwner);
+    const roleMembers = members.filter(
+      (m) => (m.role || 'AGENT').toUpperCase() === selectedDefaultsRole
+    );
+    const membersWithOverrides = roleMembers
+      .map((m) => ({
+        member: m,
+        changes: calculatePermissionDiff(getMemberPagePermissions(m), selectedDefaultsRole).totalChanges,
+      }))
+      .filter((x) => x.changes > 0);
+
+    const initialCrudForRole = getInitialRoleCrudDefaults()[selectedDefaultsRole];
+    const currentDraftCrudForRole = draftRoleCrudDefaults[selectedDefaultsRole] || initialCrudForRole;
+    const savedCrudForRole = roleCrudDefaults[selectedDefaultsRole] || initialCrudForRole;
+
+    let diffsFromUnoCxDefaults = 0;
+    let unsavedChangesCount = 0;
+    if ((draftRoleDescriptions[selectedDefaultsRole] || '') !== (roleDescriptions[selectedDefaultsRole] || '')) {
+      unsavedChangesCount++;
+    }
+    ROLE_OVERVIEW_AREAS.forEach((area) => {
+      const d = currentDraftCrudForRole[area.key] || accessLevelToCrud(area.defaults[selectedDefaultsRole]);
+      const base = initialCrudForRole[area.key];
+      const saved = savedCrudForRole[area.key] || base;
+      (['read', 'create', 'update', 'delete'] as const).forEach((act) => {
+        if (d[act] !== base[act]) diffsFromUnoCxDefaults++;
+        if (d[act] !== saved[act]) unsavedChangesCount++;
+      });
+    });
+
+    return (
+      <div className="px-6 sm:px-8 pt-2 pb-14 max-w-6xl space-y-5 font-sans">
+        {/* Breadcrumb */}
+        <div className="flex items-center gap-2 text-xs font-medium">
+          <button
+            type="button"
+            onClick={() => setIsEditDefaultsOpen(false)}
+            className="text-[#1e2a78] hover:underline font-semibold cursor-pointer"
+          >
+            Team &amp; roles
+          </button>
+          <span className="text-slate-300">/</span>
+          <span className="text-slate-500">Role defaults</span>
         </div>
+
+        {/* Header */}
+        <div>
+          <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+            Role defaults
+          </h2>
+          <p className="text-[13.5px] text-slate-500 mt-1 leading-relaxed">
+            Set what everyone with a role can do. Changes apply to every member with that role. Personal changes made on a member stay in place.
+          </p>
+        </div>
+
+        {/* Role Selector Tabs */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {(['OWNER', 'ADMIN', 'AGENT', 'VIEWER'] as RoleKey[]).map((rk) => {
+            const label = rk.charAt(0) + rk.slice(1).toLowerCase();
+            const count = members.filter((m) => (m.role || 'AGENT').toUpperCase() === rk).length;
+            const isActive = selectedDefaultsRole === rk;
+            return (
+              <button
+                key={rk}
+                type="button"
+                onClick={() => setSelectedDefaultsRole(rk)}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  isActive
+                    ? 'bg-[#1e2a78] text-white shadow-sm'
+                    : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <span>{label}</span>
+                <span
+                  className={`px-1.5 py-0.5 rounded-md text-[11px] font-bold ${
+                    isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
+                  }`}
+                >
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Description & Applies To Card */}
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-xs font-bold text-slate-900 mb-2">
+                {roleLabel} description
+              </label>
+              <input
+                type="text"
+                value={draftRoleDescriptions[selectedDefaultsRole] || ''}
+                disabled={isSelectedRoleLocked}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setDraftRoleDescriptions((prev) => ({ ...prev, [selectedDefaultsRole]: val }));
+                }}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs sm:text-[13px] text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-[#1e2a78] disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed"
+              />
+              <p className="text-[11px] text-slate-400 mt-1.5">
+                Shown when someone picks this role for a member.
+              </p>
+            </div>
+
+            <div>
+              <div className="text-xs font-bold text-slate-900 mb-1.5">Applies to</div>
+              <div className="text-xs sm:text-[13px] text-slate-600">
+                {roleMembers.length === 0
+                  ? `No members currently have the ${roleLabel} role.`
+                  : `${roleMembers.length} ${roleMembers.length === 1 ? 'member' : 'members'}: ${roleMembers
+                      .map((m) => m.name)
+                      .join(', ')}`}
+              </div>
+              {membersWithOverrides.length > 0 && (
+                <div className="mt-3 rounded-xl bg-amber-50/80 border border-amber-200/70 px-3.5 py-2.5 text-xs text-amber-900">
+                  {membersWithOverrides.length === 1
+                    ? `${membersWithOverrides[0].member.name} has ${membersWithOverrides[0].changes} personal ${
+                        membersWithOverrides[0].changes === 1 ? 'change' : 'changes'
+                      }. They're kept when you save.`
+                    : `${membersWithOverrides.length} members have personal changes. They're kept when you save.`}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Permissions Matrix Card */}
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+          <div className="px-5 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100">
+            <div>
+              <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                {roleLabel} permissions
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {diffsFromUnoCxDefaults === 0
+                  ? 'Matches the UnoCX defaults.'
+                  : `${diffsFromUnoCxDefaults} ${
+                      diffsFromUnoCxDefaults === 1 ? 'change' : 'changes'
+                    } from UnoCX defaults.`}
+              </p>
+            </div>
+            {!isSelectedRoleLocked && (
+              <button
+                type="button"
+                onClick={handleResetSelectedRoleDefaults}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors cursor-pointer self-start sm:self-auto"
+              >
+                Reset to UnoCX defaults
+              </button>
+            )}
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50/70 border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  <th className="py-3 px-5 sm:px-6 w-[38%]">AREA</th>
+                  <th className="py-3 px-3 text-center w-[10%]">VIEW</th>
+                  <th className="py-3 px-3 text-center w-[10%]">CREATE</th>
+                  <th className="py-3 px-3 text-center w-[10%]">EDIT</th>
+                  <th className="py-3 px-3 text-center w-[10%]">DELETE</th>
+                  <th className="py-3 px-5 sm:px-6 w-[22%]">LEVEL</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-sm">
+                {ROLE_OVERVIEW_AREAS.map((area) => {
+                  const isAdminOnlyArea = ['team', 'settings', 'billing'].includes(area.key);
+                  const isRowRestricted =
+                    isAdminOnlyArea && (selectedDefaultsRole === 'AGENT' || selectedDefaultsRole === 'VIEWER');
+                  const isRowDisabled = isSelectedRoleLocked || isRowRestricted;
+                  const crud =
+                    currentDraftCrudForRole[area.key] ||
+                    accessLevelToCrud(area.defaults[selectedDefaultsRole]);
+                  const level = crudToAccessLevel(crud);
+
+                  return (
+                    <tr
+                      key={area.key}
+                      className={`transition-colors ${
+                        isRowRestricted ? 'bg-slate-50/30 opacity-60' : 'hover:bg-slate-50/50'
+                      }`}
+                    >
+                      <td className="py-3.5 px-5 sm:px-6 align-middle">
+                        <div className="font-semibold text-slate-900 text-[13px]">{area.label}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">{area.subtitle}</div>
+                      </td>
+
+                      {(['read', 'create', 'update', 'delete'] as const).map((actionKey) => {
+                        const checked = Boolean(crud[actionKey]);
+                        return (
+                          <td key={actionKey} className="py-3.5 px-3 text-center align-middle">
+                            <button
+                              type="button"
+                              disabled={isRowDisabled}
+                              onClick={() => {
+                                if (isRowDisabled) return;
+                                setDraftRoleCrudDefaults((prev) => {
+                                  const roleMap = prev[selectedDefaultsRole] || {};
+                                  const existing =
+                                    roleMap[area.key] ||
+                                    accessLevelToCrud(area.defaults[selectedDefaultsRole]);
+                                  const nextVal = !existing[actionKey];
+                                  const nextCrud: PageCrudPermissions = {
+                                    ...existing,
+                                    [actionKey]: nextVal,
+                                    // If enabling create/update/delete, ensure view (read) is also enabled
+                                    ...(actionKey !== 'read' && nextVal ? { read: true } : {}),
+                                    // If disabling view (read), disable create/update/delete too
+                                    ...(actionKey === 'read' && !nextVal
+                                      ? { create: false, update: false, delete: false }
+                                      : {}),
+                                  };
+                                  return {
+                                    ...prev,
+                                    [selectedDefaultsRole]: {
+                                      ...roleMap,
+                                      [area.key]: nextCrud,
+                                    },
+                                  };
+                                });
+                              }}
+                              className={`inline-flex items-center justify-center w-4 h-4 rounded border transition-all ${
+                                isRowDisabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                              } ${
+                                checked
+                                  ? 'bg-[#1e2a78] border-[#1e2a78] text-white'
+                                  : 'bg-white border-slate-300 hover:border-slate-400'
+                              }`}
+                            >
+                              {checked && <Check className="w-3 h-3 stroke-[3]" />}
+                            </button>
+                          </td>
+                        );
+                      })}
+
+                      <td className="py-3.5 px-5 sm:px-6 align-middle">
+                        {isRowRestricted ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
+                            <Lock className="w-3.5 h-3.5" />
+                            Admin or Owner only
+                          </span>
+                        ) : (
+                          <RoleAccessBadge level={level} />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-500 px-1">
+          Permissions only apply inside each member&apos;s stores, teams and languages. Settings, Team and Billing can only be given to Admins and Owners.
+        </p>
+
+        {/* Bottom Action Bar */}
+        <div className="bg-white rounded-2xl border border-slate-200/80 px-5 sm:px-6 py-4 shadow-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="text-xs text-slate-500">
+            {unsavedChangesCount === 0
+              ? `No changes to ${roleLabel} defaults.`
+              : `${unsavedChangesCount} ${unsavedChangesCount === 1 ? 'change' : 'changes'} to ${roleLabel} defaults.`}
+          </div>
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setIsEditDefaultsOpen(false)}
+              className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={isSavingRoleDefaults || isSelectedRoleLocked}
+              onClick={handleSaveRoleDefaults}
+              className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-[#1e2a78] hover:bg-[#16205e] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer shadow-sm transition-all"
+            >
+              {isSavingRoleDefaults && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Save role defaults
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-6 sm:px-8 pt-2 pb-14 max-w-6xl space-y-5 font-sans">
+      {/* Top Subtitle & Action */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <p className="text-[13.5px] text-slate-500 leading-relaxed">
+          Invite people, choose what they can do, and limit which stores, teams and languages they work in.
+        </p>
 
         {canManage && (
           <div className="flex items-center gap-2.5 shrink-0">
@@ -1437,8 +2016,12 @@ export const TeamRolesSection: React.FC = () => {
                 resetInviteForm();
                 setIsInviteOpen(true);
               } : undefined}
-              title={!canCreateMember ? "You do not have permission to invite team members" : undefined}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold shadow-sm transition-all shrink-0 ${canCreateMember ? 'bg-[#1e2a78] hover:bg-[#16205e] text-white cursor-pointer' : 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-60'}`}
+              title={!canCreateMember ? 'You do not have permission to invite team members' : undefined}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-[13px] font-semibold shadow-sm transition-all shrink-0 ${
+                canCreateMember
+                  ? 'bg-[#1e2a78] hover:bg-[#16205e] text-white cursor-pointer'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-60'
+              }`}
             >
               <Plus className="w-4 h-4 stroke-[2.5]" />
               Invite member
@@ -1448,42 +2031,22 @@ export const TeamRolesSection: React.FC = () => {
         )}
       </div>
 
-      {/* ─── Plan & Seats Overview Banner ────────────────────────────────────────── */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-bold text-slate-900">Workspace plan & seats</h2>
-              {/* <span className="px-2.5 py-0.5 rounded-full bg-[#eef0fb] text-[#1e2a78] font-bold text-xs uppercase tracking-wider">
-                {seats.plan} Plan
-              </span> */}
-              {trial && (
-                <span className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] border ${
-                  trial.isExpired
-                    ? 'bg-red-50 text-red-700 border-red-200'
-                    : 'bg-amber-50 text-amber-800 border-amber-200'
-                }`}>
-                  {trial.isExpired
-                    ? 'Trial Expired'
-                    : `${trial.totalDays}-Day Trial · ${trial.daysLeft} day${trial.daysLeft === 1 ? '' : 's'} left (Day ${trial.currentDay} of ${trial.totalDays})`}
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-500 font-medium">
-              <strong>{seats.used} of {seats.total} seats used</strong> on the {seats.plan} plan
+      {/* ─── Seats Overview Card ─────────────────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs px-5 py-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex-1 min-w-0 max-w-2xl">
+            <p className="text-[13px] text-slate-500">
+              <strong className="font-semibold text-slate-900">
+                {seats.used} of {seats.total} seats used
+              </strong>{' '}
+              · {seats.plan} plan ·{' '}
               {isSeatLimitReached ? (
-                <span className="text-amber-700 font-semibold ml-1.5">· Limit reached</span>
+                <span className="text-amber-700 font-semibold">Limit reached</span>
               ) : (
-                <span className="text-slate-400 ml-1.5">· {availableSeats} seat(s) available</span>
-              )}
-              {trial && !trial.isExpired && (
-                <span className="text-slate-500 ml-1.5">· Workspace trial ends {trial.formattedExpiresAt}</span>
+                <span>{availableSeats} available</span>
               )}
             </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="w-36 bg-slate-100 h-2.5 rounded-full overflow-hidden border border-slate-200">
+            <div className="mt-2.5 w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
               <div
                 className={`h-full transition-all duration-500 rounded-full ${
                   isSeatLimitReached
@@ -1492,21 +2055,14 @@ export const TeamRolesSection: React.FC = () => {
                       ? 'bg-indigo-600'
                       : 'bg-[#1e2a78]'
                 }`}
-                style={{ width: `${seatsPercentage}%` }}
+                style={{ width: `${Math.max(seats.used > 0 ? 2 : 0, seatsPercentage)}%` }}
               />
             </div>
-
-            {canManageBilling && (
-              <button
-                type="button"
-                onClick={() => setIsUpgradeOpen(true)}
-                className="px-3 py-1.5 rounded-xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1 shrink-0"
-              >
-                <ArrowUpRight className="w-3.5 h-3.5 text-slate-500" />
-                Upgrade path
-              </button>
-            )}
           </div>
+
+          <p className="text-xs text-slate-500 shrink-0">
+            Owners and Admins sign in with 2-step verification.
+          </p>
         </div>
 
         {/* Limit Warning Notice if full */}
@@ -1515,7 +2071,10 @@ export const TeamRolesSection: React.FC = () => {
             <div className="flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
               <span>
-                All <strong>{seats.total} seats</strong> on your current plan have been allocated. {canManageBilling ? 'Upgrade to Pro (25 seats) or Enterprise to invite more teammates.' : 'Contact an administrator with billing permissions to upgrade.'}
+                All <strong>{seats.total} seats</strong> on your current plan have been allocated.{' '}
+                {canManageBilling
+                  ? 'Upgrade to Pro (25 seats) or Enterprise to invite more teammates.'
+                  : 'Contact an administrator with billing permissions to upgrade.'}
               </span>
             </div>
             {canManageBilling && (
@@ -1531,54 +2090,63 @@ export const TeamRolesSection: React.FC = () => {
         )}
       </div>
 
-      {/* ─── Members Card & Tabs ─────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
-        {/* Table Tabs Header */}
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+      {/* ─── Members & Invitations Card ──────────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
+        {/* Tabs & Search/Filter Toolbar */}
+        <div className="px-5 sm:px-6 pt-3.5 border-b border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-6">
             <button
               type="button"
               onClick={() => setActiveTab('members')}
-              className={`text-sm font-bold pb-1 border-b-2 transition-colors cursor-pointer flex items-center gap-2 ${
+              className={`pb-3.5 text-[13.5px] font-semibold border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
                 activeTab === 'members'
                   ? 'border-[#1e2a78] text-[#1e2a78]'
                   : 'border-transparent text-slate-500 hover:text-slate-800'
               }`}
             >
-              <Users className="w-4 h-4" />
-              Team members
-              <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600 font-semibold">
-                {members.length}
-              </span>
+              <span>Team members</span>
+              <span>{members.length}</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('invitations')}
-              className={`text-sm font-bold pb-1 border-b-2 transition-colors cursor-pointer flex items-center gap-2 ${
+              className={`pb-3.5 text-[13.5px] font-semibold border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
                 activeTab === 'invitations'
                   ? 'border-[#1e2a78] text-[#1e2a78]'
                   : 'border-transparent text-slate-500 hover:text-slate-800'
               }`}
             >
-              <Mail className="w-4 h-4" />
-              Pending invitations
-              {pendingInvitations.length > 0 && (
-                <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-indigo-100 text-indigo-700 font-bold">
-                  {pendingInvitations.length}
-                </span>
-              )}
+              <span>Pending invitations</span>
+              <span>{pendingInvitations.length}</span>
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={fetchTeamData}
-            title="Refresh team data"
-            className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50 cursor-pointer transition-colors"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="pb-3 flex items-center gap-2.5">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search members"
+                className="pl-8 pr-3 py-1.5 w-44 sm:w-52 text-xs bg-white border border-slate-200 rounded-lg text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-[#1e2a78] focus:ring-1 focus:ring-[#1e2a78]"
+              />
+            </div>
+
+            <select
+              value={roleFilter}
+              onChange={(e) => setRoleFilter(e.target.value)}
+              aria-label="Filter by role"
+              className="px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:border-[#1e2a78] focus:ring-1 focus:ring-[#1e2a78] cursor-pointer"
+            >
+              <option value="ALL">All roles</option>
+              <option value="OWNER">Owner</option>
+              <option value="ADMIN">Admin</option>
+              <option value="AGENT">Agent</option>
+              <option value="VIEWER">Viewer</option>
+            </select>
+          </div>
         </div>
 
         {/* ── Tab 1: Active Team Members Table ── */}
@@ -1586,299 +2154,224 @@ export const TeamRolesSection: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50/50">
-                  <th className="py-2.5 px-3 sm:px-4 font-semibold">Member</th>
-                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Role</th>
-                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Permissions</th>
-                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Stores</th>
-                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Teams</th>
-                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Languages</th>
-                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Status</th>
-                  <th className="py-2.5 px-2 sm:px-3 text-right font-semibold"></th>
+                <tr className="border-b border-slate-100 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                  <th className="py-3 px-5 sm:px-6 font-semibold">Member</th>
+                  <th className="py-3 px-4 font-semibold">Role and permissions</th>
+                  <th className="py-3 px-4 font-semibold">Works on</th>
+                  <th className="py-3 px-4 font-semibold">Status</th>
+                  <th className="py-3 px-5 sm:px-6 text-right font-semibold"></th>
                 </tr>
               </thead>
-              
+
               <tbody className="divide-y divide-slate-100">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={8} className="py-12 text-center text-xs text-slate-400">
+                    <td colSpan={5} className="py-14 text-center text-xs text-slate-400">
                       <Loader2 className="w-5 h-5 animate-spin mx-auto text-[#1e2a78] mb-2" />
                       Loading team members…
                     </td>
                   </tr>
-                ) : members.length === 0 ? (
+                ) : filteredMembers.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-12 text-center text-xs text-slate-400">
-                      No team members found.
+                    <td colSpan={5} className="py-14 text-center text-xs text-slate-400">
+                      {members.length === 0 ? (
+                        'No team members found.'
+                      ) : (
+                        <div className="space-y-2">
+                          <p>No team members match your search or role filter.</p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSearchQuery('');
+                              setRoleFilter('ALL');
+                            }}
+                            className="text-[#1e2a78] font-semibold hover:underline cursor-pointer"
+                          >
+                            Clear filters
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ) : (
-                  members.map((member) => {
-                    const roleNormalized = member.role.toUpperCase();
+                  filteredMembers.map((member) => {
+                    const roleNormalized = (member.role || 'AGENT').toUpperCase();
+                    const roleLabel = roleNormalized.charAt(0) + roleNormalized.slice(1).toLowerCase();
                     const isMemberOwner = roleNormalized === 'OWNER';
-                    const isMemberAdmin = roleNormalized === 'ADMIN';
-                    const isSelf = Boolean(
-                      dbUser && (member.id === dbUser.id || (member.email && dbUser.email && member.email.toLowerCase() === dbUser.email.toLowerCase()))
-                    );
                     const isActorAdmin = actorRoleUpper === 'ADMIN';
-                    const isTargetAgentOrViewer = roleNormalized === 'AGENT' || roleNormalized === 'VIEWER';
-                    const canManageThisMember = isActorOwner || (isActorAdmin && isTargetAgentOrViewer);
-                    const isMemberPermissionsLocked = !canManageThisMember;
+                    const canManageThisMember = isActorOwner || (isActorAdmin && !isMemberOwner);
+                    const isViewOnlyRow = isMemberOwner || !canManageThisMember;
+
+                    const memberPerms = getMemberPagePermissions(member);
+                    const diff = calculatePermissionDiff(memberPerms, roleNormalized);
+                    const permissionSummary = formatRolePermissionSummary(roleNormalized, memberPerms, diff.totalChanges);
+
+                    const storesLabel = formatStoresLabel(member.stores, stores);
+                    const teamsLabel = member.teams && member.teams.length > 0 ? member.teams.join(', ') : 'Support';
+                    const languagesLabel = formatLanguageNames(member.languages);
 
                     const statusLower = (member.status || '').toLowerCase();
-                    const isOnline = member.isOnline || statusLower === 'online' || statusLower === 'active';
-                    const isAway = statusLower === 'away';
                     const isInvited = statusLower === 'invited';
-                    const isExpanded = expandedMemberId === member.id;
-                    const hasCustom = hasCustomPagePermissions(member);
+                    const isDeactivated =
+                      statusLower === 'away' || statusLower === 'offline' || statusLower === 'deactivated';
+                    const isActive = !isInvited && !isDeactivated && (member.isOnline || statusLower === 'online' || statusLower === 'active');
+
+                    const roleBadgeClass =
+                      roleNormalized === 'OWNER'
+                        ? 'bg-[#111847] text-white'
+                        : roleNormalized === 'ADMIN' || roleNormalized === 'AGENT'
+                          ? 'bg-[#eef0fb] text-[#3440a8]'
+                          : 'bg-slate-100 text-slate-700';
 
                     return (
-                      <React.Fragment key={member.id}>
-                        <tr className={`transition-colors ${isExpanded ? 'bg-indigo-50/40' : 'hover:bg-slate-50/70'}`}>
-                          {/* Member */}
-                          <td className="py-3 px-3 sm:px-4">
-                            <div className="flex items-center gap-3">
-                              <div
-                                className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full border flex items-center justify-center font-bold text-xs shrink-0 ${getAvatarColor(
-                                  member.name
-                                )}`}
-                              >
-                                {member.avatarUrl ? (
-                                  <img
-                                    src={member.avatarUrl}
-                                    alt={member.name}
-                                    className="w-full h-full rounded-full object-cover"
-                                  />
-                                ) : (
-                                  getInitials(member.name)
-                                )}
-                              </div>
-                              <div className="min-w-0">
-                                <p className="font-semibold text-slate-900 text-[13px] truncate">{member.name}</p>
-                                <p className="text-[11.5px] text-slate-500 truncate">{member.email}</p>
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* Role */}
-                          <td className="py-3 px-2 sm:px-3">
-                            <button
-                              type="button"
-                              onClick={() => handleToggleMemberPermissions(member)}
-                              className="flex items-center gap-1.5 text-left group cursor-pointer"
-                              title="Click to view & configure permissions for this role"
+                      <tr key={member.id} className="hover:bg-slate-50/60 transition-colors">
+                        {/* Member */}
+                        <td className="py-4 px-5 sm:px-6 align-middle">
+                          <div className="flex items-center gap-3">
+                            <div
+                              className={`w-9 h-9 rounded-full flex items-center justify-center font-semibold text-xs shrink-0 ${getAvatarColor(
+                                member.name
+                              )}`}
                             >
-                              <span className="text-[13px] font-semibold text-slate-800 group-hover:text-[#1e2a78] transition-colors">
-                                {roleNormalized.charAt(0) + roleNormalized.slice(1).toLowerCase()}
-                              </span>
-                              {member.twoFactorEnabled && (
-                                <span title="2-Step Verification Enabled">
-                                  <Shield className="w-3.5 h-3.5 text-emerald-600" />
-                                </span>
-                              )}
-                            </button>
-                          </td>
-
-                          {/* Permissions */}
-                          <td className="py-3 px-2 sm:px-3">
-                            <button
-                              type="button"
-                              onClick={() => handleToggleMemberPermissions(member)}
-                              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer shadow-2xs ${
-                                isExpanded
-                                  ? 'bg-[#1e2a78] text-white ring-2 ring-[#1e2a78]/30'
-                                  : isMemberPermissionsLocked
-                                    ? 'bg-slate-100 hover:bg-slate-200/80 text-slate-700 border border-slate-200'
-                                    : hasCustom
-                                      ? 'bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200'
-                                      : 'bg-indigo-50/80 hover:bg-indigo-100 text-[#1e2a78] border border-indigo-200/70'
-                              }`}
-                              title={
-                                isMemberPermissionsLocked
-                                  ? 'View read-only permissions (Owner required to edit)'
-                                  : 'Click to view & configure page-by-page Create, Read, Update, and Delete permissions'
-                              }
-                            >
-                              {isMemberPermissionsLocked ? (
-                                <Lock className="w-3.5 h-3.5 text-slate-500 stroke-[2.2]" />
-                              ) : (
-                                <Sliders className="w-3.5 h-3.5" />
-                              )}
-                              <span>
-                                {isMemberPermissionsLocked
-                                  ? hasCustom
-                                    ? 'Custom CRUD (View)'
-                                    : 'Permissions (View)'
-                                  : hasCustom
-                                    ? 'Custom CRUD'
-                                    : 'Permissions'}
-                              </span>
-                              <ChevronDown
-                                className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                                  isExpanded ? 'rotate-180' : ''
-                                }`}
-                              />
-                            </button>
-                          </td>
-
-                          {/* Stores */}
-                          <td className="py-3 px-2 sm:px-3 text-xs text-slate-600">
-                            {member.stores && member.stores.length > 0 ? (
-                              <span className="truncate max-w-[120px] block" title={member.stores.join(', ')}>
-                                {member.stores.join(' · ')}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400">All</span>
-                            )}
-                          </td>
-
-                          {/* Teams */}
-                          <td className="py-3 px-2 sm:px-3 text-xs text-slate-600">
-                            {member.teams && member.teams.length > 0 ? (
-                              <span>{member.teams.join(' · ')}</span>
-                            ) : (
-                              <span className="text-slate-400">—</span>
-                            )}
-                          </td>
-
-                          {/* Languages */}
-                          <td className="py-3 px-2 sm:px-3 text-xs text-slate-600 font-medium">
-                            {member.languages && member.languages.length > 0 ? (
-                              <span>{member.languages.join(' · ')}</span>
-                            ) : (
-                              <span className="text-slate-400">EN</span>
-                            )}
-                          </td>
-
-                          {/* Status */}
-                          <td className="py-3 px-2 sm:px-3">
-                            <div className="inline-flex items-center gap-1.5 text-xs font-medium">
-                              {isInvited ? (
-                                <>
-                                  <span className="w-2 h-2 rounded-full bg-blue-500" />
-                                  <span className="text-blue-700">Invited</span>
-                                </>
-                              ) : isAway ? (
-                                <>
-                                  <span className="w-2 h-2 rounded-full bg-amber-500" />
-                                  <span className="text-amber-800">Away</span>
-                                </>
-                              ) : isOnline ? (
-                                <>
-                                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                                  <span className="text-emerald-700">{statusLower === 'online' ? 'Online' : 'Active'}</span>
-                                </>
-                              ) : (
-                                <>
-                                  <span className="w-2 h-2 rounded-full bg-slate-300" />
-                                  <span className="text-slate-500">Offline</span>
-                                </>
-                              )}
-                            </div>
-                          </td>
-
-                          {/* Action Menu */}
-                          <td className="py-3 px-2 sm:px-3 text-right relative">
-                            {canManage && (
-                              <div className="inline-block text-left" onClick={(e) => e.stopPropagation()}>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setActiveMenuMemberId(activeMenuMemberId === member.id ? null : member.id)
-                                  }
-                                  className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-                                >
-                                  <MoreHorizontal className="w-4 h-4" />
-                                </button>
-
-                                {activeMenuMemberId === member.id && (
-                                  <div className="absolute right-6 top-10 w-48 bg-white border border-slate-200 rounded-xl shadow-xl p-1 z-30 text-xs">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveMenuMemberId(null);
-                                        handleOpenPermissionsModal(member);
-                                      }}
-                                      className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-indigo-50 text-[#1e2a78] font-medium text-left cursor-pointer"
-                                    >
-                                      {canManageThisMember ? (
-                                        <Sliders className="w-3.5 h-3.5 text-[#1e2a78]" />
-                                      ) : (
-                                        <Lock className="w-3.5 h-3.5 text-slate-500 stroke-[2.2]" />
-                                      )}
-                                      {canManageThisMember ? 'Page permissions (CRUD)' : 'View permissions (Read-only)'}
-                                    </button>
-
-                                    {/* Edit details & role: Owner can edit all; Admin can edit Agent and Viewer */}
-                                    {canManageThisMember && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveMenuMemberId(null);
-                                          handleOpenEdit(member);
-                                        }}
-                                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 text-left cursor-pointer"
-                                      >
-                                        <Edit3 className="w-3.5 h-3.5 text-slate-500" />
-                                        Edit details & role
-                                      </button>
-                                    )}
-
-                                    {isInvited && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveMenuMemberId(null);
-                                          handleResendInvite(0, member.email);
-                                        }}
-                                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 text-left cursor-pointer"
-                                      >
-                                        <Send className="w-3.5 h-3.5 text-indigo-600" />
-                                        Resend invitation
-                                      </button>
-                                    )}
-
-                                    {/* Remove member: Not allowed for Owner, self, or for Admin removing another Admin */}
-                                    {!isMemberOwner && !isSelf && (!isActorAdmin || !isMemberAdmin) && canDeleteMember && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveMenuMemberId(null);
-                                          handleDeleteMember(member);
-                                        }}
-                                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-red-50 text-red-600 text-left cursor-pointer"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                        Remove member
-                                      </button>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-
-                        {/* Inline Page CRUD Permissions Expansion Row */}
-                        {isExpanded && (
-                          <tr className="bg-slate-50/95 border-b-2 border-indigo-200">
-                            <td colSpan={8} className="p-0">
-                              <div className="p-3 sm:p-4 border-l-4 border-[#1e2a78] bg-slate-50/95 shadow-inner w-full max-w-full overflow-hidden">
-                                <PagePermissionsMatrix
-                                  member={member}
-                                  permissions={memberPermissionsDraft}
-                                  onChange={setMemberPermissionsDraft}
-                                  onSave={() => handleSaveMemberPermissions(member, memberPermissionsDraft)}
-                                  onClose={() => setExpandedMemberId(null)}
-                                  isSaving={isSavingMemberPermissions}
-                                  canManage={canUpdateMember}
-                                  isModal={false}
+                              {member.avatarUrl ? (
+                                <img
+                                  src={member.avatarUrl}
+                                  alt={member.name}
+                                  className="w-full h-full rounded-full object-cover"
                                 />
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
+                              ) : (
+                                getInitials(member.name)
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-semibold text-slate-900 text-[13.5px] leading-snug truncate">
+                                {member.name}
+                              </p>
+                              <p className="text-xs text-slate-500 truncate">{member.email}</p>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Role and Permissions */}
+                        <td className="py-4 px-4 align-middle">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-[11.5px] font-semibold ${roleBadgeClass}`}
+                            >
+                              {roleLabel}
+                            </span>
+
+                            {isMemberOwner ? (
+                              <span className="inline-flex items-center gap-1 text-xs text-slate-500 font-medium">
+                                <Lock className="w-3 h-3 text-slate-400" />
+                                Full access, can&apos;t be limited
+                              </span>
+                            ) : (
+                              diff.totalChanges > 0 && (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/70 text-[11px] font-semibold">
+                                  Customized · {diff.totalChanges} {diff.totalChanges === 1 ? 'change' : 'changes'}
+                                </span>
+                              )
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500 mt-1 leading-snug">{permissionSummary}</p>
+                        </td>
+
+                        {/* Works on */}
+                        <td className="py-4 px-4 align-middle">
+                          <div className="text-xs leading-relaxed space-y-0.5">
+                            <div>
+                              <span className="font-semibold text-slate-700">Stores:</span>{' '}
+                              <span className="text-slate-600">{storesLabel}</span>
+                            </div>
+                            <div>
+                              <span className="font-semibold text-slate-700">Teams:</span>{' '}
+                              <span className="text-slate-600">{teamsLabel}</span>
+                            </div>
+                            <div>
+                              <span className="font-semibold text-slate-700">Languages:</span>{' '}
+                              <span className="text-slate-600">{languagesLabel}</span>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Status */}
+                        <td className="py-4 px-4 align-middle whitespace-nowrap">
+                          <div className="inline-flex items-center gap-1.5 text-xs font-medium">
+                            {isInvited ? (
+                              <>
+                                <span className="w-2 h-2 rounded-full bg-blue-500" />
+                                <span className="text-blue-700">Invited</span>
+                              </>
+                            ) : isActive ? (
+                              <>
+                                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                                <span className="text-emerald-700">Active</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="w-2 h-2 rounded-full bg-slate-300" />
+                                <span className="text-slate-500">Deactivated</span>
+                              </>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Edit / View & Remove Actions */}
+                        <td className="py-4 px-5 sm:px-6 text-right align-middle">
+                          {canManage && (
+                            <div className="inline-flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEdit(member, isViewOnlyRow)}
+                                className="px-3.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-800 shadow-2xs transition-colors cursor-pointer"
+                              >
+                                {isViewOnlyRow ? 'View' : 'Edit'}
+                              </button>
+
+                              {canDeleteMember &&
+                                !(dbUser && (member.id === dbUser.id || (member.email && dbUser.email && member.email.toLowerCase() === dbUser.email.toLowerCase()))) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (isMemberOwner && !isActorOwner) {
+                                        gooeyToast.error('Cannot remove Owner', {
+                                          description: 'Only a Workspace Owner can remove an Owner.',
+                                        });
+                                        return;
+                                      }
+                                      if (isMemberOwner && ownerCount <= 1) {
+                                        gooeyToast.error('Cannot remove the only Owner', {
+                                          description: 'At least one Owner is required per workspace.',
+                                        });
+                                        return;
+                                      }
+                                      if (roleNormalized === 'ADMIN' && !isActorOwner) {
+                                        gooeyToast.error('Cannot remove Administrator', {
+                                          description: 'Only the Workspace Owner can remove an Administrator.',
+                                        });
+                                        return;
+                                      }
+                                      handleDeleteMember(member);
+                                    }}
+                                    title={
+                                      isMemberOwner && ownerCount <= 1
+                                        ? 'At least one Owner is required per workspace'
+                                        : `Remove ${member.name}`
+                                    }
+                                    className={`p-1.5 rounded-lg border border-slate-200 bg-white transition-colors cursor-pointer ${
+                                      isMemberOwner && ownerCount <= 1
+                                        ? 'text-slate-300 hover:bg-slate-50'
+                                        : 'text-slate-400 hover:text-red-600 hover:border-red-200 hover:bg-red-50/60'
+                                    }`}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
                     );
                   })
                 )}
@@ -1892,68 +2385,82 @@ export const TeamRolesSection: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50/50">
-                  <th className="py-2.5 px-3 sm:px-4 font-semibold">Invited Email</th>
-                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Role</th>
-                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Stores</th>
-                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Teams</th>
-                  <th className="py-2.5 px-2 sm:px-3 font-semibold">Expires In</th>
-                  <th className="py-2.5 px-2 sm:px-3 text-right font-semibold">Actions</th>
+                <tr className="border-b border-slate-100 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                  <th className="py-3 px-5 sm:px-6 font-semibold">Invited email</th>
+                  <th className="py-3 px-4 font-semibold">Role</th>
+                  <th className="py-3 px-4 font-semibold">Works on</th>
+                  <th className="py-3 px-4 font-semibold">Expires in</th>
+                  <th className="py-3 px-5 sm:px-6 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {pendingInvitations.length === 0 ? (
+                {filteredInvitations.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-12 text-center text-xs text-slate-400">
-                      No pending invitations. All invited members have joined!
+                    <td colSpan={5} className="py-14 text-center text-xs text-slate-400">
+                      {pendingInvitations.length === 0
+                        ? 'No pending invitations. All invited members have joined!'
+                        : 'No pending invitations match your search or role filter.'}
                     </td>
                   </tr>
                 ) : (
-                  pendingInvitations.map((inv) => {
+                  filteredInvitations.map((inv) => {
                     const daysLeft = Math.max(
                       0,
                       Math.ceil((new Date(inv.expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
                     );
+                    const invRoleUpper = (inv.role || 'AGENT').toUpperCase();
+                    const invRoleLabel = invRoleUpper.charAt(0) + invRoleUpper.slice(1).toLowerCase();
 
                     return (
-                      <tr key={inv.id} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="py-3 px-3 sm:px-4">
+                      <tr key={inv.id} className="hover:bg-slate-50/60 transition-colors">
+                        <td className="py-4 px-5 sm:px-6 align-middle">
                           <div>
-                            <span className="font-semibold text-slate-900 text-[13px]">{inv.email}</span>
-                            <p className="text-[11px] text-slate-400">
+                            <span className="font-semibold text-slate-900 text-[13.5px]">{inv.email}</span>
+                            <p className="text-xs text-slate-400 mt-0.5">
                               Invited by {inv.inviterName || 'Admin'}
                             </p>
                           </div>
                         </td>
 
-                        <td className="py-3 px-2 sm:px-3">
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 font-semibold text-xs text-slate-700 uppercase">
-                            {inv.role}
+                        <td className="py-4 px-4 align-middle">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-md bg-[#eef0fb] text-[#3440a8] text-[11.5px] font-semibold">
+                            {invRoleLabel}
                           </span>
                         </td>
 
-                        <td className="py-3 px-2 sm:px-3 text-xs text-slate-600">
-                          {inv.stores && inv.stores.length > 0 ? inv.stores.join(' · ') : 'All'}
+                        <td className="py-4 px-4 align-middle">
+                          <div className="text-xs leading-relaxed space-y-0.5">
+                            <div>
+                              <span className="font-semibold text-slate-700">Stores:</span>{' '}
+                              <span className="text-slate-600">{formatStoresLabel(inv.stores, stores)}</span>
+                            </div>
+                            <div>
+                              <span className="font-semibold text-slate-700">Teams:</span>{' '}
+                              <span className="text-slate-600">
+                                {inv.teams && inv.teams.length > 0 ? inv.teams.join(', ') : 'Support'}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="font-semibold text-slate-700">Languages:</span>{' '}
+                              <span className="text-slate-600">{formatLanguageNames(inv.languages)}</span>
+                            </div>
+                          </div>
                         </td>
 
-                        <td className="py-3 px-2 sm:px-3 text-xs text-slate-600">
-                          {inv.teams && inv.teams.length > 0 ? inv.teams.join(' · ') : 'Support'}
-                        </td>
-
-                        <td className="py-3 px-2 sm:px-3 text-xs text-slate-600">
-                          <span className="inline-flex items-center gap-1 text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full font-medium text-[11px]">
+                        <td className="py-4 px-4 align-middle text-xs text-slate-600">
+                          <span className="inline-flex items-center gap-1 text-indigo-700 bg-indigo-50 px-2.5 py-0.5 rounded-full font-medium text-[11px]">
                             <Clock className="w-3 h-3" />
                             {daysLeft > 0 ? `${daysLeft} days` : 'Expiring soon'}
                           </span>
                         </td>
 
-                        <td className="py-3 px-2 sm:px-3 text-right">
+                        <td className="py-4 px-5 sm:px-6 text-right align-middle">
                           <div className="flex items-center justify-end gap-1.5">
                             <button
                               type="button"
                               onClick={() => handleCopyInviteLink(inv.token, inv.email)}
                               title="Copy secure single-use invitation link"
-                              className="px-2 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                              className="px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                             >
                               <Copy className="w-3.5 h-3.5 text-slate-500" />
                               Copy link
@@ -1963,7 +2470,7 @@ export const TeamRolesSection: React.FC = () => {
                               type="button"
                               onClick={() => handleResendInvite(inv.id, inv.email)}
                               title="Resend email with new 7-day token"
-                              className="px-2 py-1 rounded-lg bg-[#1e2a78] hover:bg-[#16205e] text-white text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                              className="px-2.5 py-1.5 rounded-lg bg-[#1e2a78] hover:bg-[#16205e] text-white text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                             >
                               <Send className="w-3.5 h-3.5" />
                               Resend
@@ -1973,7 +2480,7 @@ export const TeamRolesSection: React.FC = () => {
                               type="button"
                               onClick={() => handleRevokeInvite(inv.id, inv.email)}
                               title="Revoke invitation"
-                              className="p-1 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600 cursor-pointer transition-colors"
+                              className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600 cursor-pointer transition-colors"
                             >
                               <X className="w-4 h-4" />
                             </button>
@@ -1989,98 +2496,100 @@ export const TeamRolesSection: React.FC = () => {
         )}
       </div>
 
-      {/* ─── Role Permissions Matrix Card ──────────────────────────────────────── */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
-          <div>
-            <h2 className="text-[16px] font-bold text-slate-900">Role permissions</h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Owner always has every permission. Admin and Owner require 2-step verification before entering.
-            </p>
+      {/* ─── What Each Role Can Do (Role Defaults Matrix) ───────────────────────── */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+        <div className="px-5 sm:px-6 pt-6 pb-4">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
+                What each role can do
+              </h3>
+              <p className="text-xs sm:text-[13px] text-slate-500 mt-1 max-w-2xl leading-relaxed">
+                These are the defaults for everyone with that role. To give one person more or less, open their row and choose Permissions. Owner always has full access.
+              </p>
+            </div>
+            {(isActorOwner || isActorAdmin) && (
+              <button
+                type="button"
+                onClick={handleOpenEditDefaults}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-800 transition-colors cursor-pointer shrink-0 self-start shadow-2xs"
+              >
+                Edit role defaults
+              </button>
+            )}
           </div>
-          {canManage && actorRoleUpper === 'OWNER' && (
-            <button
-              type="button"
-              onClick={handleResetPermissions}
-              disabled={isSavingPermissions}
-              className="text-xs font-semibold text-[#1e2a78] hover:text-[#16205e] hover:bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 transition-colors cursor-pointer shrink-0 disabled:opacity-50"
-            >
-              Reset to defaults
-            </button>
-          )}
+
+          {/* Legend */}
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-4">
+            <div className="inline-flex items-center gap-1.5">
+              <RoleAccessBadge level="full" />
+              <span className="text-xs text-slate-500">view, create, edit, delete</span>
+            </div>
+            <div className="inline-flex items-center gap-1.5">
+              <RoleAccessBadge level="edit" />
+              <span className="text-xs text-slate-500">view, create, edit</span>
+            </div>
+            <div className="inline-flex items-center gap-1.5">
+              <RoleAccessBadge level="view" />
+              <span className="text-xs text-slate-500">see only</span>
+            </div>
+            <div className="inline-flex items-center gap-1.5">
+              <RoleAccessBadge level="none" />
+              <span className="text-xs text-slate-500">hidden</span>
+            </div>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm border-collapse">
+          <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                <th className="py-3 px-4 font-semibold w-1/2"></th>
-                <th className="py-3 px-6 text-center font-semibold">OWNER</th>
-                <th className="py-3 px-6 text-center font-semibold">ADMIN</th>
-                <th className="py-3 px-6 text-center font-semibold">AGENT</th>
-                <th className="py-3 px-6 text-center font-semibold">VIEWER</th>
+              <tr className="bg-slate-50/70 border-y border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                <th className="py-3 px-5 sm:px-6 w-[36%]">AREA</th>
+                <th className="py-3 px-4 w-[14%]">OWNER</th>
+                <th className="py-3 px-4 w-[16%]">ADMIN</th>
+                <th className="py-3 px-4 w-[18%]">AGENT</th>
+                <th className="py-3 px-5 sm:px-6 w-[16%]">VIEWER</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {PERMISSION_ROWS.map(({ key, label }) => {
-                const adminChecked = Boolean(permissions?.ADMIN?.[key]);
-                const agentChecked = Boolean(permissions?.AGENT?.[key]);
-                const viewerChecked = Boolean(permissions?.VIEWER?.[key]);
+            <tbody className="divide-y divide-slate-100 text-sm">
+              {ROLE_OVERVIEW_AREAS.map((area) => {
+                const saved = roleOverviewDefaults[area.key] || area.defaults;
+                const adminLevel = saved.ADMIN || area.defaults.ADMIN;
+                const agentLevel = saved.AGENT || area.defaults.AGENT;
+                const viewerLevel = saved.VIEWER || area.defaults.VIEWER;
 
                 return (
-                  <tr key={key} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="py-3.5 px-4 text-[13px] text-slate-700 font-medium">{label}</td>
-
-                    {/* OWNER (Always Locked 🔒) */}
-                    <td className="py-3.5 px-6 text-center">
-                      <div className="flex items-center justify-center" title="Workspace Owner permissions are permanent and cannot be modified">
-                        <Lock className="w-4 h-4 text-slate-400 stroke-[2.2]" />
+                  <tr key={area.key} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="py-3.5 px-5 sm:px-6 align-middle">
+                      <div className="font-semibold text-slate-900 text-[13px]">{area.label}</div>
+                      <div className="text-xs text-slate-400 mt-0.5">{area.subtitle}</div>
+                    </td>
+                    <td className="py-3.5 px-4 align-middle">
+                      <RoleAccessBadge level="full" />
+                    </td>
+                    <td className="py-3.5 px-4 align-middle">
+                      <div className="flex flex-col items-start gap-1">
+                        <RoleAccessBadge level={adminLevel} />
+                        {area.notes?.ADMIN && (
+                          <span className="text-[11px] text-slate-400 leading-tight">{area.notes.ADMIN}</span>
+                        )}
                       </div>
                     </td>
-
-                    {/* ADMIN (Only Owner can edit Admin role permissions; locked for Admin) */}
-                    <td className="py-3.5 px-6 text-center">
-                      {actorRoleUpper === 'OWNER' ? (
-                        <label className="inline-flex items-center justify-center cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={adminChecked}
-                            disabled={!canUpdateMember || isSavingPermissions}
-                            onChange={() => handleTogglePermission('ADMIN', key)}
-                            className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
-                          />
-                        </label>
-                      ) : (
-                        <div className="flex items-center justify-center" title="Only the Workspace Owner can modify Administrator role permissions">
-                          <Lock className="w-4 h-4 text-slate-400 stroke-[2.2]" />
-                        </div>
-                      )}
+                    <td className="py-3.5 px-4 align-middle">
+                      <div className="flex flex-col items-start gap-1">
+                        <RoleAccessBadge level={agentLevel} />
+                        {area.notes?.AGENT && (
+                          <span className="text-[11px] text-slate-400 leading-tight">{area.notes.AGENT}</span>
+                        )}
+                      </div>
                     </td>
-
-                    {/* AGENT */}
-                    <td className="py-3.5 px-6 text-center">
-                      <label className="inline-flex items-center justify-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={agentChecked}
-                          disabled={!canUpdateMember || isSavingPermissions}
-                          onChange={() => handleTogglePermission('AGENT', key)}
-                          className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
-                        />
-                      </label>
-                    </td>
-
-                    {/* VIEWER */}
-                    <td className="py-3.5 px-6 text-center">
-                      <label className="inline-flex items-center justify-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={viewerChecked}
-                          disabled={!canUpdateMember || isSavingPermissions}
-                          onChange={() => handleTogglePermission('VIEWER', key)}
-                          className="w-4 h-4 rounded text-[#1e2a78] border-slate-300 focus:ring-[#1e2a78] cursor-pointer disabled:cursor-not-allowed"
-                        />
-                      </label>
+                    <td className="py-3.5 px-5 sm:px-6 align-middle">
+                      <div className="flex flex-col items-start gap-1">
+                        <RoleAccessBadge level={viewerLevel} />
+                        {area.notes?.VIEWER && (
+                          <span className="text-[11px] text-slate-400 leading-tight">{area.notes.VIEWER}</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -2246,12 +2755,20 @@ export const TeamRolesSection: React.FC = () => {
 
               {!useCustomPermissions ? (
                 <div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(['ADMIN', 'AGENT', 'VIEWER'] as const).map((r) => (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {(['OWNER', 'ADMIN', 'AGENT', 'VIEWER'] as const).map((r) => (
                       <button
                         key={r}
                         type="button"
-                        onClick={() => setInviteRole(r)}
+                        onClick={() => {
+                          if (r === 'OWNER' && !isActorOwner) {
+                            gooeyToast.error('Unable to invite as Owner', {
+                              description: 'Only a Workspace Owner can invite another Owner.',
+                            });
+                            return;
+                          }
+                          setInviteRole(r);
+                        }}
                         className={`py-2 px-3 rounded-xl border text-xs font-semibold text-center cursor-pointer transition-colors ${
                           inviteRole === r
                             ? 'border-[#1e2a78] bg-[#eef0fb] text-[#1e2a78]'
@@ -2263,11 +2780,13 @@ export const TeamRolesSection: React.FC = () => {
                     ))}
                   </div>
                   <p className="text-[11px] text-slate-400 mt-1">
-                    {inviteRole === 'ADMIN'
-                      ? 'Admins require 2-step verification. Can manage team, view all chats, and configure bots.'
-                      : inviteRole === 'AGENT'
-                        ? 'Can reply to chats assigned to them and send approved templates.'
-                        : 'Read-only access to customer chats, reports, and analytics.'}
+                    {inviteRole === 'OWNER'
+                      ? 'Full workspace access including billing, deleting workspace, and managing all roles.'
+                      : inviteRole === 'ADMIN'
+                        ? 'Admins require 2-step verification. Can manage team, view all chats, and configure bots.'
+                        : inviteRole === 'AGENT'
+                          ? 'Can reply to chats assigned to them and send approved templates.'
+                          : 'Read-only access to customer chats, reports, and analytics.'}
                   </p>
                 </div>
               ) : (
@@ -2557,7 +3076,7 @@ export const TeamRolesSection: React.FC = () => {
             <div className="flex items-start justify-between gap-3 mb-3.5">
               <div className="flex items-center gap-3 min-w-0">
                 <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 border ${getAvatarColor(
+                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${getAvatarColor(
                     editingMember?.name || ''
                   )}`}
                 >
@@ -2565,7 +3084,7 @@ export const TeamRolesSection: React.FC = () => {
                 </div>
                 <div className="min-w-0">
                   <h3 className="font-bold text-slate-900 text-base leading-tight truncate">
-                    Edit {editingMember?.name || 'Member'}
+                    {isEditReadOnly ? editingMember?.name || 'Member' : `Edit ${editingMember?.name || 'Member'}`}
                   </h3>
                   <p className="text-xs text-slate-500 font-medium truncate mt-0.5">
                     {editingMember?.email || ''} · {formatJoinedDate(editingMember?.createdAt)}
@@ -2629,9 +3148,10 @@ export const TeamRolesSection: React.FC = () => {
                   <input
                     type="text"
                     required
+                    disabled={isEditReadOnly}
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
-                    className="w-full px-3.5 py-2 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#1e2a78] focus:ring-1 focus:ring-[#1e2a78]"
+                    className="w-full px-3.5 py-2 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#1e2a78] focus:ring-1 focus:ring-[#1e2a78] disabled:bg-slate-50 disabled:text-slate-600 disabled:cursor-not-allowed"
                   />
                 </div>
 
@@ -2643,19 +3163,24 @@ export const TeamRolesSection: React.FC = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     {ROLES_CONFIG.map((rc) => {
                       const isSelected = editRole.toUpperCase() === rc.role;
-                      const isCardDisabled = isActorAdmin && rc.role === 'OWNER';
+                      const isCardDisabled = isEditReadOnly || (isActorAdmin && rc.role === 'OWNER');
                       return (
                         <div
                           key={rc.role}
                           onClick={() => {
-                            if (!isCardDisabled) {
-                              setEditRole(rc.role);
-                              setEditPermissions(getDefaultPagePermissions(rc.role));
+                            if (isEditReadOnly) return;
+                            if (isActorAdmin && rc.role === 'OWNER') {
+                              gooeyToast.error('Unable to change role to Owner', {
+                                description: 'Administrators cannot assign or edit the Owner role.',
+                              });
+                              return;
                             }
+                            setEditRole(rc.role);
+                            setEditPermissions(getDefaultPagePermissions(rc.role));
                           }}
                           className={`relative p-3 rounded-xl border text-left transition-all ${
                             isCardDisabled
-                              ? 'opacity-60 cursor-not-allowed border-slate-200 bg-slate-50/50'
+                              ? 'opacity-70 cursor-not-allowed border-slate-200 bg-slate-50/50'
                               : 'cursor-pointer'
                           } ${
                             isSelected
@@ -2754,15 +3279,44 @@ export const TeamRolesSection: React.FC = () => {
                     <div className="flex items-center flex-wrap gap-2">
                       <button
                         type="button"
+                        disabled={isEditReadOnly}
                         onClick={() => setEditStores([])}
-                        className={`px-3 py-1 rounded-full text-xs font-semibold cursor-pointer transition-colors ${
-                          editStores.length === 0
+                        className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
+                          isEditReadOnly ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'
+                        } ${
+                          editStores.length === 0 || editStores.includes('All')
                             ? 'bg-[#1e2a78] text-white shadow-2xs'
                             : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
                         }`}
                       >
                         All stores
                       </button>
+                      {stores.map((s) => {
+                        const selected = !editStores.includes('All') && editStores.includes(s.domain);
+                        return (
+                          <button
+                            key={s.id}
+                            type="button"
+                            disabled={isEditReadOnly}
+                            onClick={() => {
+                              const withoutAll = editStores.filter((x) => x !== 'All');
+                              const next = selected
+                                ? withoutAll.filter((d) => d !== s.domain)
+                                : [...withoutAll, s.domain];
+                              setEditStores(next);
+                            }}
+                            className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
+                              isEditReadOnly ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'
+                            } ${
+                              selected
+                                ? 'bg-[#1e2a78] text-white shadow-2xs'
+                                : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                            }`}
+                          >
+                            {s.name || s.domain}
+                          </button>
+                        );
+                      })}
                       <span className="text-xs text-slate-400">New stores are included automatically</span>
                     </div>
                   </div>
@@ -2777,6 +3331,7 @@ export const TeamRolesSection: React.FC = () => {
                           <button
                             key={t}
                             type="button"
+                            disabled={isEditReadOnly}
                             onClick={() => {
                               if (isSelected) {
                                 const next = editTeams.filter((item) => item !== t);
@@ -2785,7 +3340,9 @@ export const TeamRolesSection: React.FC = () => {
                                 setEditTeams([...editTeams.filter((item) => item !== 'All'), t]);
                               }
                             }}
-                            className={`px-3 py-1 rounded-full text-xs font-semibold cursor-pointer transition-colors ${
+                            className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
+                              isEditReadOnly ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'
+                            } ${
                               isSelected
                                 ? 'bg-[#1e2a78] text-white shadow-2xs'
                                 : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
@@ -2808,6 +3365,7 @@ export const TeamRolesSection: React.FC = () => {
                           <button
                             key={lang}
                             type="button"
+                            disabled={isEditReadOnly}
                             onClick={() => {
                               if (isSelected) {
                                 const next = editLanguages.filter((l) => l !== lang);
@@ -2816,13 +3374,15 @@ export const TeamRolesSection: React.FC = () => {
                                 setEditLanguages([...editLanguages, lang]);
                               }
                             }}
-                            className={`px-3 py-1 rounded-full text-xs font-semibold cursor-pointer transition-colors ${
+                            className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
+                              isEditReadOnly ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'
+                            } ${
                               isSelected
                                 ? 'bg-[#1e2a78] text-white shadow-2xs'
                                 : 'border border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
                             }`}
                           >
-                            {lang}
+                            {LANGUAGE_LABELS[lang] || lang}
                           </button>
                         );
                       })}
@@ -2836,8 +3396,11 @@ export const TeamRolesSection: React.FC = () => {
                       <div className="inline-flex rounded-full border border-slate-200 p-0.5 bg-slate-50">
                         <button
                           type="button"
+                          disabled={isEditReadOnly}
                           onClick={() => setEditStatus('active')}
-                          className={`px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                          className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
+                            isEditReadOnly ? 'cursor-not-allowed' : 'cursor-pointer'
+                          } ${
                             editStatus === 'active' || editStatus === 'online'
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs'
                               : 'text-slate-600 hover:text-slate-900 border border-transparent'
@@ -2847,8 +3410,11 @@ export const TeamRolesSection: React.FC = () => {
                         </button>
                         <button
                           type="button"
+                          disabled={isEditReadOnly}
                           onClick={() => setEditStatus('away')}
-                          className={`px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                          className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
+                            isEditReadOnly ? 'cursor-not-allowed' : 'cursor-pointer'
+                          } ${
                             editStatus === 'away' || editStatus === 'offline' || editStatus === 'deactivated'
                               ? 'bg-white text-slate-900 border border-slate-200 shadow-2xs'
                               : 'text-slate-600 hover:text-slate-900 border border-transparent'
@@ -2871,22 +3437,37 @@ export const TeamRolesSection: React.FC = () => {
                 <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <h4 className="text-xs font-bold text-amber-950">
-                      {editRole.charAt(0) + editRole.slice(1).toLowerCase()} role, customized for {firstName}
+                      {isEditingMemberOwner
+                        ? 'Owner has full access across the workspace'
+                        : isEditReadOnly
+                          ? `${editRole.charAt(0) + editRole.slice(1).toLowerCase()} permissions (read-only)`
+                          : `${editRole.charAt(0) + editRole.slice(1).toLowerCase()} role, customized for ${firstName}`}
                     </h4>
                     <p className="text-[11px] text-amber-800 mt-0.5">
-                      Ticked boxes are what {firstName} can do. Boxes marked <span className="font-semibold text-amber-900">Changed</span> differ from the {editRole.charAt(0) + editRole.slice(1).toLowerCase()} defaults. Other {editRole.charAt(0) + editRole.slice(1).toLowerCase()}s are not affected.
+                      {isEditingMemberOwner ? (
+                        <>Owner permissions cannot be limited and include all areas, billing, and workspace management.</>
+                      ) : (
+                        <>
+                          Ticked boxes are what {firstName} can do. Boxes marked{' '}
+                          <span className="font-semibold text-amber-900">Changed</span> differ from the{' '}
+                          {editRole.charAt(0) + editRole.slice(1).toLowerCase()} defaults. Other{' '}
+                          {editRole.charAt(0) + editRole.slice(1).toLowerCase()}s are not affected.
+                        </>
+                      )}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditPermissions(getDefaultPagePermissions(editRole));
-                      gooeyToast.info(`Reset to standard ${editRole.charAt(0) + editRole.slice(1).toLowerCase()} defaults`);
-                    }}
-                    className="px-3 py-1.5 rounded-lg border border-amber-300 bg-white text-xs font-semibold text-amber-900 hover:bg-amber-50 shadow-2xs cursor-pointer shrink-0 transition-colors"
-                  >
-                    Reset to {editRole.charAt(0) + editRole.slice(1).toLowerCase()} defaults
-                  </button>
+                  {!isEditReadOnly && !isEditingMemberOwner && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditPermissions(getDefaultPagePermissions(editRole));
+                        gooeyToast.info(`Reset to standard ${editRole.charAt(0) + editRole.slice(1).toLowerCase()} defaults`);
+                      }}
+                      className="px-3 py-1.5 rounded-lg border border-amber-300 bg-white text-xs font-semibold text-amber-900 hover:bg-amber-50 shadow-2xs cursor-pointer shrink-0 transition-colors"
+                    >
+                      Reset to {editRole.charAt(0) + editRole.slice(1).toLowerCase()} defaults
+                    </button>
+                  )}
                 </div>
 
                 {/* Permissions Table */}
@@ -2919,9 +3500,11 @@ export const TeamRolesSection: React.FC = () => {
                           };
 
                           const isAreaLocked =
-                            Boolean(area.adminOnly) &&
-                            editRole.toUpperCase() !== 'OWNER' &&
-                            editRole.toUpperCase() !== 'ADMIN';
+                            isEditReadOnly ||
+                            isEditingMemberOwner ||
+                            (Boolean(area.adminOnly) &&
+                              editRole.toUpperCase() !== 'OWNER' &&
+                              editRole.toUpperCase() !== 'ADMIN');
 
                           const defaultLabel = getRoleDefaultLabel(editRole, area.key);
 
@@ -3094,13 +3677,21 @@ export const TeamRolesSection: React.FC = () => {
           <div className="flex items-center justify-between pt-3 mt-2 border-t border-slate-200 shrink-0">
             {editTab === 'role' ? (
               <div>
-                {!isEditingMemberOwner && !isEditingSelf && canDeleteMember && (
+                {(!isEditReadOnly || (isActorOwner && isEditingMemberOwner && ownerCount > 1)) &&
+                  !isEditingSelf &&
+                  canDeleteMember && (
                   <button
                     type="button"
                     onClick={() => {
                       if (editingMember) {
-                        handleDeleteMember(editingMember);
+                        if (isEditingMemberOwner && ownerCount <= 1) {
+                          gooeyToast.error('Cannot remove the only Owner', {
+                            description: 'At least one Owner is required per workspace.',
+                          });
+                          return;
+                        }
                         setIsEditOpen(false);
+                        handleDeleteMember(editingMember);
                       }
                     }}
                     className="text-xs font-semibold text-red-600 hover:text-red-700 cursor-pointer transition-colors"
@@ -3111,66 +3702,60 @@ export const TeamRolesSection: React.FC = () => {
               </div>
             ) : (
               <div className="text-xs text-slate-600 min-w-0 pr-3">
-                {editDiff.totalChanges > 0 ? (
+                {isEditingMemberOwner ? (
+                  <span className="text-slate-500">Full access across all workspace areas</span>
+                ) : editDiff.totalChanges > 0 ? (
                   <span className="font-medium text-slate-700 truncate block">
-                    <strong className="text-slate-900">{editDiff.totalChanges} {editDiff.totalChanges === 1 ? 'change' : 'changes'}</strong> from {editRole.charAt(0) + editRole.slice(1).toLowerCase()}: {editDiff.summaryText}
+                    <strong className="text-slate-900">
+                      {editDiff.totalChanges} {editDiff.totalChanges === 1 ? 'change' : 'changes'}
+                    </strong>{' '}
+                    from {editRole.charAt(0) + editRole.slice(1).toLowerCase()}: {editDiff.summaryText}
                   </span>
                 ) : (
-                  <span className="text-slate-400">Standard {editRole.charAt(0) + editRole.slice(1).toLowerCase()} permissions</span>
+                  <span className="text-slate-400">
+                    Standard {editRole.charAt(0) + editRole.slice(1).toLowerCase()} permissions
+                  </span>
                 )}
               </div>
             )}
 
             <div className="flex items-center gap-2 shrink-0 ml-auto">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsEditOpen(false);
-                  setEditingMember(null);
-                }}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isSubmittingEdit}
-                className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-[#1e2a78] hover:bg-[#16205e] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer shadow-sm transition-all"
-              >
-                {isSubmittingEdit && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                Save changes
-              </button>
+              {isEditReadOnly ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditOpen(false);
+                    setEditingMember(null);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-700 cursor-pointer transition-colors"
+                >
+                  Close
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditOpen(false);
+                      setEditingMember(null);
+                    }}
+                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingEdit}
+                    className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-[#1e2a78] hover:bg-[#16205e] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer shadow-sm transition-all"
+                  >
+                    {isSubmittingEdit && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    Save changes
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </form>
-      </Modal>
-
-      {/* ─── Modal: Page Permissions (CRUD) ─────────────────────────────────────── */}
-      <Modal
-        isOpen={Boolean(permissionsModalMember)}
-        onClose={() => setPermissionsModalMember(null)}
-        title={`Page Permissions · ${permissionsModalMember?.name || 'Member'}`}
-        maxWidth="2xl"
-        className="max-h-[90vh] flex flex-col"
-        bodyClassName="overflow-y-auto flex-1 min-h-0 pr-1"
-      >
-        {permissionsModalMember && (
-          <div className="pt-1">
-            <PagePermissionsMatrix
-              member={permissionsModalMember}
-              permissions={memberPermissionsDraft}
-              onChange={setMemberPermissionsDraft}
-              onSave={async () => {
-                await handleSaveMemberPermissions(permissionsModalMember, memberPermissionsDraft);
-                setPermissionsModalMember(null);
-              }}
-              onClose={() => setPermissionsModalMember(null)}
-              isSaving={isSavingMemberPermissions}
-              canManage={canUpdateMember}
-              isModal={true}
-            />
-          </div>
-        )}
       </Modal>
     </div>
   );

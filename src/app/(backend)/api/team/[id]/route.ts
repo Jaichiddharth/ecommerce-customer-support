@@ -26,13 +26,12 @@ export const PATCH = withAuth<{ params: Promise<{ id: string }> }>(
     const { role, teams, languages, stores, customPermissions, status, name } = body;
 
     const targetRole = (targetUser.role || "AGENT").toUpperCase();
-    const isTargetAgentOrViewer = targetRole === "AGENT" || targetRole === "VIEWER";
 
-    // Non-owners (e.g. Admins) can only modify Agent and Viewer roles and custom CRUD permissions
+    // Non-owners (e.g. Admins) can edit Admin, Agent, and Viewer accounts, but cannot edit Owners or promote to Owner
     if (!isOwner) {
-      if (!isTargetAgentOrViewer) {
+      if (targetRole === "OWNER") {
         throw new AppError("FORBIDDEN", {
-          message: "Administrators can only modify Agent and Viewer roles and permissions. Owner and Administrator accounts are protected.",
+          message: "Administrators cannot modify Workspace Owner accounts.",
           expected: true,
         });
       }
@@ -41,6 +40,17 @@ export const PATCH = withAuth<{ params: Promise<{ id: string }> }>(
           message: "Only workspace Owners can promote a member to Owner.",
           expected: true,
         });
+      }
+    }
+
+    if (targetRole === "OWNER" && role && role.toUpperCase() !== "OWNER") {
+      const orgUsers = await userRepository.listByOrg(orgId);
+      const ownerCount = orgUsers.filter((u) => (u.role || "").toUpperCase() === "OWNER").length;
+      if (ownerCount <= 1) {
+        throw AppError.validation(
+          "At least one Owner is required per workspace. Assign another Owner before changing this role.",
+          "role"
+        );
       }
     }
 
@@ -90,6 +100,18 @@ export const DELETE = withAuth<{ params: Promise<{ id: string }> }>(
         message: "Only workspace Owners can remove an Owner.",
         expected: true,
       });
+    }
+
+    // Ensure at least one Owner remains per workspace
+    if (targetUser.role?.toUpperCase() === "OWNER") {
+      const orgUsers = await userRepository.listByOrg(orgId);
+      const ownerCount = orgUsers.filter((u) => (u.role || "").toUpperCase() === "OWNER").length;
+      if (ownerCount <= 1) {
+        throw AppError.validation(
+          "At least one Owner is required per workspace. You cannot remove the only Owner.",
+          "id"
+        );
+      }
     }
 
     // Admins cannot remove another Admin
