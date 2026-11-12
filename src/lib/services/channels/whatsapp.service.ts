@@ -24,6 +24,7 @@ import { publish } from "@/lib/realtime";
 import { AppError, toAppError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { validateWhatsAppMedia } from "@/lib/media-limits";
+import { formatElapsedDuration } from "@/lib/utils";
 import { KeyedRateLimiter } from "@/lib/concurrency";
 import { TEMPLATE_MEDIA_RULES, isMediaHeader } from "@/types/templates";
 import {
@@ -698,7 +699,7 @@ export class WhatsAppService {
     if (elapsedMs > SERVICE_WINDOW_MS) {
       const hoursAgo = Math.floor(elapsedMs / (60 * 60 * 1000));
       throw new AppError("MESSAGE_WINDOW_EXPIRED", {
-        message: `The 24-hour messaging window has expired (last customer message was ${hoursAgo}h ago). You can only send pre-approved template messages.`,
+        message: `The 24-hour messaging window has expired (last customer message was ${formatElapsedDuration(elapsedMs)} ago). You can only send pre-approved template messages.`,
         expected: true,
         details: { customerId, to, lastReceivedAt: lastInbound.createdAt, hoursSinceLastReceived: hoursAgo },
       });

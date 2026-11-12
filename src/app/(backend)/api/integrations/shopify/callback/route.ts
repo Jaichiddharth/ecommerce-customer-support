@@ -23,9 +23,13 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const target = new URL("/integrations/shopify", origin);
 
   try {
-    const store = await shopifyService.completeInstall(req.nextUrl.searchParams, req.cookies.get(OAUTH_NONCE_COOKIE)?.value);
-    target.searchParams.set("shopify", "connected");
+    const { store, reconnected } = await shopifyService.completeInstall(
+      req.nextUrl.searchParams,
+      req.cookies.get(OAUTH_NONCE_COOKIE)?.value
+    );
+    target.searchParams.set("shopify", reconnected ? "reconnected" : "connected");
     target.searchParams.set("shop", store.shopDomain);
+    if (store.name) target.searchParams.set("name", store.name);
   } catch (err) {
     const appError = toAppError(err);
     log.warn("Shopify connection failed", { err: appError });

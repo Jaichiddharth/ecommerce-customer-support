@@ -131,6 +131,17 @@ export class ShopifyRepository {
     return store || null;
   }
 
+  /**
+   * Connections of this shop that are still live (connected or needing re-authorization) in any workspace.
+   * A shop is connected to one workspace at a time: disconnecting revokes the app's access for the whole shop.
+   */
+  async findActiveStoresByDomain(shopDomain: string): Promise<ShopifyStore[]> {
+    return await db
+      .select()
+      .from(shopifyStores)
+      .where(and(eq(shopifyStores.shopDomain, shopDomain), isActiveStore));
+  }
+
   /** Creates the connection, or reactivates the organization's earlier row for the same shop */
   async upsertStore(data: NewShopifyStore & { organizationId: number; shopDomain: string }): Promise<ShopifyStore> {
     const now = new Date();

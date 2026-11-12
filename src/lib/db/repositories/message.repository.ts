@@ -81,10 +81,23 @@ export class MessageRepository {
    * webhook delivery): the unique index decides, not a prior lookup.
    */
   async createMessage(data: CreateMessageData): Promise<Message | null> {
-    // Every message belongs to the customer's inbox conversation
+    // Every message belongs to the customer's inbox conversation. A customer message or a teammate's reply on a
+    // resolved ticket opens a follow-up ticket; notes, automations and automatic replies stay on the latest one.
+    const createdAt = data.createdAt || new Date();
+    const opensTicket =
+      !data.isInternalNote &&
+      ((data.senderType === "customer" && data.mediaType !== "system") ||
+        (data.senderType === "agent" && data.senderId != null));
     const conversation = data.ticketId
       ? await conversationRepository.findById(data.ticketId, data.organizationId)
-      : await conversationRepository.ensureForCustomer(data.organizationId, data.customerId, data.channelId);
+      : await conversationRepository.ensureForCustomer(
+          data.organizationId,
+          data.customerId,
+          data.channelId,
+          opensTicket
+            ? { actorType: data.senderType === "customer" ? "customer" : "agent", actorId: data.senderId ?? null, at: createdAt }
+            : undefined
+        );
 
     const initialStatus =
       data.status !== undefined
@@ -113,7 +126,7 @@ export class MessageRepository {
         repliedToId: data.repliedToId || null,
         metadata: data.metadata ?? null,
         automationPendingSince: data.automationPendingSince ?? null,
-        createdAt: data.createdAt || new Date(),
+        createdAt,
         updatedAt: new Date(),
       })
       .onConflictDoNothing()

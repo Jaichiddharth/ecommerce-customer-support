@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ClipboardList, ExternalLink, FileText, Film, Phone, RefreshCw, Reply, Search, Copy } from 'lucide-react';
+import { ArrowLeft, ClipboardList, ExternalLink, FileText, Film, Loader2, Phone, RefreshCw, Reply, Search, Copy } from 'lucide-react';
 import apiClient from '@/lib/api/client';
 import { toApiError } from '@/lib/api/api-error';
 import { WhatsAppTemplate } from '@/types/templates';
@@ -28,11 +28,33 @@ interface TemplateComposerProps {
   revision?: number;
 }
 
-// Approved templates per phone number, kept while the app is open so switching composer tabs doesn't refetch
-const templateCache = new Map<string, WhatsAppTemplate[]>();
+/** Templates fetched per request: a few to start with, the rest are found by searching (or "Load more") */
+const PAGE_SIZE = 4;
+const SEARCH_DEBOUNCE_MS = 300;
+
+interface TemplatePage {
+  templates: WhatsAppTemplate[];
+  /** Cursor for the next page; null when there are no more */
+  after: string | null;
+}
+
+// First page per phone number and search, kept while the app is open so switching composer tabs doesn't refetch
+const templateCache = new Map<string, TemplatePage>();
+const pageKey = (phoneKey: string, query: string) => `${phoneKey}|${query}`;
 
 /** Drops every cached template list, e.g. after Meta approved or paused a template */
 export const forgetCachedTemplates = () => templateCache.clear();
+
+/**
+ * Search text as Meta matches it: template names are lowercase letters, digits and underscores, and Meta's name
+ * filter is a case-insensitive "contains" match. "Abandoned cart" → "abandoned_cart".
+ */
+const toNameQuery = (text: string) =>
+  text
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+    .replace(/[^a-z0-9_]/g, '');
 
 const VARIABLE_SPLIT_RE = /(\{\{\s*[a-zA-Z0-9_]+\s*\}\})/g;
 
@@ -66,49 +88,94 @@ export const TemplateComposer: React.FC<TemplateComposerProps> = ({
   disabledReason,
   revision = 0,
 }) => {
-  const cacheKey = phoneNumberId || 'default';
-  const [templates, setTemplates] = useState<WhatsAppTemplate[] | null>(() => templateCache.get(cacheKey) ?? null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const phoneKey = phoneNumberId || 'default';
   const [search, setSearch] = useState('');
+  // The query actually sent to WhatsApp: follows the search box after a short pause in typing
+  const [query, setQuery] = useState('');
+  const [templates, setTemplates] = useState<WhatsAppTemplate[] | null>(() => templateCache.get(pageKey(phoneKey, ''))?.templates ?? null);
+  const [after, setAfter] = useState<string | null>(() => templateCache.get(pageKey(phoneKey, ''))?.after ?? null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
+
+  useEffect(() => {
+    const next = toNameQuery(search);
+    if (next === query) return;
+    const t = setTimeout(() => setQuery(next), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [search, query]);
+
+  /** One page of approved templates whose name contains `q`; `cursor` continues a previous page */
+  const fetchPage = useCallback(
+    async (q: string, cursor?: string): Promise<TemplatePage> => {
+      const res = await apiClient.get('/api/channels/whatsapp/templates', {
+        params: { phoneNumberId: phoneNumberId || undefined, status: 'APPROVED', limit: PAGE_SIZE, name: q || undefined, after: cursor },
+      });
+      if (res.data?.connected === false) throw new Error('No WhatsApp number is connected.');
+      if (res.data?.error) throw new Error(res.data.error);
+      return {
+        templates: ((res.data?.templates ?? []) as WhatsAppTemplate[]).filter((t) => t.status?.toUpperCase() === 'APPROVED'),
+        // Meta always returns cursors; only a `next` link means there's another page
+        after: res.data?.paging?.next ? res.data?.paging?.cursors?.after ?? null : null,
+      };
+    },
+    [phoneNumberId]
+  );
 
   const load = useCallback(
     async (force = false) => {
-      const cached = templateCache.get(cacheKey);
-      if (cached && !force) {
-        setTemplates(cached);
+      const key = pageKey(phoneKey, query);
+      if (force) {
+        // Statuses may have changed: every cached search of this number is stale
+        for (const k of [...templateCache.keys()]) if (k.startsWith(`${phoneKey}|`)) templateCache.delete(k);
+      }
+      const cached = templateCache.get(key);
+      const requestId = ++requestRef.current;
+      setIsLoadingMore(false);
+      if (cached) {
+        setTemplates(cached.templates);
+        setAfter(cached.after);
+        setError(null);
+        setIsLoading(false);
         return;
       }
-      const requestId = ++requestRef.current;
       setIsLoading(true);
       setError(null);
       try {
-        const res = await apiClient.get('/api/channels/whatsapp/templates', {
-          params: { phoneNumberId: phoneNumberId || undefined, status: 'APPROVED' },
-        });
+        const page = await fetchPage(query);
         if (requestId !== requestRef.current) return;
-        if (res.data?.connected === false) {
-          setError('No WhatsApp number is connected.');
-          return;
-        }
-        if (res.data?.error) {
-          setError(res.data.error);
-          return;
-        }
-        const approved = ((res.data?.templates ?? []) as WhatsAppTemplate[])
-          .filter((t) => t.status?.toUpperCase() === 'APPROVED')
-          .sort((a, b) => a.name.localeCompare(b.name));
-        templateCache.set(cacheKey, approved);
-        setTemplates(approved);
+        templateCache.set(key, page);
+        setTemplates(page.templates);
+        setAfter(page.after);
       } catch (err) {
         if (requestId === requestRef.current) setError(toApiError(err).message);
       } finally {
         if (requestId === requestRef.current) setIsLoading(false);
       }
     },
-    [cacheKey, phoneNumberId]
+    [phoneKey, query, fetchPage]
   );
+
+  const loadMore = async () => {
+    if (!after || isLoadingMore) return;
+    const requestId = requestRef.current;
+    setIsLoadingMore(true);
+    try {
+      const page = await fetchPage(query, after);
+      // The search changed meanwhile: these results belong to the old one
+      if (requestId !== requestRef.current) return;
+      setTemplates((prev) => {
+        const seen = new Set((prev ?? []).map((t) => t.id ?? `${t.name}-${t.language}`));
+        return [...(prev ?? []), ...page.templates.filter((t) => !seen.has(t.id ?? `${t.name}-${t.language}`))];
+      });
+      setAfter(page.after);
+    } catch (err) {
+      if (requestId === requestRef.current) setError(toApiError(err).message);
+    } finally {
+      if (requestId === requestRef.current) setIsLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     if (!disabledReason) load();
@@ -121,14 +188,17 @@ export const TemplateComposer: React.FC<TemplateComposerProps> = ({
     if (!disabledReason) load(true);
   }, [revision, load, disabledReason]);
 
-  const visibleTemplates = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const list = (templates ?? []).filter((t) => !q || t.name.toLowerCase().includes(q) || bodyOf(t).toLowerCase().includes(q));
-    // Sendable templates first; the rest stay visible so agents can see why they're unavailable
-    return list
-      .map((t) => ({ template: t, blocker: getTemplateSendBlocker(t) }))
-      .sort((a, b) => Number(Boolean(a.blocker)) - Number(Boolean(b.blocker)));
-  }, [templates, search]);
+  // Still typing: the list on screen belongs to the previous search
+  const isSearchPending = toNameQuery(search) !== query;
+
+  const visibleTemplates = useMemo(
+    () =>
+      // Sendable templates first; the rest stay visible so agents can see why they're unavailable
+      (templates ?? [])
+        .map((t) => ({ template: t, blocker: getTemplateSendBlocker(t) }))
+        .sort((a, b) => Number(Boolean(a.blocker)) - Number(Boolean(b.blocker))),
+    [templates]
+  );
 
   if (disabledReason) {
     return <p className="mt-1 rounded-lg border border-slate-200 px-3 py-3 text-xs text-slate-500">{disabledReason}</p>;
@@ -289,11 +359,16 @@ export const TemplateComposer: React.FC<TemplateComposerProps> = ({
   return (
     <div className="mt-1 rounded-lg border border-slate-200">
       <div className="flex items-center gap-2 border-b border-slate-100 px-2.5 py-1.5">
-        <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+        {isLoading || isSearchPending ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-slate-400" />
+        ) : (
+          <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+        )}
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search approved templates…"
+          placeholder="Search approved templates by name…"
+          aria-label="Search approved templates by name"
           className="min-w-0 flex-1 bg-transparent py-0.5 text-[13px] text-slate-800 placeholder-slate-400 focus:outline-none"
         />
         <button
@@ -308,8 +383,8 @@ export const TemplateComposer: React.FC<TemplateComposerProps> = ({
       </div>
 
       <div className="max-h-56 divide-y divide-slate-100 overflow-y-auto">
-        {isLoading && !templates ? (
-          Array.from({ length: 3 }, (_, i) => (
+        {(isLoading || isSearchPending) && visibleTemplates.length === 0 && !error ? (
+          Array.from({ length: PAGE_SIZE }, (_, i) => (
             <div key={i} className="space-y-1.5 px-3 py-2.5">
               <div className="h-3 w-1/3 animate-pulse rounded bg-slate-100" />
               <div className="h-2.5 w-3/4 animate-pulse rounded bg-slate-100" />
@@ -324,8 +399,8 @@ export const TemplateComposer: React.FC<TemplateComposerProps> = ({
           </div>
         ) : visibleTemplates.length === 0 ? (
           <p className="px-3 py-3 text-xs text-slate-500">
-            {search.trim()
-              ? `No approved template matches “${search.trim()}”.`
+            {query
+              ? `No approved template name contains “${search.trim()}”.`
               : 'No approved templates yet. Create one under Templates; it appears here once WhatsApp approves it.'}
           </p>
         ) : (
@@ -350,6 +425,20 @@ export const TemplateComposer: React.FC<TemplateComposerProps> = ({
               <span className="block truncate text-xs text-slate-500">{blocker ?? bodyOf(template)}</span>
             </button>
           ))
+        )}
+        {!error && visibleTemplates.length > 0 && !isSearchPending && after && (
+          <div className="flex items-center justify-between gap-2 px-3 py-2 text-[11.5px]">
+            <button
+              type="button"
+              onClick={loadMore}
+              disabled={isLoadingMore || isLoading}
+              className="inline-flex items-center gap-1.5 font-semibold text-[#3440a8] hover:underline disabled:opacity-60 cursor-pointer"
+            >
+              {isLoadingMore && <Loader2 className="h-3 w-3 animate-spin" />}
+              {isLoadingMore ? 'Loading…' : 'Load more'}
+            </button>
+            {!query && <span className="text-slate-400">Search to find a template faster</span>}
+          </div>
         )}
       </div>
     </div>

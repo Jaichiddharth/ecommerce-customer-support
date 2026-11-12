@@ -85,7 +85,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
   const router = useRouter();
   const pathname = usePathname();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  /** Locked = expanded via the button; stays open regardless of hover */
+  const [isLocked, setIsLocked] = useState(true);
+  /** Temporarily expanded because the mouse is over the sidebar */
+  const [isHovered, setIsHovered] = useState(false);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isExpanded = isLocked || isHovered;
+  const isCollapsed = !isExpanded;
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const [channelCount, setChannelCount] = useState<number | null>(null);
 
@@ -109,23 +115,43 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
     try {
       const saved = localStorage.getItem('unocx_sidebar_collapsed');
       if (saved !== null) {
-        setIsCollapsed(saved === 'true');
+        setIsLocked(saved !== 'true');
       }
     } catch {
       // Ignore localStorage errors (e.g. private mode)
     }
   }, []);
 
-  const toggleCollapse = () => {
-    setIsCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem('unocx_sidebar_collapsed', String(next));
-      } catch {
-        // Ignore
-      }
-      return next;
-    });
+  useEffect(() => () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+  }, []);
+
+  /** Button: lock open, or unlock and collapse immediately */
+  const toggleLock = () => {
+    const nextLocked = !isLocked;
+    setIsLocked(nextLocked);
+    // When unlocking, collapse right away even though the cursor is still over the sidebar
+    if (!nextLocked) setIsHovered(false);
+    try {
+      localStorage.setItem('unocx_sidebar_collapsed', String(!nextLocked));
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleMouseEnter = () => {
+    if (isLocked) return;
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    // Small delay so just passing the cursor across doesn't flash it open
+    hoverTimerRef.current = setTimeout(() => setIsHovered(true), 120);
+  };
+
+  const handleMouseLeave = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = null;
+    if (isLocked) return;
+    setIsHovered(false);
+    setShowProfileMenu(false);
   };
 
   // Close profile menu on outside click
@@ -184,9 +210,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
   };
 
   return (
+    // Outer wrapper reserves layout space: full width only when locked open.
+    // On hover, the inner aside expands over the page content instead of pushing it.
+    <div
+      className={`relative shrink-0 h-full z-30 transition-[width] duration-200 ease-in-out ${isLocked ? 'w-[240px]' : 'w-[68px]'}`}
+    >
     <aside
-      className={`bg-white border-r border-slate-200 flex flex-col shrink-0 h-full select-none z-20 transition-[width] duration-200 ease-in-out ${isCollapsed ? 'w-[68px]' : 'w-[240px]'
-        }`}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      className={`absolute inset-y-0 left-0 bg-white border-r border-slate-200 flex flex-col h-full overflow-hidden select-none transition-[width,box-shadow] duration-200 ease-in-out ${isCollapsed ? 'w-[68px]' : 'w-[240px]'
+        } ${isHovered && !isLocked ? 'shadow-2xl' : ''}`}
     >
       {/* ============================================================ */}
       {/* EXPANDED VIEW                                                */}
@@ -210,11 +243,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
             </div>
 
             <button
-              onClick={toggleCollapse}
-              title="Collapse sidebar"
+              onClick={toggleLock}
+              title={isLocked ? 'Collapse sidebar' : 'Keep sidebar open'}
               className="w-7 h-7 rounded-lg border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50 flex items-center justify-center cursor-pointer transition-colors shrink-0"
             >
-              <ChevronLeft className="w-4 h-4" />
+              {isLocked ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </button>
           </div>
 
@@ -415,7 +448,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
             </div>
 
             <button
-              onClick={toggleCollapse}
+              onClick={toggleLock}
               title="Expand sidebar"
               className="w-7 h-7 rounded-lg border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50 flex items-center justify-center cursor-pointer transition-colors"
             >
@@ -531,5 +564,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, unrea
         </>
       )}
     </aside>
+    </div>
   );
 };

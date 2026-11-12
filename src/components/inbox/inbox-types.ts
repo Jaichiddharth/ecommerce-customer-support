@@ -1,4 +1,5 @@
 import type { ChannelType } from '@/types';
+import { isClosedTicketStatus } from '@/types/ticket';
 
 /**
  * Row returned by GET /api/conversations. Contacts without a ticket are listed too: `hasConversation` is false,
@@ -27,6 +28,10 @@ export interface InboxConversation {
   resolvedAt: string | null;
   unreadCount: number;
   lastReceivedMessageAt?: string | null;
+  /** Latest customer message on this ticket (earlier tickets don't count); null = the customer hasn't written on it */
+  ticketCustomerMessageAt?: string | null;
+  /** Mock billing: when the first teammate reply made this ticket billable (one ticket credit) */
+  billableAt?: string | null;
   lastMessage: {
     senderType: string;
     mediaType: string | null;
@@ -75,7 +80,37 @@ export interface InboxChannel {
   optedOutCount?: number;
 }
 
-export type ListTab = 'all' | 'ai' | 'needs_human' | 'mine';
+/** Mine: open tickets assigned to the signed-in teammate (the default); All: every open ticket the team can see */
+export type ListTab = 'mine' | 'all';
+
+/** Row returned by GET /api/conversations/assignees: a teammate a ticket can be assigned to */
+export interface InboxTeammate {
+  id: number;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  role: string;
+  isOnline: boolean;
+}
+
+/**
+ * Which tickets the list shows: the inbox (open tickets, split by the tabs), open tickets nobody owns yet,
+ * or resolved tickets
+ */
+export type TicketView = 'inbox' | 'unassigned' | 'closed';
+
+export const isTicketClosed = (conv: Pick<InboxConversation, 'status'>) => isClosedTicketStatus(conv.status);
+
+/**
+ * Unassigned: an open ticket the customer wrote on, that no teammate owns and the AI agent isn't handling
+ * (an AI conversation that escalated to a human counts). A teammate's first reply claims it.
+ */
+export const isTicketUnassigned = (conv: InboxConversation) =>
+  conv.hasConversation &&
+  !isTicketClosed(conv) &&
+  conv.assigneeId == null &&
+  Boolean(conv.ticketCustomerMessageAt) &&
+  (conv.handledBy !== 'ai' || conv.needsHuman);
 
 /** Channel types the inbox knows how to show; only WhatsApp can send today */
 export const CHANNEL_TYPES: ChannelType[] = ['whatsapp', 'instagram', 'messenger', 'email'];

@@ -7,7 +7,6 @@ import {
   Paperclip,
   Smile,
   Plus,
-  ChevronDown,
   MessageSquare,
   ExternalLink,
   X,
@@ -28,7 +27,7 @@ import {
   Clock,
   AlertTriangle,
   ShieldOff,
-  Lock
+  Lock,
 } from 'lucide-react';
 import { Message, MessageStatus, normalizeMessageStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -49,6 +48,7 @@ import { clientLogger } from '@/lib/client-logger';
 import { ErrorState } from '@/components/ui/states';
 import { describeMessageFailure, getMetaErrorInfo } from '@/lib/errors/meta-errors';
 import { validateWhatsAppMedia } from '@/lib/media-limits';
+import { formatElapsedDuration } from '@/lib/utils';
 import { ChannelsPane } from './inbox/ChannelsPane';
 import { ConversationList, Avatar } from './inbox/ConversationList';
 import { CustomerPanel } from './inbox/CustomerPanel';
@@ -71,15 +71,23 @@ import {
   CHANNEL_THREAD_LABELS,
   InboxChannel,
   InboxConversation,
+  InboxTeammate,
   ListTab,
   SENDABLE_CHANNEL_TYPES,
+  TicketView,
   channelsInPaneOrder,
   conversationChannelType,
   formatHandle,
   formatPhone,
   isChannelHealthy,
+  isTicketClosed,
+  isTicketUnassigned,
   languageName,
 } from './inbox/inbox-types';
+import { TicketCreditsBar, TicketEventRow, TicketStatusMenu } from './inbox/TicketStatus';
+import { SearchableSelect } from '@/components/ui/SearchableSelect';
+import { AssigneeMenu } from './inbox/AssigneeMenu';
+import type { TicketCredits } from '@/types/ticket';
 
 /**
  * Render Status Indicator for an outbound message
@@ -218,6 +226,7 @@ const mapApiMessage = (m: any, channel: string): Message => {
     isInternalNote: Boolean(m.isInternalNote),
     aiAction: m.metadata?.aiAction ?? null,
     consent: m.metadata?.consent ?? null,
+    ticketEvent: m.metadata?.ticketEvent ?? null,
     templateButtons: Array.isArray(m.metadata?.template?.buttons) ? m.metadata.template.buttons : undefined,
     repliedToId: m.repliedToId != null ? String(m.repliedToId) : null,
     repliedTo: m.repliedTo ?? null,
@@ -288,7 +297,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const [isChannelsCollapsed, setIsChannelsCollapsed] = useState(false);
   // The channel (number / account) whose conversations are listed; null until one is picked (the first channel is used)
   const [pickedChannelId, setPickedChannelId] = useState<number | null>(null);
-  const [listTab, setListTab] = useState<ListTab>('all');
+  // Mine (tickets assigned to you) is where a teammate starts; All lists the whole team's tickets
+  const [listTab, setListTab] = useState<ListTab>('mine');
+  // Teammates the assignee menu offers
+  const [teammates, setTeammates] = useState<InboxTeammate[]>([]);
+  const [teammatesStatus, setTeammatesStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  // Inbox (open tickets, split by the tabs) or a ticket view picked in the Channels pane
+  const [ticketView, setTicketView] = useState<TicketView>('inbox');
+  // Mock billing: ticket credits used by teammates' first replies (sent with the conversation list)
+  const [ticketCredits, setTicketCredits] = useState<TicketCredits | null>(null);
   const [listSearch, setListSearch] = useState('');
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [internalSelectedId, setInternalSelectedId] = useState<string>('');
@@ -298,7 +315,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const [showNewContactModal, setShowNewContactModal] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showCopilot, setShowCopilot] = useState(false);
-  const [showModeMenu, setShowModeMenu] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [previewMedia, setPreviewMedia] = useState<{
     url: string;
@@ -332,7 +348,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const reactionPickerRef = useRef<HTMLDivElement>(null);
   const copilotRef = useRef<HTMLDivElement>(null);
-  const modeMenuRef = useRef<HTMLDivElement>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -372,6 +387,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       if (res.data?.success && Array.isArray(res.data.conversations)) {
         setConversations(res.data.conversations);
       }
+      if (res.data?.ticketCredits) setTicketCredits(res.data.ticketCredits);
       setConversationsError(null);
       return null;
     } catch (err) {
@@ -481,7 +497,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     );
     setComposerMode('reply');
     setTemplateDraft(null);
-    setShowModeMenu(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCustomerId, fetchMessagesForCustomer]);
 
@@ -506,7 +521,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       const target = event.target as Node;
       if (emojiPickerRef.current && !emojiPickerRef.current.contains(target)) setShowEmojiPicker(false);
       if (copilotRef.current && !copilotRef.current.contains(target)) setShowCopilot(false);
-      if (modeMenuRef.current && !modeMenuRef.current.contains(target)) setShowModeMenu(false);
       if (reactionPickerRef.current && !reactionPickerRef.current.contains(target)) {
         setReactionPickerMsgId(null);
         setShowFullReactionPicker(false);
@@ -541,7 +555,20 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           Boolean(m.isInternalNote) === Boolean(incoming.isInternalNote)
         );
       });
-      if (idx < 0) return { ...prev, [convId]: [...existing, incoming] };
+      if (idx < 0) {
+        // Kept in time order: a ticket note (assigned, billable) can arrive just before the reply it follows
+        let at = existing.length;
+        while (
+          at > 0 &&
+          incoming.createdAt &&
+          existing[at - 1].createdAt &&
+          !isTempMessage(existing[at - 1]) &&
+          existing[at - 1].createdAt! > incoming.createdAt
+        ) {
+          at--;
+        }
+        return { ...prev, [convId]: [...existing.slice(0, at), incoming, ...existing.slice(at)] };
+      }
       const updated = existing
         .map((m, i) => (i === idx ? { ...m, ...incoming, mediaUrl: incoming.mediaUrl || m.mediaUrl } : m))
         // Drop a leftover temp bubble once the real message is in place
@@ -588,12 +615,18 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                 rawMsg.senderType === 'customer' && rawMsg.mediaType !== 'system' && rawMsg.createdAt
                   ? rawMsg.createdAt
                   : conv.lastReceivedMessageAt,
+              // The customer wrote on this ticket: it now shows in Unassigned when nobody owns it
+              ticketCustomerMessageAt:
+                rawMsg.senderType === 'customer' && rawMsg.mediaType !== 'system' && rawMsg.createdAt
+                  ? rawMsg.createdAt
+                  : conv.ticketCustomerMessageAt,
             };
           return [updated, ...prev.slice(0, idx), ...prev.slice(idx + 1)];
         });
-        // Agent replies can change who handles the conversation (human takes over from AI);
-        // a contact's first message created its ticket, so reload to swap in the real conversation
-        if (rawMsg.senderType === 'agent' || !known.hasConversation) refreshConversationsSoon();
+        // Agent replies can change who handles the conversation (human takes over from AI) and claim the ticket;
+        // a contact's first message created its ticket, and a message on a resolved ticket opened a new one,
+        // so reload to swap in the real conversation
+        if (rawMsg.senderType === 'agent' || !known.hasConversation || isTicketClosed(known)) refreshConversationsSoon();
       }
 
       if (isOpen && rawMsg.senderType === 'customer') {
@@ -727,10 +760,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     onSelectConversation?.('');
   }, [onSelectConversation]);
 
-  // Picking another channel lists its contacts; a chat from a different channel closes
+  // Picking another channel lists its contacts (keeping the Mine / All tab); a chat from a different channel closes
   const handleSelectChannel = (id: number) => {
     setPickedChannelId(id);
-    setListTab('all');
+    setTicketView('inbox');
     if (activeConv && activeConv.channel?.id !== id) closeConversation();
   };
 
@@ -746,23 +779,29 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     return conversations.filter((conv) => conv.channel?.id === selectedChannelId);
   }, [conversations, selectedChannelId, isLoadingChannels]);
 
+  // The inbox works on open tickets; resolved ones move to the Closed view
+  const openScoped = useMemo(() => channelScoped.filter((c) => !isTicketClosed(c)), [channelScoped]);
+  const unassignedScoped = useMemo(() => openScoped.filter(isTicketUnassigned), [openScoped]);
+  const closedScoped = useMemo(() => channelScoped.filter(isTicketClosed), [channelScoped]);
+  const ticketCounts = { unassigned: unassignedScoped.length, closed: closedScoped.length };
+
   const tabCounts = useMemo<Record<ListTab, number>>(
     () => ({
-      all: channelScoped.length,
-      ai: channelScoped.filter((c) => c.handledBy === 'ai').length,
-      needs_human: channelScoped.filter((c) => c.needsHuman).length,
-      mine: channelScoped.filter((c) => dbUser?.id != null && c.assigneeId === dbUser.id).length,
+      mine: openScoped.filter((c) => dbUser?.id != null && c.assigneeId === dbUser.id).length,
+      all: openScoped.length,
     }),
-    [channelScoped, dbUser?.id]
+    [openScoped, dbUser?.id]
   );
 
   const visibleConversations = useMemo(() => {
     const q = listSearch.trim().toLowerCase();
     const digits = q.replace(/\D/g, '');
-    return channelScoped.filter((conv) => {
-      if (listTab === 'ai' && conv.handledBy !== 'ai') return false;
-      if (listTab === 'needs_human' && !conv.needsHuman) return false;
-      if (listTab === 'mine' && (dbUser?.id == null || conv.assigneeId !== dbUser.id)) return false;
+    const base = ticketView === 'unassigned' ? unassignedScoped : ticketView === 'closed' ? closedScoped : openScoped;
+    return base.filter((conv) => {
+      // The tabs split the inbox only; the ticket views list their own tickets
+      if (ticketView === 'inbox') {
+        if (listTab === 'mine' && (dbUser?.id == null || conv.assigneeId !== dbUser.id)) return false;
+      }
       if (unreadOnly && conv.unreadCount === 0) return false;
       if (!q) return true;
       const { name, handle, phone, email } = conv.customer;
@@ -775,7 +814,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         conv.ticketNumber.toLowerCase().includes(q)
       );
     });
-  }, [channelScoped, listTab, listSearch, unreadOnly, dbUser?.id]);
+  }, [openScoped, unassignedScoped, closedScoped, ticketView, listTab, listSearch, unreadOnly, dbUser?.id]);
 
   // Top bar context chip, e.g. "WhatsApp · Aalmara Support · +15559447164" or "Instagram · @noctylle"
   const scope = useMemo(() => {
@@ -786,11 +825,6 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     return { type: selectedChannel.type, label: detail ? `${label} · ${detail}` : label };
   }, [selectedChannel]);
 
-  // Number shown in the top bar: the selected WhatsApp number, else the first healthy one
-  const primaryNumber = useMemo(() => {
-    if (selectedChannel?.type === 'whatsapp' && selectedChannel.phoneNumber) return selectedChannel.phoneNumber;
-    return (whatsappChannels.find(isChannelHealthy) || whatsappChannels[0])?.phoneNumber ?? null;
-  }, [selectedChannel, whatsappChannels]);
 
   // WhatsApp number used to reply in the open conversation
   const conversationSendChannel = useMemo(() => {
@@ -828,7 +862,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     return () => clearInterval(timer);
   }, []);
 
-  /** `timeLeft` is "23h", or "12m" in the last hour (not rounded up to "1h"); `timeSinceLast` is "30h" */
+  /** `timeLeft` is "23h", or "12m" in the last hour (not rounded up to "1h"); `timeSinceLast` is "1 day 6h" / "1 week 2 days 3h" */
   const window24hStatus = useMemo((): {
     isExpired: boolean;
     isWithin24Hours: boolean;
@@ -847,7 +881,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     // The clock can lag a message that just arrived by up to a minute; never let that read as negative time
     const elapsed = Math.max(0, windowClock - lastCustomerMessageTime);
     if (elapsed > WINDOW_24H_MS) {
-      const timeSinceLast = `${Math.floor(elapsed / HOUR_MS)}h`;
+      const timeSinceLast = formatElapsedDuration(elapsed);
       return { isExpired: true, isWithin24Hours: false, timeLeft: null, timeSinceLast, hasReceivedMessage: true };
     }
     const remainingMs = WINDOW_24H_MS - elapsed;
@@ -895,14 +929,48 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     );
   };
 
-  const handleSetHandler = (handledBy: 'ai' | 'human') => {
-    setShowModeMenu(false);
-    if (!activeConv || activeConv.handledBy === handledBy) return;
+  // Teammates for the assignee menu; loaded once, and again when the menu opens after a failed load
+  const fetchTeammates = useCallback(async () => {
+    setTeammatesStatus('loading');
+    try {
+      const res = await apiClient.get('/api/conversations/assignees');
+      setTeammates(Array.isArray(res.data?.teammates) ? res.data.teammates : []);
+      setTeammatesStatus('loaded');
+    } catch (err) {
+      clientLogger.warn('InboxView.fetchTeammates', 'Teammates for the assignee menu could not be loaded', { err });
+      setTeammatesStatus('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTeammates();
+  }, [fetchTeammates]);
+
+  // Hands the ticket to a teammate (they handle it from now on, the AI agent stops) or unassigns it
+  const handleAssign = (teammate: InboxTeammate | null) => {
+    if (!activeConv || !canUpdateInbox) return;
+    const nextId = teammate?.id ?? null;
+    if (nextId === activeConv.assigneeId) return;
+    const isMe = teammate != null && teammate.id === dbUser?.id;
     updateConversation(
       activeConv,
-      { handledBy },
-      { handledBy, ...(handledBy === 'ai' ? { needsHuman: false } : {}) },
-      handledBy === 'ai' ? 'Handed back to the AI agent' : 'AI agent paused'
+      { assigneeId: nextId },
+      teammate
+        ? { assigneeId: teammate.id, assigneeName: teammate.name, handledBy: 'human', needsHuman: false }
+        : { assigneeId: null, assigneeName: null },
+      teammate ? (isMe ? 'Assigned to you' : `Assigned to ${teammate.name}`) : 'Ticket unassigned'
+    );
+  };
+
+  // Resolving moves the ticket to the Closed view (the chat stays open); reopening brings it back to the inbox
+  const handleSetStatus = (status: 'OPEN' | 'RESOLVED') => {
+    if (!activeConv || !canUpdateInbox) return;
+    const resolving = status === 'RESOLVED';
+    updateConversation(
+      activeConv,
+      { status },
+      { status, resolvedAt: resolving ? new Date().toISOString() : null },
+      resolving ? 'Ticket resolved · moved to Closed' : 'Ticket reopened'
     );
   };
 
@@ -1204,15 +1272,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       ? 'This WhatsApp number is disconnected. Messaging is paused.'
       : isCustomerOptedOut
         ? OPTED_OUT_MESSAGE
-      : !canSendOnChannel
-        ? `Sending on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet. Use "Insert as text" instead.`
-        : activeChannelType === 'whatsapp' && isWindowExpired
-          ? '24-hour customer window is closed. Share products using approved templates or wait for a customer reply.'
-          : !activeConv.customer.phone
-            ? `${activeConv.customer.name} has no phone number.`
-            : !conversationSendChannel
-              ? 'No connected WhatsApp channel found.'
-              : null;
+        : !canSendOnChannel
+          ? `Sending on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet. Use "Insert as text" instead.`
+          : activeChannelType === 'whatsapp' && isWindowExpired
+            ? '24-hour customer window is closed. Share products using approved templates or wait for a customer reply.'
+            : !activeConv.customer.phone
+              ? `${activeConv.customer.name} has no phone number.`
+              : !conversationSendChannel
+                ? 'No connected WhatsApp channel found.'
+                : null;
 
   /** Sends the selected variant through the regular WhatsApp send path (the server re-checks it with Shopify) */
   const handleShareProduct = async ({ product, variant, caption }: ShareProductArgs): Promise<boolean> => {
@@ -1240,6 +1308,12 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     }
   };
 
+  // The reply box is locked in these cases, so product text can't go there either (a channel that can't send yet
+  // still takes it: "Insert as text" is the way to share there)
+  const productTextBlocked = Boolean(
+    activeConv && (isChannelDisconnected || isCustomerOptedOut || (activeChannelType === 'whatsapp' && isWindowExpired))
+  );
+
   const handleInsertProductText = (text: string) => {
     setInputMessage(text);
     setComposerMode('reply');
@@ -1253,18 +1327,18 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   const templateDisabledReason = !canUpdateInbox
     ? 'You do not have permission to send messages or templates.'
     : !activeConv
-    ? null
-    : activeChannelType !== 'whatsapp'
-      ? 'Message templates can only be sent on WhatsApp.'
-      : isChannelDisconnected
-        ? 'This WhatsApp number is disconnected. Reconnect it in Settings to send templates.'
-        : isCustomerOptedOut
-          ? OPTED_OUT_MESSAGE
-        : !activeConv.customer.phone
-          ? `${activeConv.customer.name} has no phone number.`
-          : !conversationSendChannel
-            ? 'No connected WhatsApp channel found.'
-            : null;
+      ? null
+      : activeChannelType !== 'whatsapp'
+        ? 'Message templates can only be sent on WhatsApp.'
+        : isChannelDisconnected
+          ? 'This WhatsApp number is disconnected. Reconnect it in Settings to send templates.'
+          : isCustomerOptedOut
+            ? OPTED_OUT_MESSAGE
+            : !activeConv.customer.phone
+              ? `${activeConv.customer.name} has no phone number.`
+              : !conversationSendChannel
+                ? 'No connected WhatsApp channel found.'
+                : null;
 
   const templateReady = Boolean(
     templateDraft && Object.keys(getTemplateValueErrors(templateDraft.template, templateDraft.values)).length === 0
@@ -1449,6 +1523,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         onSelectConversation?.(id);
         setPickedChannelId(targetChannelId ?? null);
         setListTab('all');
+        setTicketView('inbox');
       }
     } catch (err) {
       notifyError(err, { where: 'InboxView.handleCreateContact', title: 'Customer not created' });
@@ -1606,7 +1681,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     const isAi = msg.sender === 'bot';
     const isNote = Boolean(msg.isInternalNote);
     const prev = index > 0 ? activeMessages[index - 1] : undefined;
-    const showDaySeparator = Boolean(prev && dayKey(prev.createdAt) !== dayKey(msg.createdAt));
+    // The first loaded message always gets one so the thread opens with its date, like every later day does
+    const showDaySeparator = !prev || dayKey(prev.createdAt) !== dayKey(msg.createdAt);
 
     const agentName =
       msg.senderName || (msg.senderId != null && msg.senderId === dbUser?.id ? dbUser?.name : null) || 'Agent';
@@ -1648,6 +1724,16 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       );
     }
 
+    // Ticket change (the ticket's audit log: who resolved / assigned / billed it, and when)
+    if (msg.ticketEvent) {
+      return (
+        <React.Fragment key={msg.id}>
+          {daySeparator}
+          <TicketEventRow event={msg.ticketEvent} text={msg.text} />
+        </React.Fragment>
+      );
+    }
+
     // The message this one answers: the loaded one when available (it's current), else the server's preview
     const customerName = activeConv?.customer.name || 'Customer';
     const quotedLocal = msg.repliedToId ? activeMessages.find((m) => m.id === msg.repliedToId) : undefined;
@@ -1663,9 +1749,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         {daySeparator}
         <div className={`group flex flex-col ${isCustomer ? 'items-start' : 'items-end'}`}>
           <div
-            className={`max-w-[78%] text-[13px] leading-relaxed transition-shadow duration-500 ${bubbleClass} ${
-              isHighlighted ? 'ring-2 ring-[#3440a8]/50 ring-offset-2' : ''
-            }`}
+            className={`max-w-[78%] text-[13px] leading-relaxed transition-shadow duration-500 ${bubbleClass} ${isHighlighted ? 'ring-2 ring-[#3440a8]/50 ring-offset-2' : ''
+              }`}
           >
             {label && (
               <p className={`text-[10px] font-semibold tracking-wider mb-1 ${isNote ? 'text-amber-700' : 'text-[#3440a8]'}`}>
@@ -1797,6 +1882,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           onConnect={handleConnectChannel}
           onCollapse={() => setIsChannelsCollapsed(true)}
           canCreate={canCreateInbox}
+          ticketView={ticketView}
+          ticketCounts={ticketCounts}
+          onSelectTicketView={setTicketView}
         />
       )}
 
@@ -1807,10 +1895,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           onOpenConversation={(conv) => {
             if (conv.channel) setPickedChannelId(conv.channel.id);
             setListTab('all');
+            setTicketView(isTicketClosed(conv) ? 'closed' : 'inbox');
             handleSelectConversation(conv);
           }}
           onNewContact={openNewContactModal}
-          primaryNumber={primaryNumber}
           isLive={isRealtimeConnected}
           isChannelsCollapsed={isChannelsCollapsed}
           onExpandChannels={() => setIsChannelsCollapsed(false)}
@@ -1833,6 +1921,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
             isLoading={isLoadingConversations}
             error={conversationsError}
             onRetry={fetchConversations}
+            ticketView={ticketView}
+            onExitTicketView={() => setTicketView('inbox')}
+            currentUserId={dbUser?.id ?? null}
           />
 
           {/* ====================================================== */}
@@ -1841,554 +1932,547 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           <section className="flex-1 flex flex-col min-w-0 h-full bg-white">
             {activeConv ? (
               <>
-                {/* Chat header */}
-                <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 shrink-0">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Avatar
-                      name={activeConv.customer.name}
-                      src={activeConv.customer.avatarUrl}
-                      phone={activeConv.customer.phone}
-                      handle={activeConv.customer.handle}
-                      email={activeConv.customer.email}
-                      size="lg"
-                    />
-                    <div className="min-w-0">
-                      {/* The name truncates first; badges never wrap, so the header keeps one line */}
-                      <div className="flex items-center gap-2 min-w-0">
-                        <h2 className="min-w-0 font-semibold text-[15px] text-slate-900 truncate">{activeConv.customer.name}</h2>
-                        {isChannelDisconnected && (
-                          <span className="shrink-0 whitespace-nowrap px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
-                            Disconnected
-                          </span>
-                        )}
-                        {activeChannelType === 'whatsapp' && (
-                          window24hStatus.isWithin24Hours ? (
-                            <span
-                              title={`24-hour customer window is open (${window24hStatus.timeLeft} left). Free-form messages allowed.`}
-                              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] leading-4 font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
-                            >
-                              <Clock className="w-3 h-3 text-emerald-600" />
-                              {window24hStatus.timeLeft} left
+                {/* Chat header. A size container: the chat pane's width depends on the side panels, not the window,
+                    so the controls compact on the pane's own width (@lg/chathdr = 32rem). */}
+                <div className="@container/chathdr px-4 py-3 border-b border-slate-200 shrink-0">
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                    {/* The name owns the first line and never drops below ~7rem; with basis-0 the controls only wrap
+                      to a second row when even that doesn't fit */}
+                    <div className="flex items-center gap-3 basis-0 grow min-w-[10rem]">
+                      <Avatar
+                        name={activeConv.customer.name}
+                        src={activeConv.customer.avatarUrl}
+                        phone={activeConv.customer.phone}
+                        handle={activeConv.customer.handle}
+                        email={activeConv.customer.email}
+                        size="lg"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <h2 className="font-semibold text-[15px] text-slate-900 truncate" title={activeConv.customer.name}>
+                          {activeConv.customer.name}
+                        </h2>
+                        {/* Status badges sit beside the channel line: the channel text truncates, the badges don't */}
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <p className="min-w-0 text-[11.5px] text-slate-500 truncate" title={headerSubtitle}>{headerSubtitle}</p>
+                          {isChannelDisconnected && (
+                            <span className="shrink-0 whitespace-nowrap px-1.5 py-px rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                              Disconnected
                             </span>
-                          ) : (
-                            <span
-                              title={window24hStatus.hasReceivedMessage ? `Customer last messaged ${window24hStatus.timeSinceLast} ago. Only approved templates can be sent.` : 'This customer hasn’t messaged yet. Only approved templates can be sent.'}
-                              className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] leading-4 font-medium bg-amber-50 text-amber-800 border border-amber-200"
-                            >
-                              <AlertTriangle className="w-3 h-3 text-amber-600" />
-                              Templates only
-                            </span>
-                          )
-                        )}
-                        {/* Only opted-out is worth flagging in the header: nothing can be sent to them */}
-                        {activeChannelType === 'whatsapp' && activeConv.customer.isOptedOut && <ConsentBadge isOptedOut />}
-                      </div>
-                      <p className="text-[11.5px] text-slate-500 truncate">{headerSubtitle}</p>
-                    </div>
-                  </div>
-
-                  {/* AI / human controls need a ticket; a new contact gets one with the first message */}
-                  {activeConv.hasConversation && (
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <div className="relative" ref={modeMenuRef}>
-                      <button
-                        onClick={() => setShowModeMenu((v) => !v)}
-                        className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-[13px] font-medium cursor-pointer ${isAiHandling ? 'bg-[#eef0fb] text-[#3440a8]' : 'bg-slate-100 text-slate-700'
-                          }`}
-                      >
-                        {isAiHandling ? <Sparkles className="w-4 h-4" /> : <User className="w-4 h-4" />}
-                        {isAiHandling ? 'AI agent' : activeConv.assigneeName || 'Human'}
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      </button>
-                      {showModeMenu && (
-                        <div className="absolute right-0 top-full mt-1.5 w-64 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 z-30 text-[13px]">
-                          <button
-                            onClick={() => handleSetHandler('ai')}
-                            className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-slate-50 text-left cursor-pointer"
-                          >
-                            <Sparkles className="w-4 h-4 mt-0.5 text-[#3440a8]" />
-                            <span className="flex-1">
-                              <span className="block font-medium text-slate-900">AI agent</span>
-                              <span className="block text-xs text-slate-500">Replies automatically, escalates when unsure</span>
-                            </span>
-                            {isAiHandling && <Check className="w-4 h-4 text-[#3440a8]" />}
-                          </button>
-                          <button
-                            onClick={() => handleSetHandler('human')}
-                            className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-slate-50 text-left cursor-pointer"
-                          >
-                            <User className="w-4 h-4 mt-0.5 text-slate-600" />
-                            <span className="flex-1">
-                              <span className="block font-medium text-slate-900">Human only</span>
-                              <span className="block text-xs text-slate-500">Pause the AI agent for this conversation</span>
-                            </span>
-                            {!isAiHandling && <Check className="w-4 h-4 text-[#3440a8]" />}
-                          </button>
+                          )}
+                          {activeChannelType === 'whatsapp' && (
+                            window24hStatus.isWithin24Hours ? (
+                              <span
+                                title={`24-hour customer window is open (${window24hStatus.timeLeft} left). Free-form messages allowed.`}
+                                className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-1.5 py-px rounded-full text-[10.5px] leading-4 font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              >
+                                <Clock className="w-3 h-3 text-emerald-600" />
+                                {window24hStatus.timeLeft} left
+                              </span>
+                            ) : (
+                              <span
+                                title={window24hStatus.hasReceivedMessage ? `Templates only: customer last messaged ${window24hStatus.timeSinceLast} ago. Only approved templates can be sent.` : 'Templates only: this customer hasn’t messaged yet. Only approved templates can be sent.'}
+                                className="shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-1.5 py-px rounded-full text-[10.5px] leading-4 font-medium bg-amber-50 text-amber-800 border border-amber-200"
+                              >
+                                <AlertTriangle className="w-3 h-3 text-amber-600" />
+                                {/* Narrow pane: the icon (and tooltip) is enough, the banner below explains it */}
+                                <span className="hidden @md/chathdr:inline">Templates only</span>
+                              </span>
+                            )
+                          )}
+                          {/* Only opted-out is worth flagging in the header: nothing can be sent to them */}
+                          {activeChannelType === 'whatsapp' && activeConv.customer.isOptedOut && <ConsentBadge isOptedOut />}
                         </div>
-                      )}
+                      </div>
                     </div>
 
-                    {(isAiHandling || activeConv.needsHuman || activeConv.assigneeId !== dbUser?.id) && (
-                      <button
-                        onClick={canUpdateInbox ? handleTakeOver : undefined}
-                        disabled={!canUpdateInbox}
-                        title={!canUpdateInbox ? 'You do not have permission to update conversations' : undefined}
-                        className={`px-3 py-2 rounded-lg border text-[13px] font-medium transition-colors whitespace-nowrap ${
-                          canUpdateInbox
-                            ? 'border-slate-300 bg-white text-slate-900 hover:bg-slate-50 cursor-pointer'
-                            : 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed opacity-60'
-                        }`}
-                      >
-                        Take over
-                        {!canUpdateInbox && <Lock className="w-3.5 h-3.5 ml-1 text-slate-400 inline" />}
-                      </button>
+                    {/* AI / human controls need a ticket; a new contact gets one with the first message */}
+                    {activeConv.hasConversation && (
+                      <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+                        <TicketStatusMenu
+                          status={activeConv.status}
+                          disabled={!canUpdateInbox}
+                          onChange={handleSetStatus}
+                          labelClassName="hidden @lg/chathdr:inline"
+                        />
+                        <AssigneeMenu
+                          assigneeId={activeConv.assigneeId}
+                          assigneeName={activeConv.assigneeName}
+                          teammates={teammates}
+                          isLoading={teammatesStatus === 'loading' || teammatesStatus === 'idle'}
+                          loadFailed={teammatesStatus === 'error'}
+                          onRetry={fetchTeammates}
+                          currentUserId={dbUser?.id ?? null}
+                          disabled={!canUpdateInbox}
+                          onAssign={handleAssign}
+                        />
+                        {!isTicketClosed(activeConv) && activeConv.assigneeId !== dbUser?.id && (
+                          <button
+                            onClick={canUpdateInbox ? handleTakeOver : undefined}
+                            disabled={!canUpdateInbox}
+                            title={!canUpdateInbox ? 'You do not have permission to update conversations' : undefined}
+                            className={`px-3 py-2 rounded-lg border text-[13px] font-medium transition-colors whitespace-nowrap ${
+                              canUpdateInbox
+                                ? 'border-slate-300 bg-white text-slate-900 hover:bg-slate-50 cursor-pointer'
+                                : 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed opacity-60'
+                            }`}
+                          >
+                            Take over
+                            {!canUpdateInbox && <Lock className="w-3.5 h-3.5 ml-1 text-slate-400 inline" />}
+                          </button>
+                        )}
+                      </div>
                     )}
-                  </div>
-                  )}
+                      </div>
                 </div>
 
-                {isChannelDisconnected && (
-                  <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center justify-between text-xs text-amber-900 shrink-0">
-                    <div className="flex items-center gap-2">
-                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                      <span>This WhatsApp number is disconnected. All past message logs and customer details are preserved, but messaging from this number is paused.</span>
-                    </div>
-                    <a
-                      href="/settings"
-                      className="ml-3 px-2.5 py-1 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs shrink-0 cursor-pointer"
-                    >
-                      Manage in Settings
-                    </a>
-                  </div>
-                )}
-
-                {messagesLoadError?.convId === convKeyFor(activeConv.customer.id) && activeMessages.length > 0 && (
-                  <div role="alert" className="px-4 py-2 bg-red-50 border-b border-red-100 text-[11px] text-red-700 flex items-center justify-between gap-2">
-                    <span className="truncate">Couldn&apos;t refresh messages: {messagesLoadError.error.message}</span>
-                    <button
-                      type="button"
-                      onClick={() => fetchMessagesForCustomer(activeConv.customer.id, activeChannelType)}
-                      className="font-semibold underline cursor-pointer shrink-0"
-                    >
-                      Retry
-                    </button>
-                  </div>
-                )}
-
-                {/* Thread */}
-                {messagesLoadError?.convId === convKeyFor(activeConv.customer.id) && activeMessages.length === 0 ? (
-                  <div className="flex-1 flex items-center justify-center">
-                    <ErrorState
-                      error={messagesLoadError.error}
-                      title="Couldn't load messages"
-                      onRetry={() => fetchMessagesForCustomer(activeConv.customer.id, activeChannelType)}
-                    />
-                  </div>
-                ) : activeMessages.length === 0 ? (
-                  <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-                    {activeConv.aiSummary && (
-                      <div className="rounded-xl border border-slate-200 px-4 py-3 bg-white">
-                        <p className="text-[10px] font-semibold tracking-wider text-[#3440a8]">AI SUMMARY</p>
-                        <p className="mt-1 text-[13px] text-slate-700 leading-relaxed">{activeConv.aiSummary}</p>
+                  {isChannelDisconnected && (
+                    <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center justify-between text-xs text-amber-900 shrink-0">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>This WhatsApp number is disconnected. All past message logs and customer details are preserved, but messaging from this number is paused.</span>
                       </div>
-                    )}
-
-                    {!activePaging?.loaded ? (
-                      <div className="py-16 flex items-center justify-center gap-2 text-xs text-slate-400">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Loading messages…
-                      </div>
-                    ) : (
-                      <div className="py-16 flex flex-col items-center text-center text-slate-400">
-                        <div className="w-11 h-11 rounded-full bg-slate-100 flex items-center justify-center mb-3">
-                          <MessageSquare className="w-5 h-5" />
-                        </div>
-                        <p className="font-semibold text-slate-700 text-[13px]">No messages yet</p>
-                        <p className="text-xs mt-1">
-                          Start a {threadLabel} conversation with <span className="font-medium text-slate-600">{activeConv.customer.name}</span>.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <VirtualMessageList
-                    key={activeConvKey}
-                    items={activeMessages}
-                    renderItem={renderMessage}
-                    hasMore={Boolean(activePaging?.hasMore)}
-                    isLoadingOlder={isLoadingOlder}
-                    onLoadOlder={handleLoadOlder}
-                    shouldScrollToNewItem={isOwnNewMessage}
-                    scrollRequest={scrollRequest}
-                    header={
-                      <div className="space-y-3 pb-3">
-                        {isLoadingOlder ? (
-                          <div className="flex items-center justify-center gap-2 py-1 text-[11px] text-slate-400">
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            Loading earlier messages…
-                          </div>
-                        ) : (
-                          !activePaging?.hasMore && (
-                            <p className="py-1 text-center text-[11px] text-slate-400">Start of conversation</p>
-                          )
-                        )}
-                        {activeConv.aiSummary && (
-                          <div className="rounded-xl border border-slate-200 px-4 py-3 bg-white">
-                            <p className="text-[10px] font-semibold tracking-wider text-[#3440a8]">AI SUMMARY</p>
-                            <p className="mt-1 text-[13px] text-slate-700 leading-relaxed">{activeConv.aiSummary}</p>
-                          </div>
-                        )}
-                      </div>
-                    }
-                  />
-                )}
-
-                {/* Composer */}
-                <div className="border-t border-slate-200 px-4 pb-3 shrink-0">
-                  {/* Opted out: nothing can be sent until the customer replies START */}
-                  {isCustomerOptedOut && (
-                    <div className="mt-3 mb-2 p-2.5 rounded-lg bg-red-50/90 border border-red-200/90 flex items-start gap-2 text-xs">
-                      <ShieldOff className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                      <div>
-                        <p className="font-semibold text-red-900">Customer opted out of WhatsApp messages</p>
-                        <p className="text-red-800 text-[11.5px] mt-0.5 leading-relaxed">
-                          Replies, attachments, reactions and templates are blocked. Messaging unlocks automatically when the
-                          customer replies START. Internal notes still work.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* WhatsApp 24h Window Warning Banner */}
-                  {activeChannelType === 'whatsapp' && isWindowExpired && !isCustomerOptedOut && (
-                    <div className="mt-3 mb-2 p-2.5 rounded-lg bg-amber-50/90 border border-amber-200/90 flex items-start justify-between gap-3 text-xs">
-                      <div className="flex items-start gap-2 min-w-0">
-                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                        <div>
-                          <p className="font-semibold text-amber-900">24-Hour Customer Window Expired</p>
-                          <p className="text-amber-800 text-[11.5px] mt-0.5 leading-relaxed">
-                            {window24hStatus.hasReceivedMessage
-                              ? `Last customer message received ${window24hStatus.timeSinceLast} ago. `
-                              : 'No message received from this contact yet. '}
-                            WhatsApp Business policy requires sending an approved template to start or resume messaging. Regular text is disabled.
-                          </p>
-                        </div>
-                      </div>
-                      {composerMode !== 'template' && (
-                        <button
-                          type="button"
-                          onClick={canUpdateInbox ? () => setComposerMode('template') : undefined}
-                          disabled={!canUpdateInbox}
-                          title={!canUpdateInbox ? 'You do not have permission to send templates' : undefined}
-                          className={`px-2.5 py-1.5 rounded-md text-white font-medium text-[11.5px] shrink-0 shadow-sm transition-colors ${
-                            canUpdateInbox
-                              ? 'bg-amber-600 hover:bg-amber-700 cursor-pointer'
-                              : 'bg-amber-400 cursor-not-allowed opacity-60'
-                          }`}
-                        >
-                          Send Template
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4 text-[13px]">
-                      {(['reply', 'note', 'template'] as ComposerMode[]).map((mode) => (
-                        <button
-                          key={mode}
-                          onClick={() => setComposerMode(mode)}
-                          className={`py-2.5 border-b-2 capitalize cursor-pointer flex items-center gap-1.5 ${composerMode === mode
-                            ? 'border-[#3440a8] text-[#3440a8] font-semibold'
-                            : 'border-transparent text-slate-600 hover:text-slate-900'
-                            }`}
-                        >
-                          <span>{mode}</span>
-                          {mode === 'template' && activeChannelType === 'whatsapp' && isWindowExpired && !isCustomerOptedOut && (
-                            <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
-                              Required
-                            </span>
-                          )}
-                          {(mode === 'reply' || mode === 'template') && isCustomerOptedOut && (
-                            <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-red-50 text-red-600">
-                              Opted out
-                            </span>
-                          )}
-                          {mode === 'reply' && activeChannelType === 'whatsapp' && isWindowExpired && !isCustomerOptedOut && (
-                            <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-100 text-slate-500">
-                              Locked
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="relative" ref={copilotRef}>
-                      <button
-                        onClick={() => setShowCopilot((v) => !v)}
-                        className="px-2.5 py-1 rounded-md bg-[#eef0fb] text-[#3440a8] text-xs font-medium cursor-pointer hover:bg-[#e3e6f8]"
+                      <a
+                        href="/settings"
+                        className="ml-3 px-2.5 py-1 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs shrink-0 cursor-pointer"
                       >
-                        Copilot · {suggestions.length} {suggestions.length === 1 ? 'idea' : 'ideas'}
+                        Manage in Settings
+                      </a>
+                    </div>
+                  )}
+
+                  {messagesLoadError?.convId === convKeyFor(activeConv.customer.id) && activeMessages.length > 0 && (
+                    <div role="alert" className="px-4 py-2 bg-red-50 border-b border-red-100 text-[11px] text-red-700 flex items-center justify-between gap-2">
+                      <span className="truncate">Couldn&apos;t refresh messages: {messagesLoadError.error.message}</span>
+                      <button
+                        type="button"
+                        onClick={() => fetchMessagesForCustomer(activeConv.customer.id, activeChannelType)}
+                        className="font-semibold underline cursor-pointer shrink-0"
+                      >
+                        Retry
                       </button>
-                      {showCopilot && (
-                        <div className="absolute right-0 bottom-full mb-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl p-2 z-30">
-                          <p className="px-2 pt-1 pb-2 text-[11px] font-semibold text-slate-500 tracking-wider flex items-center gap-1.5">
-                            <Sparkles className="w-3.5 h-3.5 text-[#3440a8]" />
-                            COPILOT IDEAS
+                    </div>
+                  )}
+
+                  {/* Thread */}
+                  {messagesLoadError?.convId === convKeyFor(activeConv.customer.id) && activeMessages.length === 0 ? (
+                    <div className="flex-1 flex items-center justify-center">
+                      <ErrorState
+                        error={messagesLoadError.error}
+                        title="Couldn't load messages"
+                        onRetry={() => fetchMessagesForCustomer(activeConv.customer.id, activeChannelType)}
+                      />
+                    </div>
+                  ) : activeMessages.length === 0 ? (
+                    <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+                      {activeConv.aiSummary && (
+                        <div className="rounded-xl border border-slate-200 px-4 py-3 bg-white">
+                          <p className="text-[10px] font-semibold tracking-wider text-[#3440a8]">AI SUMMARY</p>
+                          <p className="mt-1 text-[13px] text-slate-700 leading-relaxed">{activeConv.aiSummary}</p>
+                        </div>
+                      )}
+
+                      {!activePaging?.loaded ? (
+                        <div className="py-16 flex items-center justify-center gap-2 text-xs text-slate-400">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Loading messages…
+                        </div>
+                      ) : (
+                        <div className="py-16 flex flex-col items-center text-center text-slate-400">
+                          <div className="w-11 h-11 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                            <MessageSquare className="w-5 h-5" />
+                          </div>
+                          <p className="font-semibold text-slate-700 text-[13px]">No messages yet</p>
+                          <p className="text-xs mt-1">
+                            Start a {threadLabel} conversation with <span className="font-medium text-slate-600">{activeConv.customer.name}</span>.
                           </p>
-                          {suggestions.length === 0 ? (
-                            <p className="px-2 pb-2 text-xs text-slate-500">
-                              No reply ideas yet. They appear here once the AI agent has read this conversation.
-                            </p>
-                          ) : (
-                            suggestions.map((idea, i) => (
-                              <button
-                                key={i}
-                                onClick={() => applySuggestion(idea)}
-                                className="w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 text-[13px] text-slate-700 cursor-pointer"
-                              >
-                                {idea}
-                              </button>
-                            ))
-                          )}
                         </div>
                       )}
                     </div>
-                  </div>
-
-                  {composerMode === 'template' ? (
-                    <TemplateComposer
-                      phoneNumberId={conversationSendChannel?.metaPhoneNumberId}
-                      draft={templateDraft}
-                      onDraftChange={setTemplateDraft}
-                      disabledReason={templateDisabledReason}
-                      revision={templateRevision}
-                    />
                   ) : (
-                    <>
-                      {selectedFile && composerMode === 'reply' && (
-                        <div className="mt-1 mb-1.5 p-2 rounded-lg bg-slate-50 border border-slate-200 flex items-center gap-2.5">
-                          {filePreviewUrl ? (
-                            <img src={filePreviewUrl} alt="Preview" className="w-9 h-9 rounded-md object-cover border border-slate-200" />
+                    <VirtualMessageList
+                      key={activeConvKey}
+                      items={activeMessages}
+                      renderItem={renderMessage}
+                      hasMore={Boolean(activePaging?.hasMore)}
+                      isLoadingOlder={isLoadingOlder}
+                      onLoadOlder={handleLoadOlder}
+                      shouldScrollToNewItem={isOwnNewMessage}
+                      scrollRequest={scrollRequest}
+                      header={
+                        <div className="space-y-3 pb-3">
+                          {isLoadingOlder ? (
+                            <div className="flex items-center justify-center gap-2 py-1 text-[11px] text-slate-400">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Loading earlier messages…
+                            </div>
                           ) : (
-                            <div className="w-9 h-9 rounded-md bg-[#eef0fb] text-[#3440a8] flex items-center justify-center">
-                              {selectedFile.type.startsWith('video/') ? (
-                                <Film className="w-4 h-4" />
-                              ) : selectedFile.type.startsWith('audio/') ? (
-                                <Music className="w-4 h-4" />
-                              ) : (
-                                <FileText className="w-4 h-4" />
-                              )}
+                            !activePaging?.hasMore && (
+                              <p className="py-1 text-center text-[11px] text-slate-400">Start of conversation</p>
+                            )
+                          )}
+                          {activeConv.aiSummary && (
+                            <div className="rounded-xl border border-slate-200 px-4 py-3 bg-white">
+                              <p className="text-[10px] font-semibold tracking-wider text-[#3440a8]">AI SUMMARY</p>
+                              <p className="mt-1 text-[13px] text-slate-700 leading-relaxed">{activeConv.aiSummary}</p>
                             </div>
                           )}
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs font-medium text-slate-800 truncate">{selectedFile.name}</p>
-                            <p className="text-[10px] text-slate-500">
-                              {selectedFile.size / 1024 > 1024
-                                ? `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`
-                                : `${(selectedFile.size / 1024).toFixed(0)} KB`}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={handleClearSelectedFile}
-                            title="Remove attachment"
-                            className="p-1 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-200 cursor-pointer"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
                         </div>
-                      )}
-
-                      <div
-                        className={`mt-1 flex items-end gap-2 rounded-lg border px-3 py-2 ${composerMode === 'note'
-                          ? 'bg-amber-50/60 border-amber-200 focus-within:border-amber-400'
-                          : 'border-slate-200 focus-within:border-[#3440a8] focus-within:ring-1 focus-within:ring-[#3440a8]'
-                          }`}
-                      >
-                        <textarea
-                          ref={textareaRef}
-                          rows={1}
-                          value={inputMessage}
-                          onChange={(e) => {
-                            setInputMessage(e.target.value);
-                            e.target.style.height = 'auto';
-                            e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Tab' && !e.shiftKey && composerMode === 'reply' && !inputMessage && suggestions[0]) {
-                              e.preventDefault();
-                              applySuggestion(suggestions[0]);
-                            } else if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault();
-                              handleSubmitComposer();
-                            }
-                          }}
-                          placeholder={
-                            !canUpdateInbox ? 'You have view-only access. Replying is disabled.' : composerMode === 'note'
-                              ? 'Add an internal note — only your team sees this…'
-                              : isChannelDisconnected
-                                ? 'Messaging is paused because this number is disconnected. Reconnect in Settings to send messages.'
-                                : isCustomerOptedOut
-                                  ? 'This customer opted out. You can message them again after they reply START.'
-                                : activeChannelType === 'whatsapp' && isWindowExpired
-                                  ? '24-hour window expired. Free-form text is disabled. Click the Template tab to send an approved template.'
-                                  : selectedFile
-                                    ? 'Add a caption (optional)…'
-                                    : `Reply to ${activeConv.customer.name} on ${CHANNEL_LABELS[activeChannelType] || activeChannelType}…`
-                          }
-                          disabled={
-                            (isChannelDisconnected && composerMode === 'reply') ||
-                            (activeChannelType === 'whatsapp' && isWindowExpired && composerMode === 'reply')
-                          }
-                          className="flex-1 resize-none bg-transparent text-[13px] leading-5 text-slate-800 placeholder-slate-400 focus:outline-none py-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
-                        />
-                        {composerMode === 'reply' && !inputMessage && suggestions[0] && (
-                          <span className="text-[11px] text-slate-400 shrink-0 pb-0.5">Tab to accept</span>
-                        )}
-                      </div>
-                    </>
+                      }
+                    />
                   )}
 
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    onChange={handleFileChange}
-                    className="hidden"
-                    accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv"
-                  />
+                  {/* Composer */}
+                  <div className="border-t border-slate-200 px-4 pb-3 shrink-0">
+                    {/* Opted out: nothing can be sent until the customer replies START */}
+                    {isCustomerOptedOut && (
+                      <div className="mt-3 mb-2 p-2.5 rounded-lg bg-red-50/90 border border-red-200/90 flex items-start gap-2 text-xs">
+                        <ShieldOff className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-semibold text-red-900">Customer opted out of WhatsApp messages</p>
+                          <p className="text-red-800 text-[11.5px] mt-0.5 leading-relaxed">
+                            Replies, attachments, reactions and templates are blocked. Messaging unlocks automatically when the
+                            customer replies START. Internal notes still work.
+                          </p>
+                        </div>
+                      </div>
+                    )}
 
-                  <div className="mt-2.5 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-1 min-w-0">
-                      <div className="relative" ref={emojiPickerRef}>
+                    {/* WhatsApp 24h Window Warning Banner */}
+                    {activeChannelType === 'whatsapp' && isWindowExpired && !isCustomerOptedOut && (
+                      <div className="mt-3 mb-2 p-2.5 rounded-lg bg-amber-50/90 border border-amber-200/90 flex items-start justify-between gap-3 text-xs">
+                        <div className="flex items-start gap-2 min-w-0">
+                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-semibold text-amber-900">24-Hour Customer Window Expired</p>
+                            <p className="text-amber-800 text-[11.5px] mt-0.5 leading-relaxed">
+                              {window24hStatus.hasReceivedMessage
+                                ? `Last customer message received ${window24hStatus.timeSinceLast} ago. `
+                                : 'No message received from this contact yet. '}
+                              WhatsApp Business policy requires sending an approved template to start or resume messaging. Regular text is disabled.
+                            </p>
+                          </div>
+                        </div>
+                        {composerMode !== 'template' && (
+                          <button
+                            type="button"
+                            onClick={canUpdateInbox ? () => setComposerMode('template') : undefined}
+                            disabled={!canUpdateInbox}
+                            title={!canUpdateInbox ? 'You do not have permission to send templates' : undefined}
+                            className={`px-2.5 py-1.5 rounded-md text-white font-medium text-[11.5px] shrink-0 shadow-sm transition-colors ${canUpdateInbox
+                                ? 'bg-amber-600 hover:bg-amber-700 cursor-pointer'
+                                : 'bg-amber-400 cursor-not-allowed opacity-60'
+                              }`}
+                          >
+                            Send Template
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4 text-[13px]">
+                        {(['reply', 'note', 'template'] as ComposerMode[]).map((mode) => (
+                          <button
+                            key={mode}
+                            onClick={() => setComposerMode(mode)}
+                            className={`py-2.5 border-b-2 capitalize cursor-pointer flex items-center gap-1.5 ${composerMode === mode
+                              ? 'border-[#3440a8] text-[#3440a8] font-semibold'
+                              : 'border-transparent text-slate-600 hover:text-slate-900'
+                              }`}
+                          >
+                            <span>{mode}</span>
+                            {mode === 'template' && activeChannelType === 'whatsapp' && isWindowExpired && !isCustomerOptedOut && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                                Required
+                              </span>
+                            )}
+                            {(mode === 'reply' || mode === 'template') && isCustomerOptedOut && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-red-50 text-red-600">
+                                Opted out
+                              </span>
+                            )}
+                            {mode === 'reply' && activeChannelType === 'whatsapp' && isWindowExpired && !isCustomerOptedOut && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-100 text-slate-500">
+                                Locked
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="relative" ref={copilotRef}>
                         <button
-                          type="button"
-                          onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                          disabled={composerMode === 'template'}
-                          title="Insert emoji"
-                          className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          onClick={() => setShowCopilot((v) => !v)}
+                          className="px-2.5 py-1 rounded-md bg-[#eef0fb] text-[#3440a8] text-xs font-medium cursor-pointer hover:bg-[#e3e6f8]"
                         >
-                          <Smile className="w-[18px] h-[18px]" />
+                          Copilot · {suggestions.length} {suggestions.length === 1 ? 'idea' : 'ideas'}
                         </button>
-                        {showEmojiPicker && (
-                          <div className="absolute bottom-full left-0 mb-2 z-50 bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
-                            <EmojiPicker
-                              className="h-[326px] rounded-xl border-none shadow-none bg-white text-slate-800"
-                              onEmojiSelect={({ emoji }) => {
-                                const val = typeof emoji === 'string' ? emoji : (emoji as any)?.emoji || '';
-                                setInputMessage((prev) => prev + val);
-                                setShowEmojiPicker(false);
-                              }}
-                            >
-                              <EmojiPickerSearch className="border-slate-100" />
-                              <EmojiPickerContent />
-                              <EmojiPickerFooter className="border-slate-100" />
-                            </EmojiPicker>
+                        {showCopilot && (
+                          <div className="absolute right-0 bottom-full mb-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl p-2 z-30">
+                            <p className="px-2 pt-1 pb-2 text-[11px] font-semibold text-slate-500 tracking-wider flex items-center gap-1.5">
+                              <Sparkles className="w-3.5 h-3.5 text-[#3440a8]" />
+                              COPILOT IDEAS
+                            </p>
+                            {suggestions.length === 0 ? (
+                              <p className="px-2 pb-2 text-xs text-slate-500">
+                                No reply ideas yet. They appear here once the AI agent has read this conversation.
+                              </p>
+                            ) : (
+                              suggestions.map((idea, i) => (
+                                <button
+                                  key={i}
+                                  onClick={() => applySuggestion(idea)}
+                                  className="w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 text-[13px] text-slate-700 cursor-pointer"
+                                >
+                                  {idea}
+                                </button>
+                              ))
+                            )}
                           </div>
                         )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={composerMode !== 'reply' || !canSendOnChannel || (activeChannelType === 'whatsapp' && isWindowExpired)}
-                        title={
-                          isCustomerOptedOut
-                            ? OPTED_OUT_MESSAGE
-                            : activeChannelType === 'whatsapp' && isWindowExpired
-                            ? 'Attachments cannot be sent outside the 24-hour window'
-                            : 'Attach file'
-                        }
-                        className={`p-1.5 rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${selectedFile ? 'text-[#3440a8] bg-[#eef0fb]' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
-                          }`}
-                      >
-                        <Paperclip className="w-[18px] h-[18px]" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowProductPicker(true)}
-                        disabled={composerMode !== 'reply' || !shopifyStore.isConnected || isCustomerOptedOut || (activeChannelType === 'whatsapp' && isWindowExpired)}
-                        title={
-                          isCustomerOptedOut
-                            ? OPTED_OUT_MESSAGE
-                            : activeChannelType === 'whatsapp' && isWindowExpired
-                            ? 'Products cannot be sent outside the 24-hour window'
-                            : shopifyStore.isConnected
-                              ? `Share a product from ${shopifyStore.store?.name || shopifyStore.store?.shopDomain}`
-                              : shopifyStore.needsReauth
-                                ? "This number's Shopify store needs to be reconnected"
-                                : shopifyStore.isLoading
-                                  ? "Checking this number's Shopify store…"
-                                  : shopifyStore.failed
-                                    ? "Couldn't check this number's Shopify store"
-                                    : shopifyStore.hasStores
-                                  ? 'No Shopify store is associated with this number'
-                                  : 'No Shopify store connected'
-                        }
-                        className="p-1.5 rounded-lg cursor-pointer text-slate-500 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        <ShoppingBag className="w-[18px] h-[18px]" />
-                      </button>
-                      {composerStatus && (
-                        <span className={`ml-2 text-xs truncate ${composerStatus.className}`}>{composerStatus.text}</span>
-                      )}
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={handleSubmitComposer}
-                      disabled={
-                        !canUpdateInbox || isSending ||
-                        (composerMode === 'template'
-                          ? !templateReady || Boolean(templateDisabledReason)
-                          : composerMode === 'note'
-                            ? !inputMessage.trim()
-                            : (!inputMessage.trim() && !selectedFile) ||
-                            !canSendOnChannel ||
-                            (activeChannelType === 'whatsapp' && isWindowExpired))
-                      }
-                      title={composerMode === 'template' && templateDraft && !templateReady ? 'Fill in every template variable first' : undefined}
-                      className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-[#3440a8] hover:bg-[#2b3590] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold cursor-pointer shrink-0"
-                    >
-                      {isSending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      {composerMode === 'note'
-                        ? 'Add note'
-                        : composerMode === 'template'
-                          ? 'Send template'
-                          : 'Send'}
-                    </button >
-                  </div >
-                </div >
-              </>
-            ) : (
-              <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
-                <div className="w-14 h-14 rounded-2xl bg-[#eef0fb] text-[#3440a8] flex items-center justify-center mb-4">
-                  <MessageSquare className="w-7 h-7 stroke-[1.8]" />
-                </div>
-                <h3 className="text-[15px] font-semibold text-slate-900 mb-1">No conversation selected</h3>
-                <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
-                  Pick a conversation from the list to see the thread, AI agent activity and customer details.
-                </p>
-              </div>
-            )}
-          </section >
+                    {composerMode === 'template' ? (
+                      <TemplateComposer
+                        phoneNumberId={conversationSendChannel?.metaPhoneNumberId}
+                        draft={templateDraft}
+                        onDraftChange={setTemplateDraft}
+                        disabledReason={templateDisabledReason}
+                        revision={templateRevision}
+                      />
+                    ) : (
+                      <>
+                        {selectedFile && composerMode === 'reply' && (
+                          <div className="mt-1 mb-1.5 p-2 rounded-lg bg-slate-50 border border-slate-200 flex items-center gap-2.5">
+                            {filePreviewUrl ? (
+                              <img src={filePreviewUrl} alt="Preview" className="w-9 h-9 rounded-md object-cover border border-slate-200" />
+                            ) : (
+                              <div className="w-9 h-9 rounded-md bg-[#eef0fb] text-[#3440a8] flex items-center justify-center">
+                                {selectedFile.type.startsWith('video/') ? (
+                                  <Film className="w-4 h-4" />
+                                ) : selectedFile.type.startsWith('audio/') ? (
+                                  <Music className="w-4 h-4" />
+                                ) : (
+                                  <FileText className="w-4 h-4" />
+                                )}
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-medium text-slate-800 truncate">{selectedFile.name}</p>
+                              <p className="text-[10px] text-slate-500">
+                                {selectedFile.size / 1024 > 1024
+                                  ? `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`
+                                  : `${(selectedFile.size / 1024).toFixed(0)} KB`}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleClearSelectedFile}
+                              title="Remove attachment"
+                              className="p-1 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-200 cursor-pointer"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
 
-          <CustomerPanel
-            conversation={activeConv}
-            lastAiAction={lastAiAction}
-            shopify={{
-              store: shopifyStore.store,
-              loading: shopifyStore.isLoading,
-              hasStores: shopifyStore.hasStores,
-              channelId: shopifyStore.channelId,
-              failed: shopifyStore.failed,
-              retry: shopifyStore.retry,
-            }}
-            productStoreScope={shopifyScope}
-            onShareProduct={handleShareProduct}
-            onInsertProductText={handleInsertProductText}
-            shareDisabledReason={shareDisabledReason}
-            onConsentChange={setCustomerOptedOut}
-          />
+                        <div
+                          className={`mt-1 flex items-end gap-2 rounded-lg border px-3 py-2 ${composerMode === 'note'
+                            ? 'bg-amber-50/60 border-amber-200 focus-within:border-amber-400'
+                            : 'border-slate-200 focus-within:border-[#3440a8] focus-within:ring-1 focus-within:ring-[#3440a8]'
+                            }`}
+                        >
+                          <textarea
+                            ref={textareaRef}
+                            rows={1}
+                            value={inputMessage}
+                            onChange={(e) => {
+                              setInputMessage(e.target.value);
+                              e.target.style.height = 'auto';
+                              e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Tab' && !e.shiftKey && composerMode === 'reply' && !inputMessage && suggestions[0]) {
+                                e.preventDefault();
+                                applySuggestion(suggestions[0]);
+                              } else if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSubmitComposer();
+                              }
+                            }}
+                            placeholder={
+                              !canUpdateInbox ? 'You have view-only access. Replying is disabled.' : composerMode === 'note'
+                                ? 'Add an internal note — only your team sees this…'
+                                : isChannelDisconnected
+                                  ? 'Messaging is paused because this number is disconnected. Reconnect in Settings to send messages.'
+                                  : isCustomerOptedOut
+                                    ? 'This customer opted out. You can message them again after they reply START.'
+                                    : activeChannelType === 'whatsapp' && isWindowExpired
+                                      ? '24-hour window expired. Free-form text is disabled. Click the Template tab to send an approved template.'
+                                      : selectedFile
+                                        ? 'Add a caption (optional)…'
+                                        : `Reply to ${activeConv.customer.name} on ${CHANNEL_LABELS[activeChannelType] || activeChannelType}…`
+                            }
+                            disabled={
+                              (isChannelDisconnected && composerMode === 'reply') ||
+                              (activeChannelType === 'whatsapp' && isWindowExpired && composerMode === 'reply')
+                            }
+                            className="flex-1 resize-none bg-transparent text-[13px] leading-5 text-slate-800 placeholder-slate-400 focus:outline-none py-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
+                          />
+                          {composerMode === 'reply' && !inputMessage && suggestions[0] && (
+                            <span className="text-[11px] text-slate-400 shrink-0 pb-0.5">Tab to accept</span>
+                          )}
+                        </div>
+                      </>
+                    )}
+
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      onChange={handleFileChange}
+                      className="hidden"
+                      accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv"
+                    />
+
+                    <div className="mt-2.5 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-1 min-w-0">
+                        <div className="relative" ref={emojiPickerRef}>
+                          <button
+                            type="button"
+                            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                            disabled={composerMode === 'template'}
+                            title="Insert emoji"
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            <Smile className="w-[18px] h-[18px]" />
+                          </button>
+                          {showEmojiPicker && (
+                            <div className="absolute bottom-full left-0 mb-2 z-50 bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+                              <EmojiPicker
+                                className="h-[326px] rounded-xl border-none shadow-none bg-white text-slate-800"
+                                onEmojiSelect={({ emoji }) => {
+                                  const val = typeof emoji === 'string' ? emoji : (emoji as any)?.emoji || '';
+                                  setInputMessage((prev) => prev + val);
+                                  setShowEmojiPicker(false);
+                                }}
+                              >
+                                <EmojiPickerSearch className="border-slate-100" />
+                                <EmojiPickerContent />
+                                <EmojiPickerFooter className="border-slate-100" />
+                              </EmojiPicker>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={composerMode !== 'reply' || !canSendOnChannel || (activeChannelType === 'whatsapp' && isWindowExpired)}
+                          title={
+                            isCustomerOptedOut
+                              ? OPTED_OUT_MESSAGE
+                              : activeChannelType === 'whatsapp' && isWindowExpired
+                                ? 'Attachments cannot be sent outside the 24-hour window'
+                                : 'Attach file'
+                          }
+                          className={`p-1.5 rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${selectedFile ? 'text-[#3440a8] bg-[#eef0fb]' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                            }`}
+                        >
+                          <Paperclip className="w-[18px] h-[18px]" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowProductPicker(true)}
+                          disabled={composerMode !== 'reply' || !shopifyStore.isConnected || isCustomerOptedOut || (activeChannelType === 'whatsapp' && isWindowExpired)}
+                          title={
+                            isCustomerOptedOut
+                              ? OPTED_OUT_MESSAGE
+                              : activeChannelType === 'whatsapp' && isWindowExpired
+                                ? 'Products cannot be sent outside the 24-hour window'
+                                : shopifyStore.isConnected
+                                  ? `Share a product from ${shopifyStore.store?.name || shopifyStore.store?.shopDomain}`
+                                  : shopifyStore.needsReauth
+                                    ? "This number's Shopify store needs to be reconnected"
+                                    : shopifyStore.isLoading
+                                      ? "Checking this number's Shopify store…"
+                                      : shopifyStore.failed
+                                        ? "Couldn't check this number's Shopify store"
+                                        : shopifyStore.hasStores
+                                          ? 'No Shopify store is associated with this number'
+                                          : 'No Shopify store connected'
+                          }
+                          className="p-1.5 rounded-lg cursor-pointer text-slate-500 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <ShoppingBag className="w-[18px] h-[18px]" />
+                        </button>
+                        {composerStatus && (
+                          <span className={`ml-2 text-xs truncate ${composerStatus.className}`}>{composerStatus.text}</span>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleSubmitComposer}
+                        disabled={
+                          !canUpdateInbox || isSending ||
+                          (composerMode === 'template'
+                            ? !templateReady || Boolean(templateDisabledReason)
+                            : composerMode === 'note'
+                              ? !inputMessage.trim()
+                              : (!inputMessage.trim() && !selectedFile) ||
+                              !canSendOnChannel ||
+                              (activeChannelType === 'whatsapp' && isWindowExpired))
+                        }
+                        title={composerMode === 'template' && templateDraft && !templateReady ? 'Fill in every template variable first' : undefined}
+                        className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-[#3440a8] hover:bg-[#2b3590] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold cursor-pointer shrink-0"
+                      >
+                        {isSending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                        {composerMode === 'note'
+                          ? 'Add note'
+                          : composerMode === 'template'
+                            ? 'Send template'
+                            : 'Send'}
+                      </button >
+                    </div >
+
+                    {/* Mock billing: a ticket uses one credit on a teammate's first reply */}
+                    <TicketCreditsBar
+                      credits={ticketCredits}
+                      billableAt={activeConv.billableAt}
+                      isClosed={isTicketClosed(activeConv)}
+                    />
+                  </div >
+                </>
+                ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
+                  <div className="w-14 h-14 rounded-2xl bg-[#eef0fb] text-[#3440a8] flex items-center justify-center mb-4">
+                    <MessageSquare className="w-7 h-7 stroke-[1.8]" />
+                  </div>
+                  <h3 className="text-[15px] font-semibold text-slate-900 mb-1">No conversation selected</h3>
+                  <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
+                    Pick a conversation from the list to see the thread, AI agent activity and customer details.
+                  </p>
+                </div>
+            )}
+              </section >
+
+            <CustomerPanel
+              conversation={activeConv}
+              lastAiAction={lastAiAction}
+              shopify={{
+                store: shopifyStore.store,
+                loading: shopifyStore.isLoading,
+                hasStores: shopifyStore.hasStores,
+                channelId: shopifyStore.channelId,
+                failed: shopifyStore.failed,
+                retry: shopifyStore.retry,
+              }}
+              productStoreScope={shopifyScope}
+              onShareProduct={handleShareProduct}
+              onInsertProductText={productTextBlocked ? undefined : handleInsertProductText}
+              shareDisabledReason={shareDisabledReason}
+              onConsentChange={setCustomerOptedOut}
+            />
         </div >
       </div >
 
@@ -2414,7 +2498,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           className="h-[min(560px,70vh)]"
           storeScope={shopifyScope}
           onShare={handleShareProduct}
-          onInsertText={handleInsertProductText}
+          onInsertText={productTextBlocked ? undefined : handleInsertProductText}
           shareDisabledReason={shareDisabledReason}
         />
       </Modal>
@@ -2430,17 +2514,21 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
           <div>
             <label className="block font-semibold text-slate-700 mb-1">WhatsApp number</label>
             {whatsappChannels.length > 0 ? (
-              <select
-                value={newContactChannelId ?? whatsappChannels[0]?.id ?? ''}
-                onChange={(e) => setNewContactChannelId(Number(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#3440a8]"
-              >
-                {whatsappChannels.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.verified_name || 'WhatsApp'} {c.phoneNumber ? `(${formatPhone(c.phoneNumber)})` : ''}
-                  </option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={String(newContactChannelId ?? whatsappChannels[0]?.id ?? '')}
+                onChange={(v) => setNewContactChannelId(Number(v))}
+                aria-label="WhatsApp number"
+                placeholder="Choose a WhatsApp number"
+                searchPlaceholder="Search by name or number"
+                emptyText="No WhatsApp number matches your search"
+                options={whatsappChannels.map((c) => ({
+                  value: String(c.id),
+                  label: c.verified_name || 'WhatsApp',
+                  description: c.phoneNumber ? formatPhone(c.phoneNumber) : undefined,
+                  // Typing the number without spaces or "+" finds it too
+                  keywords: c.phoneNumber ?? undefined,
+                }))}
+              />
             ) : (
               <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-[11px] flex items-center justify-between">
                 <span>No WhatsApp channels connected yet.</span>

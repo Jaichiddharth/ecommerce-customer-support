@@ -1,4 +1,5 @@
 import type { ConsentChange } from './consent';
+import type { TicketEvent } from './ticket';
 
 export type ChannelType = 'whatsapp' | 'instagram' | 'messenger' | 'sms' | 'email' | 'webchat';
 
@@ -142,6 +143,8 @@ export interface Message {
   aiAction?: string | null;
   /** Set on the team-only note that records a WhatsApp consent change (opt-out / opt-in) */
   consent?: ConsentChange | null;
+  /** Set on the team-only note that records a ticket change (resolved, assigned, …): who did it and when */
+  ticketEvent?: TicketEvent | null;
   /** A template message's buttons (QUICK_REPLY, URL, FLOW…), as WhatsApp shows them to the customer */
   templateButtons?: Array<{ type: string; text: string }>;
   /** The message this one replies to (WhatsApp reply / Flow response to a template) */
