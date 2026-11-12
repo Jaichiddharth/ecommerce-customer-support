@@ -28,6 +28,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 1.2 Debug OIDC token claims
+      - name: Inspect OIDC token claims
+        shell: bash
+        run: |
+          TOKEN=$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" \
+            | jq -r '.value')
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Failed to obtain OIDC token"
+            exit 1
+          fi
+
+          export TOKEN
+          node -e '
+            const token = process.env.TOKEN;
+            const payload = JSON.parse(
+              Buffer.from(token.split(".")[1], "base64url").toString()
+            );
+            console.log("Issuer:", payload.iss);
+            console.log("Audience:", payload.aud);
+            console.log("Subject:", payload.sub);
+          '
+
       # 1.5 Debug GitHub OIDC context
       - name: Debug GitHub OIDC context
         run: |
