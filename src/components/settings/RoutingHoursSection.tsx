@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import apiClient from '@/lib/api/client';
 import {
   GripVertical,
   MoreHorizontal,
@@ -56,6 +57,98 @@ export interface RoutingHoursConfig {
 }
 
 // ── Default Initial State matching the design ──────────────────────────
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const SHORT_DAYS: Record<string, string> = {
+  Sunday: 'Sun',
+  Monday: 'Mon',
+  Tuesday: 'Tue',
+  Wednesday: 'Wed',
+  Thursday: 'Thu',
+  Friday: 'Fri',
+  Saturday: 'Sat',
+};
+
+export function formatTime12(timeStr: string): string {
+  if (!timeStr) return '9:30 AM';
+  const [hhStr, mmStr] = timeStr.split(':');
+  const hh = parseInt(hhStr, 10);
+  const mm = parseInt(mmStr || '0', 10);
+  if (isNaN(hh)) return timeStr;
+  const period = hh >= 12 ? 'PM' : 'AM';
+  const hour12 = hh % 12 === 0 ? 12 : hh % 12;
+  const minuteStr = String(mm).padStart(2, '0');
+  return `${hour12}:${minuteStr} ${period}`;
+}
+
+export function getNextOpenTimeText(
+  schedule: DaySchedule[],
+  date: Date = new Date(),
+  rawTimezone: string = 'Asia/Kolkata'
+): string {
+  if (!schedule || schedule.length === 0) return 'Mon 9:30 AM';
+
+  const tz = (rawTimezone || 'Asia/Kolkata').replace(/\s*\(.*\)/, '').trim() || 'Asia/Kolkata';
+
+  let weekday = '';
+  let currentHHMM = '';
+
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      weekday: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(date);
+    const partMap: Record<string, string> = {};
+    for (const p of parts) partMap[p.type] = p.value;
+    weekday = partMap.weekday || '';
+    const hh = (partMap.hour || '00').padStart(2, '0');
+    const mm = (partMap.minute || '00').padStart(2, '0');
+    currentHHMM = `${hh}:${mm}`;
+  } catch {
+    weekday = DAY_NAMES[date.getDay()];
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    currentHHMM = `${hh}:${mm}`;
+  }
+
+  const currentDayIndex = DAY_NAMES.findIndex((d) => d.toLowerCase() === weekday.toLowerCase());
+  const todayIndex = currentDayIndex >= 0 ? currentDayIndex : date.getDay();
+
+  // 1. Check if today is open and has not started yet
+  const todaySlot = schedule.find((s) => s.day.toLowerCase() === weekday.toLowerCase());
+  if (todaySlot && todaySlot.enabled && currentHHMM < todaySlot.start) {
+    return `${SHORT_DAYS[todaySlot.day] || todaySlot.day.slice(0, 3)} ${formatTime12(todaySlot.start)}`;
+  }
+
+  // 2. Check next 7 days in order
+  for (let offset = 1; offset <= 7; offset++) {
+    const nextDayIndex = (todayIndex + offset) % 7;
+    const nextDayName = DAY_NAMES[nextDayIndex];
+    const slot = schedule.find((s) => s.day.toLowerCase() === nextDayName.toLowerCase());
+
+    if (slot && slot.enabled) {
+      const shortDay = SHORT_DAYS[slot.day] || slot.day.slice(0, 3);
+      const time12 = formatTime12(slot.start);
+      return `${shortDay} ${time12}`;
+    }
+  }
+
+  return 'Mon 9:30 AM';
+}
+
+export function updateAfterHoursMessage(currentText: string, nextOpenText: string): string {
+  const regex = /(back\s+(?:at|on)\s+)(?:(?:today|tomorrow|Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)\s*(?:at\s*)?)?\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)?/i;
+
+  if (regex.test(currentText)) {
+    return currentText.replace(regex, `$1${nextOpenText}`);
+  }
+
+  return `Thanks for your message. Our team is back at ${nextOpenText}. Meanwhile you can track orders, start an exchange or browse the catalog below.`;
+}
+
 const DEFAULT_CONFIG: RoutingHoursConfig = {
   timezone: 'Asia/Kolkata (IST)',
   schedule: [
@@ -115,14 +208,45 @@ const DEFAULT_CONFIG: RoutingHoursConfig = {
 
 export const RoutingHoursSection: React.FC = () => {
   const [config, setConfig] = useState<RoutingHoursConfig>(DEFAULT_CONFIG);
+  const [savedConfig, setSavedConfig] = useState<RoutingHoursConfig>(DEFAULT_CONFIG);
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+    apiClient
+      .get('/api/settings/routing')
+      .then((res) => {
+        if (!cancelled && res.data?.success && res.data.routingConfig) {
+          const loaded: RoutingHoursConfig = {
+            ...DEFAULT_CONFIG,
+            ...res.data.routingConfig,
+            // Strictly preserve the saved assignment rules if present
+            assignmentRules: Array.isArray(res.data.routingConfig.assignmentRules)
+              ? res.data.routingConfig.assignmentRules
+              : DEFAULT_CONFIG.assignmentRules,
+          };
+          // Dynamically synchronize the after-hours reply next-open time with the active schedule
+          const nextOpen = getNextOpenTimeText(loaded.schedule, new Date(), loaded.timezone);
+          loaded.afterHoursReply = updateAfterHoursMessage(loaded.afterHoursReply, nextOpen);
+
+          setConfig(loaded);
+          setSavedConfig(loaded);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Modal states
   const [isAddRuleOpen, setIsAddRuleOpen] = useState(false);
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [newRuleConditionType, setNewRuleConditionType] = useState('tag');
   const [newRuleConditionValue, setNewRuleConditionValue] = useState('');
-  const [newRuleTarget, setNewRuleTarget] = useState('Sales team');
+  const [newRuleTarget, setNewRuleTarget] = useState('Support team');
   const [newRuleStrategy, setNewRuleStrategy] = useState<RoutingStrategy>('round robin');
 
   const [isAddHolidayOpen, setIsAddHolidayOpen] = useState(false);
@@ -137,7 +261,9 @@ export const RoutingHoursSection: React.FC = () => {
         ...nextSchedule[index],
         enabled: !nextSchedule[index].enabled,
       };
-      return { ...prev, schedule: nextSchedule };
+      const nextOpenText = getNextOpenTimeText(nextSchedule, new Date(), prev.timezone);
+      const updatedReply = updateAfterHoursMessage(prev.afterHoursReply, nextOpenText);
+      return { ...prev, schedule: nextSchedule, afterHoursReply: updatedReply };
     });
     setHasChanges(true);
   };
@@ -149,28 +275,93 @@ export const RoutingHoursSection: React.FC = () => {
         ...nextSchedule[index],
         [field]: val,
       };
-      return { ...prev, schedule: nextSchedule };
+      let updatedReply = prev.afterHoursReply;
+      if (field === 'start') {
+        const nextOpenText = getNextOpenTimeText(nextSchedule, new Date(), prev.timezone);
+        updatedReply = updateAfterHoursMessage(prev.afterHoursReply, nextOpenText);
+      }
+      return { ...prev, schedule: nextSchedule, afterHoursReply: updatedReply };
     });
     setHasChanges(true);
   };
 
-  const handleSave = () => {
-    setIsSaving(true);
-    setTimeout(() => {
+  const handleSave = async () => {
+    try {
+      setIsSaving(true);
+      const res = await apiClient.post('/api/settings/routing', { routingConfig: config });
+      if (res.data?.success) {
+        setSavedConfig(config);
+        setHasChanges(false);
+        gooeyToast.success('Routing and business hours saved successfully!');
+      }
+    } catch (err: any) {
+      gooeyToast.error('Failed to save routing settings', {
+        description: err.response?.data?.message || err.message,
+      });
+    } finally {
       setIsSaving(false);
-      setHasChanges(false);
-      gooeyToast.success('Routing and business hours saved successfully!');
-    }, 600);
+    }
   };
 
   const handleDiscard = () => {
-    setConfig(DEFAULT_CONFIG);
+    setConfig(savedConfig);
     setHasChanges(false);
     gooeyToast.info('Changes discarded');
   };
 
-  const handleAddRule = (e: React.FormEvent) => {
+  const handleOpenAddRule = () => {
+    setEditingRuleId(null);
+    setNewRuleConditionType('tag');
+    setNewRuleConditionValue('');
+    setNewRuleTarget('Support team');
+    setNewRuleStrategy('round robin');
+    setIsAddRuleOpen(true);
+  };
+
+  const handleOpenEditRule = (rule: AssignmentRule) => {
+    setEditingRuleId(rule.id);
+    setNewRuleConditionType(rule.condition === 'fallback' ? 'fallback' : rule.condition);
+    setNewRuleConditionValue(
+      rule.conditionLabel.replace(/tag is |language is |order value ≥ /gi, '')
+    );
+    setNewRuleTarget(rule.target);
+    setNewRuleStrategy(rule.strategy);
+    setIsAddRuleOpen(true);
+  };
+
+  const handleSaveRule = (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (editingRuleId) {
+      // Editing an existing rule (including the fallback rule!)
+      setConfig((prev) => {
+        const rules = prev.assignmentRules.map((r) => {
+          if (r.id !== editingRuleId) return r;
+          let label = r.conditionLabel;
+          if (r.condition !== 'fallback') {
+            if (newRuleConditionType === 'tag') label = `tag is ${newRuleConditionValue.trim()}`;
+            else if (newRuleConditionType === 'language') label = `language is ${newRuleConditionValue.trim()}`;
+            else if (newRuleConditionType === 'order_value') label = `order value ≥ ${newRuleConditionValue.trim()}`;
+            else label = newRuleConditionValue.trim();
+          }
+          return {
+            ...r,
+            condition: r.condition === 'fallback' ? 'fallback' : newRuleConditionType,
+            conditionLabel: label,
+            target: newRuleTarget.trim(),
+            targetType: (newRuleTarget.toLowerCase().includes('team') || newRuleTarget.toLowerCase().includes('agents') ? 'team' : 'agent') as 'team' | 'agent',
+            strategy: newRuleStrategy,
+          };
+        });
+        return { ...prev, assignmentRules: rules };
+      });
+      setHasChanges(true);
+      setIsAddRuleOpen(false);
+      setEditingRuleId(null);
+      gooeyToast.success('Assignment rule updated');
+      return;
+    }
+
     if (!newRuleConditionValue.trim()) return;
 
     let label = '';
@@ -183,8 +374,8 @@ export const RoutingHoursSection: React.FC = () => {
       id: `rule-${Date.now()}`,
       condition: newRuleConditionType,
       conditionLabel: label,
-      target: newRuleTarget,
-      targetType: newRuleTarget.includes('team') || newRuleTarget.includes('agents') ? 'team' : 'agent',
+      target: newRuleTarget.trim(),
+      targetType: newRuleTarget.toLowerCase().includes('team') || newRuleTarget.toLowerCase().includes('agents') ? 'team' : 'agent',
       strategy: newRuleStrategy,
     };
 
@@ -411,7 +602,7 @@ export const RoutingHoursSection: React.FC = () => {
           </div>
           <button
             type="button"
-            onClick={() => setIsAddRuleOpen(true)}
+            onClick={handleOpenAddRule}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5 text-slate-500" />
@@ -451,6 +642,14 @@ export const RoutingHoursSection: React.FC = () => {
                 <span className="text-slate-400 text-[11px] font-medium lowercase">
                   {rule.strategy}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => handleOpenEditRule(rule)}
+                  className="w-7 h-7 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 flex items-center justify-center transition-colors cursor-pointer"
+                  title="Edit rule"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
                 {!rule.isDefault && (
                   <button
                     type="button"
@@ -460,11 +659,6 @@ export const RoutingHoursSection: React.FC = () => {
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
-                )}
-                {rule.isDefault && (
-                  <span className="w-7 h-7 flex items-center justify-center text-slate-300" title="Fallback rule">
-                    <MoreHorizontal className="w-4 h-4" />
-                  </span>
                 )}
               </div>
             </div>
@@ -519,53 +713,69 @@ export const RoutingHoursSection: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Modal: Add Assignment Rule ─────────────────────────────── */}
+      {/* ── Modal: Add / Edit Assignment Rule ─────────────────────────── */}
       {isAddRuleOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-2xs p-4">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-md w-full p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="text-base font-bold text-slate-900">Add assignment rule</h3>
+              <h3 className="text-base font-bold text-slate-900">
+                {editingRuleId ? 'Edit assignment rule' : 'Add assignment rule'}
+              </h3>
               <button
                 type="button"
-                onClick={() => setIsAddRuleOpen(false)}
+                onClick={() => {
+                  setIsAddRuleOpen(false);
+                  setEditingRuleId(null);
+                }}
                 className="text-slate-400 hover:text-slate-600 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleAddRule} className="space-y-4 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Condition type</label>
-                <select
-                  value={newRuleConditionType}
-                  onChange={(e) => setNewRuleConditionType(e.target.value)}
-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-[#1e2a78] text-slate-800"
-                >
-                  <option value="tag">Customer Tag (e.g. Wholesale, VIP)</option>
-                  <option value="language">Customer Language (e.g. Tamil, Hindi, Spanish)</option>
-                  <option value="order_value">Shopify Order Value (e.g. ₹5,000, $100)</option>
-                  <option value="channel">Channel (e.g. WhatsApp, Instagram, Email)</option>
-                </select>
-              </div>
+            <form onSubmit={handleSaveRule} className="space-y-4 text-xs">
+              {newRuleConditionType === 'fallback' ? (
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Condition</label>
+                  <div className="p-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-600 font-medium">
+                    Otherwise: any chat (fallback rule)
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Condition type</label>
+                    <select
+                      value={newRuleConditionType}
+                      onChange={(e) => setNewRuleConditionType(e.target.value)}
+                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-[#1e2a78] text-slate-800"
+                    >
+                      <option value="tag">Customer Tag (e.g. Wholesale, VIP)</option>
+                      <option value="language">Customer Language (e.g. Tamil, Hindi, Spanish)</option>
+                      <option value="order_value">Shopify Order Value (e.g. ₹5,000, $100)</option>
+                      <option value="channel">Channel (e.g. WhatsApp, Instagram, Email)</option>
+                    </select>
+                  </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Condition value</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Wholesale, Tamil, or 5000"
-                  value={newRuleConditionValue}
-                  onChange={(e) => setNewRuleConditionValue(e.target.value)}
-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-[#1e2a78] text-slate-800"
-                  required
-                />
-              </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Condition value</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Wholesale, Tamil, or 5000"
+                      value={newRuleConditionValue}
+                      onChange={(e) => setNewRuleConditionValue(e.target.value)}
+                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-[#1e2a78] text-slate-800"
+                      required
+                    />
+                  </div>
+                </>
+              )}
 
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Assign to team or agent</label>
                 <input
                   type="text"
-                  placeholder="e.g. Sales team, Support team, or Suresh R."
+                  placeholder="e.g. Support team, Sales team, or Suresh R."
                   value={newRuleTarget}
                   onChange={(e) => setNewRuleTarget(e.target.value)}
                   className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-[#1e2a78] text-slate-800"
@@ -589,7 +799,10 @@ export const RoutingHoursSection: React.FC = () => {
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsAddRuleOpen(false)}
+                  onClick={() => {
+                    setIsAddRuleOpen(false);
+                    setEditingRuleId(null);
+                  }}
                   className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold cursor-pointer"
                 >
                   Cancel
@@ -598,7 +811,7 @@ export const RoutingHoursSection: React.FC = () => {
                   type="submit"
                   className="px-4 py-2 bg-[#1e2a78] hover:bg-[#16205e] text-white rounded-xl font-semibold cursor-pointer"
                 >
-                  Add rule
+                  {editingRuleId ? 'Save rule' : 'Add rule'}
                 </button>
               </div>
             </form>
