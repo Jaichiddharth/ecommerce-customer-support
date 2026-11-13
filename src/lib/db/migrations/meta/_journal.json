@@ -78,6 +78,13 @@
       "when": 1794100000000,
       "tag": "0010_ticket_lifecycle_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794477528130,
+      "tag": "0011_gorgeous_talisman",
+      "breakpoints": true
     }
   ]
 }

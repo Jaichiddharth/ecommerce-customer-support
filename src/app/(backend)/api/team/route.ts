@@ -60,6 +60,9 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
     ADMIN: { ...DEFAULT_ROLE_PERMISSIONS.ADMIN, ...(storedPermissions.ADMIN || {}) },
     AGENT: { ...DEFAULT_ROLE_PERMISSIONS.AGENT, ...(storedPermissions.AGENT || {}) },
     VIEWER: { ...DEFAULT_ROLE_PERMISSIONS.VIEWER, ...(storedPermissions.VIEWER || {}) },
+    ...(storedPermissions.pageDefaults ? { pageDefaults: storedPermissions.pageDefaults } : {}),
+    ...(storedPermissions.roleCrudDefaults ? { roleCrudDefaults: storedPermissions.roleCrudDefaults } : {}),
+    ...(storedPermissions.roleDescriptions ? { roleDescriptions: storedPermissions.roleDescriptions } : {}),
   };
 
   const storesList = connectedStores.map((s) => ({
