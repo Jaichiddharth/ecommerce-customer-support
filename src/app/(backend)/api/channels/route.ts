@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { channels, customerService } from "@/lib/services";
 import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
-import { ChannelStatus } from "@/lib/db/schema";
+import {ChannelStatus } from "@/lib/db/schema";
 
 export const GET = withAuth(async (req: AuthenticatedRequest) => {
   const { searchParams } = new URL(req.url);

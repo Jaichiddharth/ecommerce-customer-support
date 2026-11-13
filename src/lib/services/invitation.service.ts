@@ -83,8 +83,14 @@ export class InvitationService {
     }
 
     const assignedRole = (role || "AGENT").toUpperCase();
-    if (!["ADMIN", "AGENT", "VIEWER"].includes(assignedRole)) {
-      throw AppError.validation("Role must be Admin, Agent, or Viewer.", "role");
+    if (!["OWNER", "ADMIN", "AGENT", "VIEWER"].includes(assignedRole)) {
+      throw AppError.validation("Role must be Owner, Admin, Agent, or Viewer.", "role");
+    }
+    if (assignedRole === "OWNER" && (inviter.role || "").toUpperCase() !== "OWNER") {
+      throw new AppError("FORBIDDEN", {
+        message: "Only workspace Owners can invite a member as Owner.",
+        expected: true,
+      });
     }
 
     // Check organization and seat limits
