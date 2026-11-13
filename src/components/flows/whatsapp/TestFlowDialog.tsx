@@ -16,18 +16,36 @@ const COUNTRIES = (countries as { name: string; dial_code: string; code: string 
   .filter((c) => c.dial_code)
   .map((c) => ({ ...c, dial_code: c.dial_code.replace(/\D/g, '') }));
 
-/** "+44 7700…" typed in the number field wins over the country picker; national trunk zeros are dropped. */
-function composePhone(countryCode: string, number: string): string {
-  const raw = number.trim();
-  if (raw.startsWith('+')) return raw.replace(/\D/g, '');
-  const dial = COUNTRIES.find((c) => c.code === countryCode)?.dial_code ?? '';
-  return dial + raw.replace(/\D/g, '').replace(/^0+/, '');
+/**
+ * Allowed national (mobile) number lengths, without the country code or trunk 0.
+ * Countries not listed fall back to a generic range so the full E.164 number stays ≤ 15 digits.
+ */
+const NATIONAL_LENGTHS: Record<string, [min: number, max: number]> = {
+  IN: [10, 10], US: [10, 10], CA: [10, 10], GB: [10, 10], AU: [9, 9], NZ: [8, 10],
+  AE: [9, 9], SA: [9, 9], QA: [8, 8], KW: [8, 8], OM: [8, 8], BH: [8, 8], EG: [10, 10],
+  PK: [10, 10], BD: [10, 10], LK: [9, 9], NP: [10, 10], SG: [8, 8], MY: [9, 10],
+  ID: [9, 12], PH: [10, 10], TH: [9, 9], VN: [9, 10], CN: [11, 11], JP: [10, 10], KR: [9, 10],
+  DE: [10, 11], FR: [9, 9], IT: [9, 10], ES: [9, 9], NL: [9, 9], TR: [10, 10], RU: [10, 10],
+  BR: [10, 11], MX: [10, 10], ZA: [9, 9], NG: [10, 10], KE: [9, 9],
+};
+
+function phoneRule(countryCode: string) {
+  const c = COUNTRIES.find((x) => x.code === countryCode);
+  const dial = c?.dial_code ?? '';
+  const [min, max] = NATIONAL_LENGTHS[countryCode] ?? [6, 15 - dial.length];
+  return { dial, name: c?.name ?? countryCode, min, max };
 }
+
+const digitsOnly = (v: string) => v.replace(/\D/g, '');
 
 function readLastPhone(): { country: string; number: string } | null {
   try {
     const v = JSON.parse(window.localStorage.getItem(LAST_PHONE_KEY) ?? 'null');
-    return v && typeof v.country === 'string' && typeof v.number === 'string' ? v : null;
+    if (!v || typeof v.country !== 'string' || typeof v.number !== 'string') return null;
+    if (!COUNTRIES.some((c) => c.code === v.country)) return null;
+    // Older saves may hold "+<full number>"; only keep a plain national number.
+    if (v.number.trim().startsWith('+')) return null;
+    return { country: v.country, number: digitsOnly(v.number).slice(0, phoneRule(v.country).max) };
   } catch {
     return null;
   }
@@ -66,12 +84,22 @@ export function TestFlowDialog({
     if (last) { setCountry(last.country); setNumber(last.number); }
   }, []);
 
-  const phone = composePhone(country, number);
-  const phoneError = !number.trim()
+  const rule = phoneRule(country);
+  const lengthLabel = rule.min === rule.max ? `${rule.min}` : `${rule.min}–${rule.max}`;
+  const phone = rule.dial + number;
+  const phoneError = !number
     ? 'Enter the WhatsApp number to send the test to.'
-    : phone.length < 8 || phone.length > 15
-      ? 'That doesn’t look like a valid number. Check the country code and digits.'
-      : null;
+    : number.startsWith('0')
+      ? 'Don’t start with 0 — enter the number without the leading zero.'
+      : number.length < rule.min || number.length > rule.max
+        ? `Enter a ${lengthLabel}-digit number for ${rule.name} (+${rule.dial}).`
+        : null;
+
+  const changeCountry = (code: string) => {
+    setCountry(code);
+    setNumber((n) => n.slice(0, phoneRule(code).max));
+    if (error?.field === 'phone') setError(null);
+  };
   const fieldError = (field: string) => (error?.field === field ? error.message : null);
   const shownPhoneError = (touched && phoneError) || fieldError('phone');
 
@@ -150,9 +178,8 @@ export function TestFlowDialog({
               <div className="relative shrink-0 border-r border-slate-200 bg-slate-50 rounded-l-lg">
                 <select
                   value={country}
-                  onChange={(e) => setCountry(e.target.value)}
+                  onChange={(e) => changeCountry(e.target.value)}
                   aria-label="Country code"
-                  disabled={number.trim().startsWith('+')}
                   className="h-full appearance-none bg-transparent pl-3 pr-7 py-2 text-[12px] font-medium text-slate-700 focus:outline-none cursor-pointer disabled:cursor-not-allowed disabled:text-slate-400"
                 >
                   {COUNTRIES.map((c) => (
@@ -165,10 +192,12 @@ export function TestFlowDialog({
                 <Smartphone className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   value={number}
-                  onChange={(e) => { setNumber(e.target.value); if (error?.field === 'phone') setError(null); }}
+                  onChange={(e) => { setNumber(digitsOnly(e.target.value).slice(0, rule.max)); if (error?.field === 'phone') setError(null); }}
                   onBlur={() => setTouched(true)}
-                  inputMode="tel"
-                  placeholder="98765 43210"
+                  inputMode="numeric"
+                  maxLength={rule.max}
+                  required
+                  placeholder={`${lengthLabel}-digit number`}
                   autoFocus
                   className="w-full bg-transparent pl-8 pr-3 py-2 text-[12px] text-slate-800 placeholder:text-slate-400 focus:outline-none rounded-r-lg"
                   aria-invalid={!!shownPhoneError}
@@ -179,7 +208,9 @@ export function TestFlowDialog({
               <span className="block text-[10px] text-red-500">{shownPhoneError}</span>
             ) : (
               <span className="block text-[10px] text-slate-400">
-                {phone.length >= 8 ? `Will send to +${phone}` : 'Pick the country, or type the full number starting with +.'}
+                {!phoneError
+                  ? `Will send to +${phone}`
+                  : `Enter ${lengthLabel} digits without the country code (${number.length}/${rule.max}).`}
               </span>
             )}
           </FieldLabel>
