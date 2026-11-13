@@ -1991,6 +1991,12 @@ export const TeamRolesSection: React.FC = () => {
   return (
     <div className="px-6 sm:px-8 pt-2 pb-14 max-w-6xl space-y-5 font-sans">
       {/* Top Subtitle & Action */}
+
+      {/* font-size: x-large;
+    font-weight: bold; */}
+        <h1 className='mt-0.5 text-[25px] font-bold text-slate-900 leading-tight truncate'>
+         Team & roles
+        </h1>
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <p className="text-[13.5px] text-slate-500 leading-relaxed">
           Invite people, choose what they can do, and limit which stores, teams and languages they work in.
@@ -2154,12 +2160,13 @@ export const TeamRolesSection: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                  <th className="py-3 px-5 sm:px-6 font-semibold">Member</th>
-                  <th className="py-3 px-4 font-semibold">Role and permissions</th>
-                  <th className="py-3 px-4 font-semibold">Works on</th>
-                  <th className="py-3 px-4 font-semibold">Status</th>
-                  <th className="py-3 px-5 sm:px-6 text-right font-semibold"></th>
+                <tr className="border-b border-slate-100 text-[11px] font-bold  uppercase tracking-wider">
+{/* mt-0.5 text-[18px] font-semibold text-slate-900  truncate */}
+                  <th className="py-3 px-5 sm:px-6 font-bold">Member</th>
+                  <th className="py-3 px-4 font-bold">Role and permissions</th>
+                  <th className="py-3 px-4 font-bold">Works on</th>
+                  <th className="py-3 px-4 font-bold">Status</th>
+                  <th className="py-3 px-5 sm:px-6 text-right font-bold"></th>
                 </tr>
               </thead>
 
