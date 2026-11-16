@@ -10,7 +10,7 @@ import {
   normalizeMessageStatus,
   opensServiceWindow,
 } from "../schema";
-import { eq, and, asc, desc, ne, sql, getTableColumns, inArray } from "drizzle-orm";
+import { eq, and, asc, desc, ne, sql, getTableColumns, inArray, gte } from "drizzle-orm";
 import { messageReactionRepository } from "./message-reaction.repository";
 import { conversationRepository } from "./conversation.repository";
 import { createLogger } from "../../logger";
@@ -481,6 +481,32 @@ export class MessageRepository {
           opensServiceWindow
         )
       )
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+
+    return message || null;
+  }
+
+  /** Finds the most recent automated after-hours system reply sent to a customer */
+  async findLastAfterHoursReply(
+    customerId: number,
+    organizationId: number,
+    since?: Date
+  ): Promise<Message | null> {
+    const conditions = [
+      eq(messages.organizationId, organizationId),
+      eq(messages.customerId, customerId),
+      eq(messages.senderType, "system"),
+      eq(messages.isInternalNote, false),
+      sql`${messages.metadata}->>'autoReply' = 'after_hours'`,
+    ];
+    if (since) {
+      conditions.push(gte(messages.createdAt, since));
+    }
+    const [message] = await db
+      .select()
+      .from(messages)
+      .where(and(...conditions))
       .orderBy(desc(messages.createdAt))
       .limit(1);
 
