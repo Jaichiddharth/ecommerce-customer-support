@@ -30,6 +30,7 @@ export type RealtimeEvent =
     | { type: "channel.updated"; channelId: number } // connected, reconnected or disconnected
     | { type: "notification.count"; unread: number }
     | { type: "permissions.updated" }
+    | { type: "routing.updated" }
     | {
         type: "template.status"; // Meta reviewed, paused or disabled a message template
         wabaId: string;

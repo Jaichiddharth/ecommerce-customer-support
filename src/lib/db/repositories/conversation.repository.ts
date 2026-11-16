@@ -25,6 +25,7 @@ import {
   type TicketCredits,
   type TicketEvent,
 } from "../../../types/ticket";
+import { assignmentEngine } from "../../services/assignment.service";
 
 const log = createLogger("ConversationRepository");
 
@@ -165,6 +166,18 @@ export class ConversationRepository {
     if (existing && !(opener && isClosedTicketStatus(existing.status))) return existing;
 
     if (!existing) {
+      // Automatic rule-based routing for newly opened customer conversations
+      let autoAssigneeId: number | null = null;
+      if (opener?.actorType === "agent" && opener.actorId) {
+        autoAssigneeId = opener.actorId;
+      } else {
+        const resolved = await assignmentEngine.resolveAssignee(organizationId, {
+          channelId,
+          atDate: opener?.at ?? new Date(),
+        });
+        autoAssigneeId = resolved?.assigneeId ?? null;
+      }
+
       const [created] = await db
         .insert(tickets)
         .values({
@@ -173,8 +186,21 @@ export class ConversationRepository {
           channelId: channelId ?? null,
           ticketNumber: newTicketNumber(customerId),
           status: TicketStatus.OPEN,
+          assigneeId: autoAssigneeId,
         })
         .returning();
+
+      if (autoAssigneeId) {
+        await this.logEvent(created, {
+          action: "assigned",
+          actorType: "system",
+          actorId: null,
+          actorName: "Assignment Rules",
+          assigneeId: autoAssigneeId,
+          occurredAt: new Date(),
+        }).catch(() => undefined);
+      }
+
       return created;
     }
 
@@ -201,6 +227,20 @@ export class ConversationRepository {
         .limit(1);
       if (latest && !isClosedTicketStatus(latest.status)) return { ticket: latest, previous: null };
 
+      // Teammate message assigns to them; customer message resolves via Assignment Rules
+      let targetAssigneeId: number | null = null;
+      if (opener.actorType === "agent" && opener.actorId) {
+        targetAssigneeId = opener.actorId;
+      } else {
+        const resolved = await assignmentEngine.resolveAssignee(organizationId, {
+          channelId: channelId ?? latest?.channelId ?? null,
+          tags: latest?.tags ?? [],
+          language: latest?.language ?? null,
+          atDate: opener.at ?? new Date(),
+        });
+        targetAssigneeId = resolved?.assigneeId ?? null;
+      }
+
       const [created] = await tx
         .insert(tickets)
         .values({
@@ -211,8 +251,7 @@ export class ConversationRepository {
           status: TicketStatus.OPEN,
           // The conversation keeps its mode: an AI-handled contact stays with the AI agent
           handledBy: latest?.handledBy ?? ConversationHandler.HUMAN,
-          // A teammate's message assigns the new ticket to them; a customer's leaves it unassigned
-          assigneeId: opener.actorType === "agent" ? opener.actorId : null,
+          assigneeId: targetAssigneeId,
         })
         .returning();
       return { ticket: created, previous: latest ?? null };
@@ -281,6 +320,45 @@ export class ConversationRepository {
           status: TicketStatus.OPEN,
           occurredAt: now,
         });
+      }
+    }
+
+    // If the ticket was unassigned and a customer message arrives, run automated assignment rules
+    if (!ticket.assigneeId && message.senderType === "customer" && message.mediaType !== "system") {
+      try {
+        const resolved = await assignmentEngine.resolveAssignee(ticket.organizationId, {
+          channelId: ticket.channelId,
+          tags: ticket.tags ?? [],
+          language: ticket.language,
+          atDate: message.createdAt ?? now,
+        });
+        if (resolved?.assigneeId) {
+          const [assigned] = await db
+            .update(tickets)
+            .set({ assigneeId: resolved.assigneeId })
+            .where(and(eq(tickets.id, ticket.id), isNull(tickets.assigneeId)))
+            .returning({ id: tickets.id });
+
+          if (assigned) {
+            await this.logEvent(ticket, {
+              action: "assigned",
+              actorType: "system",
+              actorId: null,
+              actorName: "Assignment Rules",
+              assigneeId: resolved.assigneeId,
+              assigneeName: resolved.assigneeName,
+              occurredAt: now,
+            }).catch(() => undefined);
+
+            publish(ticket.organizationId, {
+              type: "conversation.updated",
+              conversationId: ticket.id,
+              customerId: ticket.customerId,
+            });
+          }
+        }
+      } catch (err) {
+        log.warn("Failed to auto-assign existing unassigned ticket on inbound message", { err, ticketId: ticket.id });
       }
     }
 
