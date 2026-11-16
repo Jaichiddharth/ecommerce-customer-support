@@ -630,8 +630,8 @@ export class WhatsAppWebhookService {
             config?.timezone
           );
 
-          // Cooldown window: do not spam the customer with repeated after-hours replies within 15 minutes
-          const cooldownWindow = new Date(Date.now() - 15 * 60 * 1000);
+          // Cooldown window: do not spam the customer with repeated after-hours replies within 2 minutes
+          const cooldownWindow = new Date(Date.now() - 10 * 1000);
           const recentReply = await messageRepository.findLastAfterHoursReply(
             customerId,
             ctx.orgId,
