@@ -149,6 +149,53 @@ export function updateAfterHoursMessage(currentText: string, nextOpenText: strin
   return `Thanks for your message. Our team is back at ${nextOpenText}. Meanwhile you can track orders, start an exchange or browse the catalog below.`;
 }
 
+export function isValidHolidayDateInput(input: string): { valid: boolean; error?: string } {
+  const clean = input.trim();
+  if (!clean) return { valid: false, error: 'Please enter a date or date range' };
+
+  // 1. Day range with shared month and year: e.g. "14–16 Jan 2027" or "14-16 Jan 2027"
+  const dayRangeMatch = clean.match(/^(\d{1,2})\s*[-–—]\s*(\d{1,2})\s+([A-Za-z]+)(?:\s+(\d{4}))?$/);
+  if (dayRangeMatch) {
+    const startDay = parseInt(dayRangeMatch[1], 10);
+    const endDay = parseInt(dayRangeMatch[2], 10);
+    const monthStr = dayRangeMatch[3];
+    const yearStr = dayRangeMatch[4] || String(new Date().getFullYear());
+    const testDate = new Date(`${monthStr} 1, ${yearStr}`);
+    if (isNaN(testDate.getTime())) {
+      return { valid: false, error: 'Invalid month in range (e.g. 14–16 Jan 2027)' };
+    }
+    if (startDay < 1 || startDay > 31 || endDay < 1 || endDay > 31) {
+      return { valid: false, error: 'Day must be between 1 and 31' };
+    }
+    if (startDay > endDay) {
+      return { valid: false, error: 'Start day cannot be greater than end day' };
+    }
+    return { valid: true };
+  }
+
+  // 2. Full date range: e.g. "14 Jan 2027 - 16 Jan 2027" or "2027-01-14 to 2027-01-16"
+  const fullRangeSplit = clean.split(/\s+(?:to|-|–|—)\s+/i);
+  if (fullRangeSplit.length === 2 && !clean.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    const d1 = new Date(fullRangeSplit[0].trim());
+    const d2 = new Date(fullRangeSplit[1].trim());
+    if (isNaN(d1.getTime()) || isNaN(d2.getTime())) {
+      return { valid: false, error: 'Invalid dates in range (e.g. 14 Jan 2027 - 16 Jan 2027)' };
+    }
+    if (d1.getTime() > d2.getTime()) {
+      return { valid: false, error: 'Start date cannot be after end date' };
+    }
+    return { valid: true };
+  }
+
+  // 3. Single date: e.g. "1 Jan 2027", "8 Nov 2026", "2026-11-08"
+  const parsed = new Date(clean);
+  if (isNaN(parsed.getTime())) {
+    return { valid: false, error: 'Invalid date (e.g. 1 Jan 2027 or 14–16 Jan 2027)' };
+  }
+
+  return { valid: true };
+}
+
 const DEFAULT_CONFIG: RoutingHoursConfig = {
   timezone: 'Asia/Kolkata (IST)',
   schedule: [
@@ -252,6 +299,7 @@ export const RoutingHoursSection: React.FC = () => {
   const [isAddHolidayOpen, setIsAddHolidayOpen] = useState(false);
   const [newHolidayName, setNewHolidayName] = useState('');
   const [newHolidayDate, setNewHolidayDate] = useState('');
+  const [holidayDateError, setHolidayDateError] = useState<string | null>(null);
 
   // ── Handler Functions ────────────────────────────────────────────────
   const handleToggleDay = (index: number) => {
@@ -408,8 +456,24 @@ export const RoutingHoursSection: React.FC = () => {
 
   const handleAddHoliday = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newHolidayName.trim() || !newHolidayDate.trim()) return;
+    if (!newHolidayName.trim()) {
+      gooeyToast.error('Please enter a holiday name');
+      return;
+    }
+    if (!newHolidayDate.trim()) {
+      setHolidayDateError('Please enter a date or range');
+      gooeyToast.error('Please enter a date or range');
+      return;
+    }
 
+    const validation = isValidHolidayDateInput(newHolidayDate);
+    if (!validation.valid) {
+      setHolidayDateError(validation.error || 'Invalid date format');
+      gooeyToast.error(validation.error || 'Invalid date format');
+      return;
+    }
+
+    setHolidayDateError(null);
     setConfig((prev) => ({
       ...prev,
       holidays: [
@@ -562,7 +626,12 @@ export const RoutingHoursSection: React.FC = () => {
                 <span className="text-xs font-bold text-slate-800">Holidays</span>
                 <button
                   type="button"
-                  onClick={() => setIsAddHolidayOpen(true)}
+                  onClick={() => {
+                    setNewHolidayName('');
+                    setNewHolidayDate('');
+                    setHolidayDateError(null);
+                    setIsAddHolidayOpen(true);
+                  }}
                   className="text-[11px] font-semibold text-[#1e2a78] hover:underline cursor-pointer flex items-center gap-1"
                 >
                   <Plus className="w-3 h-3" /> Add
@@ -853,10 +922,23 @@ export const RoutingHoursSection: React.FC = () => {
                   type="text"
                   placeholder="e.g. 1 Jan 2027 or 14–16 Jan 2027"
                   value={newHolidayDate}
-                  onChange={(e) => setNewHolidayDate(e.target.value)}
-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-[#1e2a78] text-slate-800"
+                  onChange={(e) => {
+                    setNewHolidayDate(e.target.value);
+                    if (holidayDateError) setHolidayDateError(null);
+                  }}
+                  className={`w-full p-2 bg-slate-50 border rounded-xl focus:bg-white text-slate-800 ${
+                    holidayDateError
+                      ? 'border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-200'
+                      : 'border-slate-200 focus:border-[#1e2a78]'
+                  }`}
                   required
                 />
+                {holidayDateError && (
+                  <p className="text-red-500 text-[11px] mt-1 font-medium">{holidayDateError}</p>
+                )}
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Supported formats: <code>1 Jan 2027</code>, <code>14–16 Jan 2027</code>, <code>2027-01-01</code>
+                </p>
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">

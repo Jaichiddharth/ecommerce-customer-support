@@ -393,7 +393,8 @@ export class AssignmentEngine {
   ): boolean {
     if (!dateStr) return false;
     const clean = dateStr.trim();
-    // Range match e.g. "14–16 Jan 2027" or "14-16 Jan 2027"
+
+    // 1. Day range with single month and year e.g. "14–16 Jan 2027" or "14-16 Jan 2027"
     const rangeMatch = clean.match(/^(\d{1,2})\s*[-–—]\s*(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
     if (rangeMatch) {
       const startDay = parseInt(rangeMatch[1], 10);
@@ -406,7 +407,22 @@ export class AssignmentEngine {
       }
     }
 
-    // Single date parse e.g. "8 Nov 2026" or "2026-11-08"
+    // 2. Full date range e.g. "14 Jan 2027 - 16 Jan 2027" or "2027-01-14 to 2027-01-16"
+    const fullRangeSplit = clean.split(/\s+(?:to|-|–|—)\s+/i);
+    if (fullRangeSplit.length === 2 && !clean.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      const d1 = new Date(fullRangeSplit[0].trim());
+      const d2 = new Date(fullRangeSplit[1].trim());
+      if (!isNaN(d1.getTime()) && !isNaN(d2.getTime())) {
+        const current = new Date(currentYear, currentMonth - 1, currentDay);
+        d1.setHours(0, 0, 0, 0);
+        d2.setHours(23, 59, 59, 999);
+        if (current.getTime() >= d1.getTime() && current.getTime() <= d2.getTime()) {
+          return true;
+        }
+      }
+    }
+
+    // 3. Single date parse e.g. "8 Nov 2026" or "2026-11-08"
     const parsed = new Date(clean);
     if (!isNaN(parsed.getTime())) {
       if (parsed.getFullYear() === currentYear && (parsed.getMonth() + 1) === currentMonth && parsed.getDate() === currentDay) {
