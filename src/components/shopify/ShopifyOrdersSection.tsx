@@ -15,6 +15,7 @@ import { ShopifyOrderCard } from './ShopifyOrderCard';
 import { ShopifyCustomerTags } from './ShopifyCustomerTags';
 import { OlderOrdersNotice } from './store/CustomerOrdersModal';
 import { ChannelStoreSetup } from './ChannelStoreSetup';
+import { useRealtime } from '@/lib/hooks/useRealtime';
 
 interface ShopifyOrdersSectionProps {
   contact: { id: number; name: string; email: string | null; phone: string | null };
@@ -87,6 +88,46 @@ export const ShopifyOrdersSection: React.FC<ShopifyOrdersSectionProps> = ({
     setError(null);
     if (storeConnected) load();
   }, [storeConnected, load]);
+
+  // Real-time updates: listen for Shopify order webhooks and update orders without refresh
+  const handleLiveRefresh = useCallback(() => {
+    if (storeConnected) {
+      load();
+    }
+  }, [storeConnected, load]);
+
+  useRealtime({
+    onShopifyOrderCreated: (event) => {
+      const match = !event.storeId || !storeId || String(event.storeId) === String(storeId) || event.shopDomain === store?.shopDomain;
+      if (match) {
+        handleLiveRefresh();
+        if (event.order?.orderNumber) {
+          gooeyToast.success(`Shopify: New order ${event.order.orderNumber} received`);
+        }
+      }
+    },
+    onShopifyOrderUpdated: (event) => {
+      const match = !event.storeId || !storeId || String(event.storeId) === String(storeId) || event.shopDomain === store?.shopDomain;
+      if (match) {
+        handleLiveRefresh();
+      }
+    },
+  });
+
+  // Global window event listener so updates apply even if individual hook connection is delayed
+  useEffect(() => {
+    const onShopifyEvent = () => {
+      handleLiveRefresh();
+    };
+    window.addEventListener('shopify:realtime', onShopifyEvent);
+    window.addEventListener('shopify:order:created', onShopifyEvent);
+    window.addEventListener('shopify:order:updated', onShopifyEvent);
+    return () => {
+      window.removeEventListener('shopify:realtime', onShopifyEvent);
+      window.removeEventListener('shopify:order:created', onShopifyEvent);
+      window.removeEventListener('shopify:order:updated', onShopifyEvent);
+    };
+  }, [handleLiveRefresh]);
 
   const handleUnlink = async () => {
     setIsUnlinking(true);

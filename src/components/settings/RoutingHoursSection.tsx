@@ -9,6 +9,7 @@ import {
   Trash2,
   Clock,
   Calendar,
+  CalendarRange,
   Sparkles,
   Bot,
   Check,
@@ -196,6 +197,51 @@ export function isValidHolidayDateInput(input: string): { valid: boolean; error?
   return { valid: true };
 }
 
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const sanitizeDateInput = (val: string): string => {
+  if (!val) return '';
+  const parts = val.split('-');
+  if (parts[0] && parts[0].length > 4) {
+    parts[0] = parts[0].slice(0, 4);
+    return parts.join('-');
+  }
+  return val;
+};
+
+export function formatHolidayDate(startDate: string, endDate?: string): string {
+  if (!startDate) return '';
+  const startParts = startDate.split('-');
+  if (startParts[0] && startParts[0].length > 4) {
+    startDate = `${startParts[0].slice(0, 4)}-${startParts.slice(1).join('-')}`;
+  }
+  const d1 = new Date(`${startDate}T00:00:00`);
+  if (isNaN(d1.getTime())) return startDate;
+
+  if (!endDate || endDate === startDate) {
+    return `${d1.getDate()} ${MONTH_SHORT[d1.getMonth()]} ${d1.getFullYear()}`;
+  }
+
+  const endParts = endDate.split('-');
+  if (endParts[0] && endParts[0].length > 4) {
+    endDate = `${endParts[0].slice(0, 4)}-${endParts.slice(1).join('-')}`;
+  }
+  const d2 = new Date(`${endDate}T00:00:00`);
+  if (isNaN(d2.getTime())) {
+    return `${d1.getDate()} ${MONTH_SHORT[d1.getMonth()]} ${d1.getFullYear()}`;
+  }
+
+  if (d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth()) {
+    return `${d1.getDate()}–${d2.getDate()} ${MONTH_SHORT[d1.getMonth()]} ${d1.getFullYear()}`;
+  }
+
+  if (d1.getFullYear() === d2.getFullYear()) {
+    return `${d1.getDate()} ${MONTH_SHORT[d1.getMonth()]} – ${d2.getDate()} ${MONTH_SHORT[d2.getMonth()]} ${d1.getFullYear()}`;
+  }
+
+  return `${d1.getDate()} ${MONTH_SHORT[d1.getMonth()]} ${d1.getFullYear()} – ${d2.getDate()} ${MONTH_SHORT[d2.getMonth()]} ${d2.getFullYear()}`;
+}
+
 const DEFAULT_CONFIG: RoutingHoursConfig = {
   timezone: 'Asia/Kolkata (IST)',
   schedule: [
@@ -298,7 +344,9 @@ export const RoutingHoursSection: React.FC = () => {
 
   const [isAddHolidayOpen, setIsAddHolidayOpen] = useState(false);
   const [newHolidayName, setNewHolidayName] = useState('');
-  const [newHolidayDate, setNewHolidayDate] = useState('');
+  const [holidayDateMode, setHolidayDateMode] = useState<'single' | 'range'>('single');
+  const [holidayStartDate, setHolidayStartDate] = useState('');
+  const [holidayEndDate, setHolidayEndDate] = useState('');
   const [holidayDateError, setHolidayDateError] = useState<string | null>(null);
 
   // ── Handler Functions ────────────────────────────────────────────────
@@ -460,31 +508,60 @@ export const RoutingHoursSection: React.FC = () => {
       gooeyToast.error('Please enter a holiday name');
       return;
     }
-    if (!newHolidayDate.trim()) {
-      setHolidayDateError('Please enter a date or range');
-      gooeyToast.error('Please enter a date or range');
+    if (!holidayStartDate) {
+      setHolidayDateError('Please select a date');
+      gooeyToast.error('Please select a date');
       return;
     }
 
-    const validation = isValidHolidayDateInput(newHolidayDate);
-    if (!validation.valid) {
-      setHolidayDateError(validation.error || 'Invalid date format');
-      gooeyToast.error(validation.error || 'Invalid date format');
+    const validateHolidayYear = (dateStr: string): boolean => {
+      const year = parseInt(dateStr.split('-')[0], 10);
+      return !isNaN(year) && year >= 2000 && year <= 2099 && dateStr.split('-')[0].length === 4;
+    };
+
+    if (!validateHolidayYear(holidayStartDate)) {
+      setHolidayDateError('Please enter a valid 4-digit year (between 2000 and 2099)');
+      gooeyToast.error('Please enter a valid 4-digit year (e.g. 2026)');
       return;
     }
+
+    if (holidayDateMode === 'range' && !holidayEndDate) {
+      setHolidayDateError('Please select an end date for the range');
+      gooeyToast.error('Please select an end date for the range');
+      return;
+    }
+
+    if (holidayDateMode === 'range' && !validateHolidayYear(holidayEndDate)) {
+      setHolidayDateError('Please enter a valid 4-digit year for the end date');
+      gooeyToast.error('Please enter a valid 4-digit year (e.g. 2026)');
+      return;
+    }
+
+    if (holidayDateMode === 'range' && holidayEndDate < holidayStartDate) {
+      setHolidayDateError('End date cannot be earlier than start date');
+      gooeyToast.error('End date cannot be earlier than start date');
+      return;
+    }
+
+    const formattedDate = formatHolidayDate(
+      holidayStartDate,
+      holidayDateMode === 'range' ? holidayEndDate : undefined
+    );
 
     setHolidayDateError(null);
     setConfig((prev) => ({
       ...prev,
       holidays: [
         ...prev.holidays,
-        { id: `h-${Date.now()}`, name: newHolidayName.trim(), date: newHolidayDate.trim() },
+        { id: `h-${Date.now()}`, name: newHolidayName.trim(), date: formattedDate },
       ],
     }));
     setHasChanges(true);
     setIsAddHolidayOpen(false);
     setNewHolidayName('');
-    setNewHolidayDate('');
+    setHolidayStartDate('');
+    setHolidayEndDate('');
+    setHolidayDateMode('single');
     gooeyToast.success('Holiday added');
   };
 
@@ -628,7 +705,9 @@ export const RoutingHoursSection: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setNewHolidayName('');
-                    setNewHolidayDate('');
+                    setHolidayStartDate('');
+                    setHolidayEndDate('');
+                    setHolidayDateMode('single');
                     setHolidayDateError(null);
                     setIsAddHolidayOpen(true);
                   }}
@@ -917,28 +996,122 @@ export const RoutingHoursSection: React.FC = () => {
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Date or range</label>
-                <input
-                  type="text"
-                  placeholder="e.g. 1 Jan 2027 or 14–16 Jan 2027"
-                  value={newHolidayDate}
-                  onChange={(e) => {
-                    setNewHolidayDate(e.target.value);
-                    if (holidayDateError) setHolidayDateError(null);
-                  }}
-                  className={`w-full p-2 bg-slate-50 border rounded-xl focus:bg-white text-slate-800 ${
-                    holidayDateError
-                      ? 'border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-200'
-                      : 'border-slate-200 focus:border-[#1e2a78]'
-                  }`}
-                  required
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block font-semibold text-slate-700">Holiday date</label>
+                  <div className="flex items-center p-0.5 bg-slate-100 rounded-lg text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHolidayDateMode('single');
+                        setHolidayEndDate('');
+                        setHolidayDateError(null);
+                      }}
+                      className={`px-2.5 py-1 rounded-md font-medium transition cursor-pointer flex items-center gap-1 ${
+                        holidayDateMode === 'single'
+                          ? 'bg-white text-[#1e2a78] shadow-2xs font-semibold'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <Calendar className="w-3 h-3" /> Single day
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHolidayDateMode('range');
+                        if (holidayStartDate && !holidayEndDate) {
+                          setHolidayEndDate(holidayStartDate);
+                        }
+                        setHolidayDateError(null);
+                      }}
+                      className={`px-2.5 py-1 rounded-md font-medium transition cursor-pointer flex items-center gap-1 ${
+                        holidayDateMode === 'range'
+                          ? 'bg-white text-[#1e2a78] shadow-2xs font-semibold'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <CalendarRange className="w-3 h-3" /> Date range
+                    </button>
+                  </div>
+                </div>
+
+                {holidayDateMode === 'single' ? (
+                  <div>
+                    <input
+                      type="date"
+                      min="2000-01-01"
+                      max="2099-12-31"
+                      value={holidayStartDate}
+                      onChange={(e) => {
+                        setHolidayStartDate(sanitizeDateInput(e.target.value));
+                        if (holidayDateError) setHolidayDateError(null);
+                      }}
+                      className={`w-full p-2.5 bg-slate-50 border rounded-xl focus:bg-white text-slate-800 cursor-pointer ${
+                        holidayDateError
+                          ? 'border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-200'
+                          : 'border-slate-200 focus:border-[#1e2a78]'
+                      }`}
+                      required
+                    />
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="block text-[10px] text-slate-500 mb-1 font-medium">Start date</span>
+                      <input
+                        type="date"
+                        min="2000-01-01"
+                        max={holidayEndDate || '2099-12-31'}
+                        value={holidayStartDate}
+                        onChange={(e) => {
+                          const val = sanitizeDateInput(e.target.value);
+                          setHolidayStartDate(val);
+                          if (holidayEndDate && val > holidayEndDate) {
+                            setHolidayEndDate(val);
+                          }
+                          if (holidayDateError) setHolidayDateError(null);
+                        }}
+                        className={`w-full p-2.5 bg-slate-50 border rounded-xl focus:bg-white text-slate-800 cursor-pointer ${
+                          holidayDateError
+                            ? 'border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-200'
+                            : 'border-slate-200 focus:border-[#1e2a78]'
+                        }`}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-slate-500 mb-1 font-medium">End date</span>
+                      <input
+                        type="date"
+                        min={holidayStartDate || '2000-01-01'}
+                        max="2099-12-31"
+                        value={holidayEndDate}
+                        onChange={(e) => {
+                          setHolidayEndDate(sanitizeDateInput(e.target.value));
+                          if (holidayDateError) setHolidayDateError(null);
+                        }}
+                        className={`w-full p-2.5 bg-slate-50 border rounded-xl focus:bg-white text-slate-800 cursor-pointer ${
+                          holidayDateError
+                            ? 'border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-200'
+                            : 'border-slate-200 focus:border-[#1e2a78]'
+                        }`}
+                        required
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {holidayStartDate && (
+                  <div className="mt-2.5 px-3 py-1.5 bg-slate-50 border border-slate-200/60 rounded-xl flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400 font-medium">Preview:</span>
+                    <span className="font-semibold text-slate-800">
+                      {formatHolidayDate(holidayStartDate, holidayDateMode === 'range' ? holidayEndDate : undefined)}
+                    </span>
+                  </div>
+                )}
+
                 {holidayDateError && (
                   <p className="text-red-500 text-[11px] mt-1 font-medium">{holidayDateError}</p>
                 )}
-                <p className="text-[10px] text-slate-400 mt-1">
-                  Supported formats: <code>1 Jan 2027</code>, <code>14–16 Jan 2027</code>, <code>2027-01-01</code>
-                </p>
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">

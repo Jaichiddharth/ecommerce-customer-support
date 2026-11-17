@@ -40,7 +40,48 @@ export type RealtimeEvent =
         status: string; // APPROVED, REJECTED, PENDING, PAUSED, DISABLED, …
         reason?: string | null; // Meta's rejection reason, e.g. PROMOTIONAL
     }
-    | { type: "notification.count"; unread: number };
+    | {
+        type: "shopify.order.created";
+        storeId: number;
+        shopDomain: string;
+        customerId?: number | null;
+        order: {
+            id: number | string;
+            orderNumber: string | number;
+            totalPrice?: string | null;
+            currency?: string | null;
+            financialStatus?: string | null;
+            customerEmail?: string | null;
+            customerPhone?: string | null;
+            customerName?: string | null;
+            createdAt?: string | null;
+        };
+    }
+    | {
+        type: "shopify.order.updated";
+        storeId: number;
+        shopDomain: string;
+        customerId?: number | null;
+        order: {
+            id: number | string;
+            orderNumber?: string | number;
+            financialStatus?: string | null;
+            fulfillmentStatus?: string | null;
+            cancelReason?: string | null;
+            cancelledAt?: string | null;
+        };
+    }
+    | {
+        type: "shopify.checkout.updated";
+        storeId: number;
+        shopDomain: string;
+        customerId?: number | null;
+        checkout: {
+            token: string;
+            email?: string | null;
+            totalPrice?: string | null;
+        };
+    };
 
 // globalThis keeps ONE bus across Next.js hot reloads / route modules
 const g = globalThis as unknown as {
