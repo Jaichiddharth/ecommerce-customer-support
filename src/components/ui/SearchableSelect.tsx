@@ -34,6 +34,10 @@ export interface SearchableSelectProps {
   'aria-label'?: string;
   /** Classes for the wrapper, e.g. "flex-1 min-w-0" */
   className?: string;
+  /** 'bare': no border, background or ring on the trigger, for embedding inside another field (e.g. a phone input) */
+  variant?: 'default' | 'bare';
+  /** Custom trigger content for the selected option (default: label · description) */
+  renderSelected?: (option: SearchableSelectOption) => React.ReactNode;
 }
 
 const BADGE_TONES: Record<NonNullable<NonNullable<SearchableSelectOption['badge']>['tone']>, string> = {
@@ -69,6 +73,8 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   id,
   'aria-label': ariaLabel,
   className = '',
+  variant = 'default',
+  renderSelected,
 }) => {
   const autoId = useId();
   const listId = `${id ?? autoId}-list`;
@@ -223,12 +229,18 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
         disabled={disabled}
         onClick={() => (open ? close() : openMenu())}
         onKeyDown={onTriggerKeyDown}
-        className={`w-full flex items-center gap-2 px-3 py-2 ${text} text-left bg-white border rounded-lg transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#3440a8]/20 ${
-          open ? 'border-[#3440a8] ring-2 ring-[#3440a8]/20' : 'border-slate-200 hover:border-slate-300'
-        }`}
+        className={
+          variant === 'bare'
+            ? `w-full h-full flex items-center gap-1.5 px-3 py-2 ${text} text-left bg-transparent transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus-visible:bg-slate-100 hover:bg-slate-100/70`
+            : `w-full flex items-center gap-2 px-3 py-2 ${text} text-left bg-white border rounded-lg transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#3440a8]/20 ${
+                open ? 'border-[#3440a8] ring-2 ring-[#3440a8]/20' : 'border-slate-200 hover:border-slate-300'
+              }`
+        }
       >
         <span className="flex-1 min-w-0 flex items-center gap-1.5">
-          {selected ? (
+          {selected && renderSelected ? (
+            renderSelected(selected)
+          ) : selected ? (
             <>
               <span className="truncate text-slate-800 font-medium">{selected.label}</span>
               {selected.description && <span className="truncate text-slate-500">· {selected.description}</span>}

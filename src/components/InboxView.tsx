@@ -86,6 +86,8 @@ import {
 } from './inbox/inbox-types';
 import { TicketCreditsBar, TicketEventRow, TicketStatusMenu } from './inbox/TicketStatus';
 import { SearchableSelect } from '@/components/ui/SearchableSelect';
+import { PhoneNumberInput } from '@/components/ui/PhoneNumberInput';
+import { emptyPhone, parsePhone, phoneError as getPhoneError, toPhoneDigits, type PhoneValue } from '@/lib/phone';
 import { AssigneeMenu } from './inbox/AssigneeMenu';
 import type { TicketCredits } from '@/types/ticket';
 
@@ -1464,7 +1466,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // NEW CONTACT
   // -------------------------------------------------------------
   const [newContactName, setNewContactName] = useState('');
-  const [newContactPhone, setNewContactPhone] = useState('');
+  const [newContactPhone, setNewContactPhone] = useState<PhoneValue>(() => emptyPhone());
+  const [newContactPhoneTouched, setNewContactPhoneTouched] = useState(false);
+  const newContactPhoneError = getPhoneError(newContactPhone);
   const [newContactChannelId, setNewContactChannelId] = useState<number | null>(null);
   const [isCreatingContact, setIsCreatingContact] = useState(false);
 
@@ -1478,13 +1482,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       initialChannelId = selectedChannelId;
     }
     setNewContactChannelId(initialChannelId);
+    // A search that looks like a number prefills the phone (country code detected); anything else is the name
     const digits = prefill.replace(/\D/g, '');
+    setNewContactPhoneTouched(false);
     if (digits.length >= 6) {
-      setNewContactPhone(digits);
+      setNewContactPhone(parsePhone(prefill, newContactPhone.country));
       setNewContactName('');
     } else {
       setNewContactName(prefill);
-      setNewContactPhone('');
+      setNewContactPhone(emptyPhone(newContactPhone.country));
     }
     setShowNewContactModal(true);
   };
@@ -1495,11 +1501,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       gooeyToast.error('No WhatsApp channel available. Please connect a channel first.');
       return;
     }
-    const cleanPhone = newContactPhone.replace(/\D/g, '');
-    if (!newContactName.trim() || !cleanPhone) {
-      gooeyToast.error('Please enter a name and a valid phone number (digits only, e.g. 919876543210)');
+    setNewContactPhoneTouched(true);
+    if (!newContactName.trim()) {
+      gooeyToast.error('Please enter the customer’s name.');
       return;
     }
+    if (newContactPhoneError) return; // shown under the phone field
+    const cleanPhone = toPhoneDigits(newContactPhone);
     const targetChannelId = newContactChannelId || whatsappChannels[0]?.id;
 
     try {
@@ -1514,7 +1522,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         gooeyToast.success(`Customer ${newContactName.trim()} created under ${channelName}!`);
         setShowNewContactModal(false);
         setNewContactName('');
-        setNewContactPhone('');
+        setNewContactPhone((p) => emptyPhone(p.country));
+        setNewContactPhoneTouched(false);
         // A conversation is created with the first message; show the contact right away
         await fetchConversations();
         fetchChannels(); // the channel's contact count went up
@@ -2561,16 +2570,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
           <div>
             <label className="block font-semibold text-slate-700 mb-1">Phone number</label>
-            <input
-              type="text"
-              required
+            <PhoneNumberInput
+              size="sm"
               disabled={whatsappChannels.length === 0}
               value={newContactPhone}
-              onChange={(e) => setNewContactPhone(e.target.value)}
-              placeholder="e.g. 919876543210"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#3440a8] disabled:bg-slate-100 disabled:cursor-not-allowed"
+              onChange={setNewContactPhone}
+              onBlur={() => setNewContactPhoneTouched(true)}
+              error={newContactPhoneTouched || newContactPhone.number.startsWith('0') ? newContactPhoneError : null}
+              hint={!newContactPhoneError ? `Will be saved as +${toPhoneDigits(newContactPhone)}` : undefined}
             />
-            <p className="text-[11px] text-slate-400 mt-1">Digits only, with country code and without +.</p>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">

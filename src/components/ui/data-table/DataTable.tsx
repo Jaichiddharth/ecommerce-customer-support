@@ -40,7 +40,7 @@ export interface DataTableProps<T> {
   /** Client mode only: starting sort and page size. */
   initialSort?: SortState;
   initialPageSize?: number;
-  /** 'always' (default for server tables) or 'auto' (default for client tables: only when there is more than one page). */
+  /** 'always' (default for server tables) or 'auto' (default for client tables: only when the rows don't all fit on one page at the smallest page size). */
   showPagination?: 'always' | 'auto';
   /** Where the pagination bar goes: above and below the rows (default), or only below. */
   paginationPosition?: 'both' | 'bottom';
@@ -179,7 +179,12 @@ export function DataTable<T>({
   const firstLoad = loading && (server ? !server.pagination : data.length === 0);
   const refreshing = loading && !firstLoad;
   const hasRows = !error && rows.length > 0;
-  const pagerVisible = hasRows && (showPagination === 'always' || table.getPageCount() > 1);
+  // 'auto' hides the bar only when every row fits on one page even at the smallest page size. Basing it on the
+  // current page size would hide the "Rows per page" picker as soon as a large size is chosen (one page left),
+  // leaving no way to switch back to a smaller size.
+  const smallestPageSize = Math.min(...pageSizeOptions, pagination.pageSize);
+  const totalRows = server ? server.pagination?.totalRecords ?? 0 : data.length;
+  const pagerVisible = hasRows && (showPagination === 'always' || table.getPageCount() > 1 || totalRows > smallestPageSize);
 
   const pager = (position: 'top' | 'bottom') =>
     pagerVisible && (position === 'bottom' || paginationPosition === 'both') ?<TablePagination table={table} position={position} pageSizeOptions={pageSizeOptions} loading={refreshing} /> : null;
