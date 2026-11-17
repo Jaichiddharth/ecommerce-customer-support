@@ -23,6 +23,7 @@ import { notifyError } from '@/lib/api/notify';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 import { Modal } from '@/components/ui/Modal';
 import { ErrorState, LoadingState } from '@/components/ui/states';
+import { useRealtime } from '@/lib/hooks/useRealtime';
 import { useAuth } from '@/context/AuthContext';
 import type { ShopifyCount, ShopifyStoreOverview, ShopifyStoreWithChannels } from '@/lib/shopify/types';
 import { STATUS_BADGE } from './ShopifyIntegrationView';
@@ -81,6 +82,20 @@ export const ShopifyStoreDetailView: React.FC<ShopifyStoreDetailViewProps> = ({ 
     loadStore();
     loadOverview();
   }, [allowed, loadStore, loadOverview]);
+
+  // Real-time updates: refresh store overview stats when webhooks fire
+  useRealtime({
+    onShopifyOrderCreated: (event) => {
+      if (event.storeId === storeId) {
+        loadOverview();
+      }
+    },
+    onShopifyOrderUpdated: (event) => {
+      if (event.storeId === storeId) {
+        loadOverview();
+      }
+    },
+  });
 
   const back = { href: '/integrations/shopify', label: 'Back to Shopify connections' };
 

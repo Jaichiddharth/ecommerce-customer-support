@@ -14,6 +14,10 @@ export interface UseRealtimeOptions {
   onChannelUpdated?: (event: Extract<RealtimeEvent, { type: 'channel.updated' }>) => void;
   onTemplateStatus?: (event: Extract<RealtimeEvent, { type: 'template.status' }>) => void;
   onCustomerConsent?: (event: Extract<RealtimeEvent, { type: 'customer.consent' }>) => void;
+  onShopifyOrderCreated?: (event: Extract<RealtimeEvent, { type: 'shopify.order.created' }>) => void;
+  onShopifyOrderUpdated?: (event: Extract<RealtimeEvent, { type: 'shopify.order.updated' }>) => void;
+  onShopifyCheckoutUpdated?: (event: Extract<RealtimeEvent, { type: 'shopify.checkout.updated' }>) => void;
+  onShopifyEvent?: (event: Extract<RealtimeEvent, { type: 'shopify.order.created' | 'shopify.order.updated' | 'shopify.checkout.updated' }>) => void;
   onAnyEvent?: (event: RealtimeEvent) => void;
   enabled?: boolean;
 }
@@ -176,6 +180,57 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
           callbacksRef.current.onAnyEvent?.(payload);
         } catch (err) {
           clientLogger.error('useRealtime', 'Could not handle customer.consent event', { err, data: e.data });
+        }
+      });
+
+      // 9. Shopify Order Created Event
+      es.addEventListener('shopify.order.created', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          setLastEventTime(new Date());
+          callbacksRef.current.onShopifyOrderCreated?.(payload);
+          callbacksRef.current.onShopifyEvent?.(payload);
+          callbacksRef.current.onAnyEvent?.(payload);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('shopify:order:created', { detail: payload }));
+            window.dispatchEvent(new CustomEvent('shopify:realtime', { detail: payload }));
+          }
+        } catch (err) {
+          clientLogger.error('useRealtime', 'Could not handle shopify.order.created event', { err, data: e.data });
+        }
+      });
+
+      // 10. Shopify Order Updated Event (cancelled, paid, etc.)
+      es.addEventListener('shopify.order.updated', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          setLastEventTime(new Date());
+          callbacksRef.current.onShopifyOrderUpdated?.(payload);
+          callbacksRef.current.onShopifyEvent?.(payload);
+          callbacksRef.current.onAnyEvent?.(payload);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('shopify:order:updated', { detail: payload }));
+            window.dispatchEvent(new CustomEvent('shopify:realtime', { detail: payload }));
+          }
+        } catch (err) {
+          clientLogger.error('useRealtime', 'Could not handle shopify.order.updated event', { err, data: e.data });
+        }
+      });
+
+      // 11. Shopify Checkout Updated Event (created, updated)
+      es.addEventListener('shopify.checkout.updated', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          setLastEventTime(new Date());
+          callbacksRef.current.onShopifyCheckoutUpdated?.(payload);
+          callbacksRef.current.onShopifyEvent?.(payload);
+          callbacksRef.current.onAnyEvent?.(payload);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('shopify:checkout:updated', { detail: payload }));
+            window.dispatchEvent(new CustomEvent('shopify:realtime', { detail: payload }));
+          }
+        } catch (err) {
+          clientLogger.error('useRealtime', 'Could not handle shopify.checkout.updated event', { err, data: e.data });
         }
       });
 

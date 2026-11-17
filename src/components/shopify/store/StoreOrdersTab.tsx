@@ -8,6 +8,7 @@ import type { ShopifyOrderStatusFilter, ShopifyStoreOrder } from '@/lib/shopify/
 import { LoadMoreButton, SearchInput, formatDate, humanize, selectClass, usePagedList } from '../ShopifyPageChrome';
 import { CustomerOrdersModal, type CustomerRef } from './CustomerOrdersModal';
 import { OrderHistoryNotice } from '../OrderHistoryNotice';
+import { useRealtime } from '@/lib/hooks/useRealtime';
 
 const STATUS_LABELS: Record<ShopifyOrderStatusFilter, string> = {
   any: 'All orders',
@@ -38,6 +39,20 @@ export const StoreOrdersTab: React.FC<{ storeId: number; shopDomain: string; has
     'StoreOrdersTab'
   );
   const filtered = Boolean(search.trim()) || status !== 'any';
+
+  // Live real-time updates: reload order list without page refresh when order webhooks fire
+  useRealtime({
+    onShopifyOrderCreated: (event) => {
+      if (event.storeId === storeId || event.shopDomain === shopDomain) {
+        reload();
+      }
+    },
+    onShopifyOrderUpdated: (event) => {
+      if (event.storeId === storeId || event.shopDomain === shopDomain) {
+        reload();
+      }
+    },
+  });
 
   return (
     <div className="space-y-4">
