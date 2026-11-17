@@ -11,7 +11,8 @@ const MIRROR_HOST = "dev.unocx.in";
 const MIRROR_URLS = [
   "https://vdjh39fx-3000.inc1.devtunnels.ms/api/webhooks/whatsapp",
   "https://result-icy-material.ngrok-free.dev/api/webhooks/whatsapp",
-  "https://mmj6pwcs-3000.inc1.devtunnels.ms/api/webhooks/whatsapp"
+  "https://mmj6pwcs-3000.inc1.devtunnels.ms/api/webhooks/whatsapp",
+  "https://w01rq41h-3000.inc1.devtunnels.ms/api/webhooks/whatsapp"
 ];
 
 /**
