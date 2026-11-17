@@ -742,6 +742,18 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       forgetCachedTemplates();
       setTemplateRevision((r) => r + 1);
     },
+    onShopifyOrderCreated: () => {
+      refreshConversationsSoon();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('shopify:realtime'));
+      }
+    },
+    onShopifyOrderUpdated: () => {
+      refreshConversationsSoon();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('shopify:realtime'));
+      }
+    },
   });
 
   // -------------------------------------------------------------
