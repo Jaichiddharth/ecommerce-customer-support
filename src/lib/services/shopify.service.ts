@@ -8,7 +8,8 @@ import { encryptToken, decryptToken } from "../security/crypto";
 import type { AuthUser } from "../security/auth";
 import { canAccessStore } from "../security/store-access";
 import { shopifyGraphql, revokeShopifyAccess } from "../shopify/admin-client";
-import { getShopifyConfig, getShopifyDistribution, isValidShopDomain, shopifyLegacyId, toShopifyGid, SHOPIFY_REQUIRED_SCOPES } from "../shopify/config";
+import { getShopifyConfig, getShopifyDistribution, isValidShopDomain, shopifyLegacyId, toShopifyGid, SHOPIFY_REQUIRED_SCOPES, SHOPIFY_WEBHOOKS_PATH } from "../shopify/config";
+import { subscribeShopifyWebhooks, listShopifyWebhooks } from "../shopify/webhooks";
 import { hasScope, toOrderLinkInfo, toStoreInfo, toStoreRef } from "../shopify/mappers";
 import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken, verifyCallbackHmac, verifyState } from "../shopify/oauth";
 import { buildProductMessageText } from "../shopify/product-message";
@@ -452,7 +453,52 @@ export class ShopifyService {
     });
     const reconnected = existing !== null;
     log.info(reconnected ? "Shopify store re-authorized" : "Shopify store connected", { organizationId: state.o, shop, storeId: store.id });
+
+    // Automatically subscribe to essential Shopify webhooks (orders/create, orders/cancelled, orders/paid, checkouts/create, checkouts/update)
+    try {
+      const config = getShopifyConfig();
+      const callbackUrl = `${config.appUrl}${SHOPIFY_WEBHOOKS_PATH}`;
+      const subResult = await subscribeShopifyWebhooks(shop, token.accessToken, callbackUrl);
+      log.info("Shopify webhook subscription attempted during install", {
+        shop,
+        allSubscribed: subResult.allSubscribed,
+        results: subResult.results,
+      });
+    } catch (whErr: any) {
+      log.warn("Failed to subscribe Shopify webhooks during installation", {
+        shop,
+        err: whErr?.message,
+      });
+    }
+
     return { store, reconnected };
+  }
+
+  /**
+   * Subscribes a connected store to the required webhooks:
+   * orders/create, orders/cancelled, orders/paid, checkouts/create, checkouts/update
+   */
+  async subscribeStoreWebhooks(organizationId: number, storeId: number) {
+    const store = await shopifyRepository.findActiveStore(organizationId, storeId);
+    if (!store) throw new AppError("SHOPIFY_NOT_CONNECTED", { expected: true });
+    const token = store.accessToken ? decryptToken(store.accessToken) : "";
+    if (!token) throw new AppError("SHOPIFY_NOT_CONNECTED", { expected: true });
+
+    const config = getShopifyConfig();
+    const callbackUrl = `${config.appUrl}${SHOPIFY_WEBHOOKS_PATH}`;
+    return await subscribeShopifyWebhooks(store.shopDomain, token, callbackUrl);
+  }
+
+  /**
+   * Lists existing webhooks configured on Shopify for this store.
+   */
+  async listStoreWebhooks(organizationId: number, storeId: number) {
+    const store = await shopifyRepository.findActiveStore(organizationId, storeId);
+    if (!store) throw new AppError("SHOPIFY_NOT_CONNECTED", { expected: true });
+    const token = store.accessToken ? decryptToken(store.accessToken) : "";
+    if (!token) throw new AppError("SHOPIFY_NOT_CONNECTED", { expected: true });
+
+    return await listShopifyWebhooks(store.shopDomain, token);
   }
 
   /** Revokes and clears the token. Channel mappings and links stay, so reconnecting the shop restores them. */

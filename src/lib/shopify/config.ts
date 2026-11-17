@@ -42,7 +42,13 @@ export function getShopifyConfig(): ShopifyAppConfig {
     });
   }
 
-  const extra = (process.env.SHOPIFY_SCOPES || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const rawScopes = (process.env.SHOPIFY_SCOPES || "")
+    .replace(/^["'“”]+|["'“”]+$/g, "")
+    .trim();
+  const extra = rawScopes
+    .split(",")
+    .map((s) => s.replace(/^["'“”]+|["'“”]+$/g, "").trim())
+    .filter(Boolean);
   return {
     apiKey,
     apiSecret,
@@ -52,6 +58,7 @@ export function getShopifyConfig(): ShopifyAppConfig {
 }
 
 export const SHOPIFY_CALLBACK_PATH = "/api/integrations/shopify/callback";
+export const SHOPIFY_WEBHOOKS_PATH = "/api/integrations/shopify/webhooks";
 
 const MYSHOPIFY_DOMAIN = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
 

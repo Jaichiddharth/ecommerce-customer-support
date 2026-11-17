@@ -9,6 +9,8 @@ import { whatsappFlowService } from '../whatsapp-flows/flow.service';
 import { whatsappTemplateService } from '../whatsapp-flows/template.service';
 import { whatsappFlowSubmissionService, parseFlowReply, summarizeFlowReply } from '../whatsapp-flows/flow-submission.service';
 import { consentService, consentKeywordCandidates, matchConsentKeyword } from '../consent.service';
+import { whatsAppService } from './whatsapp.service';
+import { assignmentEngine } from '../assignment.service';
 
 const log = createLogger('WhatsAppWebhook');
 
@@ -537,33 +539,36 @@ export class WhatsAppWebhookService {
         ...(repliedToId ? { repliedToId } : {}),
       });
 
-      await this.afterInboundMessage(msg, ctx, customer.id, savedMessage?.id ?? null, textBody, msgDate, automationPending);
+      await this.afterInboundMessage(msg, ctx, customer, cleanFromPhone, savedMessage?.id ?? null, textBody, msgDate, automationPending);
     }
 
     return 'saved';
   }
 
   /**
-   * Flow responses and automation triggers for a newly saved inbound message.
+   * Flow responses, business hours after-hours auto-reply, and automation triggers for a newly saved inbound message.
    * Runs only for the first delivery of a wamid (duplicates return earlier) and never throws:
    * message ingestion must not depend on these features.
    */
   private async afterInboundMessage(
     msg: any,
     ctx: ChangeContext,
-    customerId: number,
+    customer: { id: number; phone?: string | null; name?: string | null },
+    cleanFromPhone: string,
     messageId: number | null,
     text: string | null,
     msgDate: Date,
     automationPending: boolean
   ): Promise<void> {
     try {
+      const customerId = customer.id;
+
       // STOP / UNSUBSCRIBE / START: update consent and confirm. These messages start only automations whose
       // Keyword trigger lists that exact keyword (never "Incoming message" ones), so a customer who just
       // opted out can't get an unrelated automated reply.
       const consentMatch = matchConsentKeyword(consentKeywordCandidates(msg));
       if (consentMatch) {
-        const { customer, changed } = await consentService.changeStatus({
+        const { customer: updatedCustomer, changed } = await consentService.changeStatus({
           organizationId: ctx.orgId,
           customerId,
           status: consentMatch.status,
@@ -573,7 +578,7 @@ export class WhatsAppWebhookService {
           metaMessageId: msg.id,
           occurredAt: msgDate,
         });
-        if (changed) ctx.defer(() => consentService.sendConfirmation(ctx.orgId, customer, consentMatch.status, 'keyword'));
+        if (changed) ctx.defer(() => consentService.sendConfirmation(ctx.orgId, updatedCustomer, consentMatch.status, 'keyword'));
         // Evaluate (and settle the pending marker) here: a marker left behind would be replayed by the sweep
         if (automationPending) {
           ctx.defer(async () => {
@@ -611,6 +616,63 @@ export class WhatsAppWebhookService {
         }
         return;
       }
+
+      // Check Business Hours & dispatch after-hours reply if outside hours or closed
+      try {
+        const config = await assignmentEngine.getRoutingConfig(ctx.orgId);
+        const hoursCheck = assignmentEngine.isWithinBusinessHours(config, msgDate);
+
+        if (!hoursCheck.isWithin) {
+          const replyText = assignmentEngine.formatAfterHoursReply(
+            config?.afterHoursReply,
+            config?.schedule,
+            msgDate,
+            config?.timezone
+          );
+
+          // Cooldown window: do not spam the customer with repeated after-hours replies within 2 minutes
+          const cooldownWindow = new Date(Date.now() - 10 * 1000);
+          const recentReply = await messageRepository.findLastAfterHoursReply(
+            customerId,
+            ctx.orgId,
+            cooldownWindow
+          );
+
+          if (!recentReply) {
+            const toPhone = customer.phone || cleanFromPhone;
+            log.info("Sending after-hours automatic reply to customer", {
+              orgId: ctx.orgId,
+              customerId,
+              phone: toPhone,
+              reason: hoursCheck.reason,
+              day: hoursCheck.matchedDay,
+            });
+
+            await whatsAppService.sendMessage({
+              organizationId: ctx.orgId,
+              channelId: ctx.channelId,
+              customerId,
+              to: toPhone,
+              text: replyText,
+              type: 'text',
+              senderType: 'system',
+              metadata: { autoReply: 'after_hours' },
+            });
+          } else {
+            log.debug("Skipping duplicate after-hours reply (already sent within cooldown)", {
+              customerId,
+              lastSentAt: recentReply.createdAt,
+            });
+          }
+        }
+      } catch (err) {
+        log.warn("Failed to check business hours or send after-hours reply", {
+          err,
+          customerId,
+          orgId: ctx.orgId,
+        });
+      }
+
       // No message-triggered automation in this org: nothing to start
       if (!automationPending) return;
       ctx.defer(async () => {
@@ -625,7 +687,7 @@ export class WhatsAppWebhookService {
         });
       });
     } catch (err) {
-      log.error('Post-processing of inbound message failed (message itself was saved)', { err, wamid: msg?.id, customerId });
+      log.error('Post-processing of inbound message failed (message itself was saved)', { err, wamid: msg?.id, customerId: customer.id });
     }
   }
 
