@@ -938,9 +938,7 @@ export const RoutingHoursSection: React.FC = () => {
                   onChange={(e) => setNewRuleStrategy(e.target.value as RoutingStrategy)}
                   className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-[#1e2a78] text-slate-800"
                 >
-                  <option value="round robin">Round robin (distribute evenly across team)</option>
-                  <option value="least busy">Least busy (assign agent with fewest open tickets)</option>
-                  <option value="direct">Direct (assign to specific named agent)</option>
+                  <option value="round robin">Round robin (distribute to least busy agent first)</option>
                 </select>
               </div>
 
