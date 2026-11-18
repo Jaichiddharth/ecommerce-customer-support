@@ -210,43 +210,30 @@ export class AssignmentEngine {
 
     const candidateIds = candidates.map((c) => c.id);
 
-    if (strategy === "least busy") {
-      // Find open ticket count per candidate
-      const counts = await db
-        .select({
-          assigneeId: tickets.assigneeId,
-          count: sql<number>`count(*)::int`,
-        })
-        .from(tickets)
-        .where(
-          and(
-            eq(tickets.organizationId, organizationId),
-            notInArray(tickets.status, ["RESOLVED", "CLOSED"])
-          )
+    // 1. Fetch active / open ticket count per candidate (excluding resolved and closed)
+    const counts = await db
+      .select({
+        assigneeId: tickets.assigneeId,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(tickets)
+      .where(
+        and(
+          eq(tickets.organizationId, organizationId),
+          notInArray(tickets.status, ["RESOLVED", "CLOSED"])
         )
-        .groupBy(tickets.assigneeId);
+      )
+      .groupBy(tickets.assigneeId);
 
-      const countMap = new Map<number, number>();
-      candidateIds.forEach((id) => countMap.set(id, 0));
-      counts.forEach((row) => {
-        if (row.assigneeId && countMap.has(row.assigneeId)) {
-          countMap.set(row.assigneeId, row.count);
-        }
-      });
-
-      let minCount = Infinity;
-      let bestCandidate = candidates[0];
-      for (const c of candidates) {
-        const count = countMap.get(c.id) ?? 0;
-        if (count < minCount) {
-          minCount = count;
-          bestCandidate = c;
-        }
+    const countMap = new Map<number, number>();
+    candidateIds.forEach((id) => countMap.set(id, 0));
+    counts.forEach((row) => {
+      if (row.assigneeId && countMap.has(row.assigneeId)) {
+        countMap.set(row.assigneeId, row.count);
       }
-      return bestCandidate;
-    }
+    });
 
-    // Default / Round robin: Pick candidate who least recently received an assigned ticket
+    // 2. Fetch last assigned ticket timestamp per candidate for round-robin rotation
     const recentAssigned = await db
       .select({
         assigneeId: tickets.assigneeId,
@@ -263,18 +250,25 @@ export class AssignmentEngine {
       }
     });
 
-    // Candidates never assigned before come first
-    let oldestTime = Infinity;
-    let selected = candidates[0];
-    for (const c of candidates) {
-      const t = lastMap.get(c.id) ?? 0;
-      if (t < oldestTime) {
-        oldestTime = t;
-        selected = c;
-      }
-    }
+    // 3. Sort candidates:
+    // Primary: Candidate with the lowest open ticket count (least number of tickets)
+    // Secondary: Least recently assigned candidate (round-robin tie-breaker)
+    const sorted = [...candidates].sort((a, b) => {
+      const countA = countMap.get(a.id) ?? 0;
+      const countB = countMap.get(b.id) ?? 0;
 
-    return selected;
+      // Prioritize candidate with fewer tickets
+      if (countA !== countB) {
+        return countA - countB;
+      }
+
+      // Tie-breaker: Round-robin by oldest assignment timestamp (never assigned = 0 comes first)
+      const timeA = lastMap.get(a.id) ?? 0;
+      const timeB = lastMap.get(b.id) ?? 0;
+      return timeA - timeB;
+    });
+
+    return sorted[0];
   }
 
   /**
