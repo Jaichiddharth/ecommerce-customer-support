@@ -22,10 +22,8 @@ export const GET = withAuth(async (req: AuthenticatedRequest) => {
 
 /**
  * POST /api/integrations/shopify/channel-mappings  { storeId, channelId } — connect a channel (number) to a store.
- * A store can have many channels; a channel belongs to one store.
+ * Many to many: a store can have many channels and a channel can use many stores (WooCommerce ones too).
  * 201 when created; 200 when the channel is already connected to that store.
- * 409 SHOPIFY_CHANNEL_ALREADY_MAPPED when it's connected to another store (details: mappingId, storeId, storeName):
- * disconnect it first with DELETE /channel-mappings/:mappingId, then connect it here.
  */
 export const POST = withAuth(async (req: AuthenticatedRequest) => {
   assertCanManageIntegrations(req.user, "create");

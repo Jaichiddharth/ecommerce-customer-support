@@ -5,8 +5,12 @@ import { ChevronRight, Lock, ShieldAlert } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { ShopifyIntegrationView, ShopifyLogo } from '../shopify/ShopifyIntegrationView';
 import { useShopifyStore } from '../shopify/useShopifyStore';
+import { WooCommerceIntegrationView, WooCommerceLogo } from '../woocommerce/WooCommerceIntegrationView';
+import { useWooCommerceStores } from '../woocommerce/useWooCommerceStores';
 
-export type IntegrationKey = 'shopify';
+export type IntegrationKey = 'shopify' | 'woocommerce';
+
+export const INTEGRATION_KEYS: IntegrationKey[] = ['shopify', 'woocommerce'];
 
 interface IntegrationDefinition {
   key: IntegrationKey;
@@ -24,6 +28,13 @@ const INTEGRATIONS: IntegrationDefinition[] = [
     category: 'E-commerce',
     description: 'Share products in chats and see customer orders beside every conversation.',
     logo: <ShopifyLogo />,
+  },
+  {
+    key: 'woocommerce',
+    name: 'WooCommerce',
+    category: 'E-commerce',
+    description: 'Connect WordPress stores in one click: WooCommerce generates an API key for UnoCX automatically.',
+    logo: <WooCommerceLogo />,
   },
 ];
 
@@ -43,6 +54,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ openIntegrat
   const { hasPermission, can } = useAuth();
   const canManageIntegrations = can('integrations', 'read') && hasPermission('manage_billing_and_integrations');
   const shopify = useShopifyStore();
+  const woocommerce = useWooCommerceStores(canManageIntegrations);
 
   if (!canManageIntegrations) {
     return (
@@ -65,6 +77,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ openIntegrat
   }
 
   if (openIntegration === 'shopify') return <ShopifyIntegrationView onBack={() => onOpenIntegration(null)} />;
+  if (openIntegration === 'woocommerce') return <WooCommerceIntegrationView onBack={() => onOpenIntegration(null)} />;
 
   const shopifyAttention = shopify.stores.some((s) => s.status !== 'connected' || s.missingScopes.length > 0);
   const statuses: Record<IntegrationKey, IntegrationStatus | null> = {
@@ -77,6 +90,17 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ openIntegrat
             label: shopifyAttention
               ? 'Needs attention'
               : `${shopify.stores.length} ${shopify.stores.length === 1 ? 'store' : 'stores'} connected`,
+          }
+        : { connected: false, label: 'Not connected' },
+    woocommerce: woocommerce.isLoading
+      ? null
+      : woocommerce.stores.length > 0
+        ? {
+            connected: true,
+            needsAttention: woocommerce.stores.some((s) => s.status !== 'connected'),
+            label: woocommerce.stores.some((s) => s.status !== 'connected')
+              ? 'Needs attention'
+              : `${woocommerce.stores.length} ${woocommerce.stores.length === 1 ? 'store' : 'stores'} connected`,
           }
         : { connected: false, label: 'Not connected' },
   };

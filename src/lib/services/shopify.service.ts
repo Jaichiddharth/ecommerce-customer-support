@@ -206,8 +206,23 @@ type Node = Record<string, any>;
 const money = (m: Node | null | undefined): ShopifyMoney | null =>
   m && m.amount !== undefined ? { amount: String(m.amount), currencyCode: String(m.currencyCode) } : null;
 
-const productUrlFor = (onlineStoreUrl: string | null | undefined, variantLegacyId?: string) =>
-  onlineStoreUrl ? (variantLegacyId ? `${onlineStoreUrl}?variant=${variantLegacyId}` : onlineStoreUrl) : null;
+/**
+ * Storefront link of a product. Shopify only fills `onlineStoreUrl` when the product is published to the Online
+ * Store channel, so otherwise it's built from the store's storefront domain and the product handle.
+ */
+function productUrlFor(
+  store: { shopDomain: string; primaryDomainUrl?: string | null },
+  product: { onlineStoreUrl?: string | null; handle?: string | null },
+  variantLegacyId?: string
+): string | null {
+  let base = product.onlineStoreUrl || null;
+  if (!base && product.handle) {
+    const origin = (store.primaryDomainUrl || `https://${store.shopDomain}`).replace(/\/+$/, "");
+    base = `${origin}/products/${encodeURIComponent(product.handle)}`;
+  }
+  if (!base) return null;
+  return variantLegacyId ? `${base}?variant=${variantLegacyId}` : base;
+}
 
 function mapProductSummary(p: Node): ShopifyProductSummary {
   const variants: Node[] = p.variants?.nodes ?? [];
@@ -771,7 +786,7 @@ export class ShopifyService {
         .filter((o: { values: string[] }) => o.values.length > 0),
       variants: (p.variants?.nodes ?? []).map(mapVariant),
       hasMoreVariants: Boolean(p.variants?.pageInfo?.hasNextPage),
-      productUrl: p.onlineStoreUrl ?? null,
+      productUrl: productUrlFor(store, p),
     };
   }
 
@@ -799,7 +814,7 @@ export class ShopifyService {
       currencyCode: product.priceRangeV2?.minVariantPrice?.currencyCode || store.currencyCode || "USD",
       available: variant.available,
       imageUrl: variant.imageUrl || product.featuredMedia?.preview?.image?.url || null,
-      productUrl: productUrlFor(product.onlineStoreUrl, multiVariant ? variant.legacyId : undefined),
+      productUrl: productUrlFor(store, product, multiVariant ? variant.legacyId : undefined),
     };
     return { productStatus: String(product.status), variant, shared };
   }

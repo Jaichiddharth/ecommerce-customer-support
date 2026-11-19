@@ -39,6 +39,8 @@ import { ContactSearch, TopBar } from './TopBar';
 import { Channel, STATUS_META, fmtDate, needsReconnect, useDisconnectChannel } from './settings/channel-settings';
 import { WhatsAppNumberHealth } from './settings/WhatsAppNumberHealth';
 import { ChannelShopifyStore, useChannelStores } from './settings/ChannelShopifyStore';
+import { ChannelWooCommerceStore, useChannelWooStores } from './settings/ChannelWooCommerceStore';
+import type { CommerceChannelStoreStatus, WooCommerceStoreInfo } from '@/lib/woocommerce/types';
 import type { ShopifyChannelStoreStatus, ShopifyStoreInfo } from '@/lib/shopify/types';
 import { TeamRolesSection } from './settings/TeamRolesSection';
 import { ConsentPrivacySection } from './settings/ConsentPrivacySection';
@@ -100,6 +102,14 @@ interface ChannelShopifyProps {
   onChanged: () => void;
 }
 
+/** WooCommerce store block of a channel card; absent for members who can't manage integrations */
+interface ChannelWooProps {
+  status: CommerceChannelStoreStatus | undefined;
+  stores: WooCommerceStoreInfo[];
+  loaded: boolean;
+  onChanged: () => void;
+}
+
 function ConnectionCard({
   channel,
   expanded,
@@ -107,6 +117,7 @@ function ConnectionCard({
   onReconnect,
   onDisconnect,
   shopify,
+  woocommerce = null,
   focusShopify = false,
 }: {
   channel: Channel;
@@ -115,6 +126,7 @@ function ConnectionCard({
   onReconnect: () => void;
   onDisconnect: (channel: Channel) => void;
   shopify: ChannelShopifyProps | null;
+  woocommerce?: ChannelWooProps | null;
   /** Opened from the inbox's "Associate store": scroll to and highlight the Shopify store picker */
   focusShopify?: boolean;
 }) {
@@ -130,8 +142,15 @@ function ConnectionCard({
     const t = window.setTimeout(() => setHighlightShopify(false), 2500);
     return () => window.clearTimeout(t);
   }, [focusShopify, expanded, shopify?.loaded]);
-  const syncedStore =
-    shopify?.status?.via === 'mapping' ? shopify.stores.find((s) => s.id === shopify.status?.effectiveStoreId) ?? null : null;
+  // Every live store linked to the channel, on any platform (a channel can use several)
+  const linkedStores = [
+    ...(shopify?.status?.links ?? [])
+      .filter((l) => shopify?.stores.some((s) => s.id === l.storeId))
+      .map((l) => ({ key: `shopify-${l.storeId}`, label: l.storeName, platform: 'Shopify' })),
+    ...(woocommerce?.status?.links ?? [])
+      .filter((l) => woocommerce?.stores.some((s) => s.id === l.storeId))
+      .map((l) => ({ key: `woocommerce-${l.storeId}`, label: l.storeName, platform: 'WooCommerce' })),
+  ];
   const status = STATUS_META[channel.status] ?? STATUS_META.error;
   const number = formatPhone(channel.phoneNumber);
   const isApproved =
@@ -168,13 +187,14 @@ function ConnectionCard({
           </p>
         </button>
 
-        {syncedStore && (
+        {linkedStores.length > 0 && (
           <span
-            title={`Synced with Shopify store ${syncedStore.shopDomain}`}
-            className="hidden md:inline-flex items-center gap-1 max-w-[160px] px-2 py-0.5 rounded-full bg-slate-100 text-[11px] font-medium text-slate-600"
+            title={`Linked stores: ${linkedStores.map((s) => `${s.label} (${s.platform})`).join(', ')}`}
+            className="hidden md:inline-flex items-center gap-1 max-w-[180px] px-2 py-0.5 rounded-full bg-slate-100 text-[11px] font-medium text-slate-600"
           >
             <ShoppingBag className="w-3 h-3 shrink-0" />
-            <span className="truncate">{syncedStore.name || syncedStore.shopDomain}</span>
+            <span className="truncate">{linkedStores[0].label}</span>
+            {linkedStores.length > 1 && <span className="shrink-0 text-slate-500">+{linkedStores.length - 1}</span>}
           </span>
         )}
 
@@ -232,9 +252,9 @@ function ConnectionCard({
                 }`}
             >
               <div>
-                <p className="text-[11px] font-semibold text-slate-700">Shopify store</p>
+                <p className="text-[11px] font-semibold text-slate-700">Shopify stores</p>
                 <p className="text-[11px] text-slate-500">
-                  Products shared, customers matched and orders shown in this number&apos;s chats come from this store.
+                  Link one or more stores. In this number&apos;s chats, agents pick which store products, customers and orders come from.
                 </p>
               </div>
               <ChannelShopifyStore
@@ -243,6 +263,22 @@ function ConnectionCard({
                 stores={shopify.stores}
                 loaded={shopify.loaded}
                 onChanged={shopify.onChanged}
+              />
+            </div>
+          )}
+
+          {woocommerce && channel.status !== 'disconnected' && (
+            <div className="mt-4 pt-3 border-t border-slate-100 space-y-2">
+              <div>
+                <p className="text-[11px] font-semibold text-slate-700">WooCommerce stores</p>
+                <p className="text-[11px] text-slate-500">The WooCommerce stores this channel works with. A channel can use Shopify and WooCommerce stores together.</p>
+              </div>
+              <ChannelWooCommerceStore
+                channelId={channel.id}
+                status={woocommerce.status}
+                stores={woocommerce.stores}
+                loaded={woocommerce.loaded}
+                onChanged={woocommerce.onChanged}
               />
             </div>
           )}
@@ -271,6 +307,7 @@ function ChannelsSection() {
   const { hasPermission, can } = useAuth();
   const canManageStores = can('integrations', 'read') && hasPermission('manage_billing_and_integrations');
   const channelStores = useChannelStores(canManageStores);
+  const channelWooStores = useChannelWooStores(canManageStores);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -427,6 +464,16 @@ function ChannelsSection() {
                       stores: channelStores.stores,
                       loaded: channelStores.loaded,
                       onChanged: channelStores.refresh,
+                    }
+                    : null
+                }
+                woocommerce={
+                  canManageStores
+                    ? {
+                      status: channelWooStores.channels.find((c) => c.channelId === ch.id),
+                      stores: channelWooStores.stores,
+                      loaded: channelWooStores.loaded,
+                      onChanged: channelWooStores.refresh,
                     }
                     : null
                 }

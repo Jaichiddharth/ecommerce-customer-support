@@ -10,3 +10,4 @@ export * from "./invitation.repository";
 export * from "./whatsapp-flow.repository";
 export * from "./automation.repository";
 export * from "./campaign.repository";
+export * from "./commerce.repository";

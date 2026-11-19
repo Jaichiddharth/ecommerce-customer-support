@@ -13,6 +13,7 @@ export type ErrorSource =
   | "webhook"
   | "upload"
   | "shopify"
+  | "woocommerce"
   | "database"
   | "network"
   | "internal";
@@ -90,9 +91,21 @@ export const ERROR_DEFINITIONS = {
   CONTACT_IDENTITY_CONFLICT: { status: 409, source: "shopify", message: "These contacts are linked to different Shopify customers. Unlink one of them before linking the channels." },
   SHOPIFY_STORE_NOT_FOUND: { status: 404, source: "shopify", message: "This Shopify store isn't connected to your workspace." },
   SHOPIFY_STORE_ACCESS_DENIED: { status: 403, source: "shopify", message: "You don't have access to this Shopify store." },
-  SHOPIFY_STORE_CHANNEL_MISMATCH: { status: 409, source: "shopify", message: "This channel is connected to a different Shopify store." },
-  SHOPIFY_CHANNEL_ALREADY_MAPPED: { status: 409, source: "shopify", message: "This channel is already connected to another Shopify store." },
+  SHOPIFY_STORE_CHANNEL_MISMATCH: { status: 409, source: "shopify", message: "This channel isn't connected to that Shopify store." },
   SHOPIFY_ORDER_ALREADY_LINKED: { status: 409, source: "shopify", message: "This order is already linked to another contact." },
+
+  // WooCommerce
+  WOOCOMMERCE_NOT_CONFIGURED: { status: 500, source: "woocommerce", message: "The WooCommerce integration is not configured on the server." },
+  WOOCOMMERCE_INVALID_STORE_URL: { status: 400, source: "woocommerce", message: "Enter your WooCommerce store's address, e.g. https://shop.example.com." },
+  WOOCOMMERCE_STORE_UNREACHABLE: { status: 422, source: "woocommerce", message: "We couldn't reach a WooCommerce store at this address. Check the URL and that the WordPress REST API is enabled." },
+  WOOCOMMERCE_AUTH_FAILED: { status: 400, source: "woocommerce", message: "The WooCommerce authorization could not be verified. Please try connecting again." },
+  WOOCOMMERCE_CREDENTIALS_REJECTED: { status: 422, source: "woocommerce", message: "The WooCommerce store rejected UnoCX's API key. Please reconnect your store." },
+  WOOCOMMERCE_API_ERROR: { status: 502, source: "woocommerce", message: "WooCommerce returned an error. Please try again." },
+  WOOCOMMERCE_UNAVAILABLE: { status: 503, source: "woocommerce", message: "The WooCommerce store is temporarily unavailable. Please try again shortly.", retryable: true },
+  WOOCOMMERCE_NOT_CONNECTED: { status: 422, source: "woocommerce", message: "No WooCommerce store is connected. Connect your store first." },
+  WOOCOMMERCE_STORE_CHANNEL_MISMATCH: { status: 409, source: "woocommerce", message: "This conversation's number isn't linked to that WooCommerce store." },
+  WOOCOMMERCE_PRODUCT_NOT_FOUND: { status: 404, source: "woocommerce", message: "This product wasn't found in the WooCommerce store." },
+  WOOCOMMERCE_STORE_NOT_FOUND: { status: 404, source: "woocommerce", message: "This WooCommerce store isn't connected to your workspace." },
 
   // Database
   DB_UNAVAILABLE: { status: 503, source: "database", message: "The database is temporarily unavailable. Please try again shortly.", retryable: true },

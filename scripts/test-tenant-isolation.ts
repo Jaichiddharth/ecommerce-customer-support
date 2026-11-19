@@ -340,12 +340,12 @@ async function runTenantIsolationTests() {
       channelId: channelA.id,
       userId: userA.id,
     });
-    const mappedStore = await shopifyRepository.findStoreForChannel(orgA.id, channelA.id);
-    assert(mappedStore?.id === storeA.id, "Org A channel resolves to its mapped Org A store");
+    const mappedStores = await shopifyRepository.findStoresForChannel(orgA.id, channelA.id);
+    assert(mappedStores.length === 1 && mappedStores[0].id === storeA.id, "Org A channel resolves to its mapped Org A store");
 
     assert((await shopifyRepository.listChannelMappings(orgB.id)).length === 0, "Org B mapping list does not leak Org A mappings");
     assert((await shopifyRepository.findChannelMapping(orgB.id, mappingA.id)) === null, "Org B cannot read Org A mapping by ID");
-    assert((await shopifyRepository.findStoreForChannel(orgB.id, channelA.id)) === null, "Org B cannot resolve Org A channel's store");
+    assert((await shopifyRepository.findStoresForChannel(orgB.id, channelA.id)).length === 0, "Org B cannot resolve Org A channel's store");
     assert((await shopifyRepository.deleteChannelMapping(orgB.id, mappingA.id)) === null, "Org B cannot delete Org A mapping");
     assert((await shopifyRepository.findChannelMapping(orgA.id, mappingA.id)) !== null, "Org A mapping remains intact");
 
@@ -372,10 +372,10 @@ async function runTenantIsolationTests() {
     );
     assert(
       await rejects(() => shopifyRepository.createChannelMapping({ organizationId: orgA.id, storeId: storeA.id, channelId: channelA.id, userId: userA.id })),
-      "A channel can be mapped to only one store"
+      "A channel can be mapped to the same store only once"
     );
 
-    // Many stores per workspace; one store → many numbers; one number → one store (disconnect, then connect)
+    // Many stores per workspace; one store → many numbers; one number → many stores
     const [storeA2] = await db
       .insert(shopifyStores)
       .values({ organizationId: orgA.id, shopDomain: `alpha-second-${runId}.myshopify.com`, name: "Alpha Outlet", status: "connected" })
@@ -391,15 +391,16 @@ async function runTenantIsolationTests() {
       (await shopifyRepository.listChannelMappings(orgA.id, { storeId: storeA.id })).length === 2,
       "One store can have several numbers (sales + service)"
     );
+    const second = await shopifyRepository.createChannelMapping({ organizationId: orgA.id, storeId: storeA2.id, channelId: serviceNumberA.id, userId: userA.id });
     assert(
-      await rejects(() => shopifyRepository.createChannelMapping({ organizationId: orgA.id, storeId: storeA2.id, channelId: serviceNumberA.id, userId: userA.id })),
-      "A number connected to one store can't be connected to another store"
+      (await shopifyRepository.findStoresForChannel(orgA.id, serviceNumberA.id)).map((s) => s.id).join() === [storeA.id, storeA2.id].join() &&
+        second.shopifyStoreId === storeA2.id,
+      "A number can be connected to several stores (oldest connection first)"
     );
     await shopifyRepository.deleteChannelMapping(orgA.id, serviceMapping.id);
-    const switched = await shopifyRepository.createChannelMapping({ organizationId: orgA.id, storeId: storeA2.id, channelId: serviceNumberA.id, userId: userA.id });
     assert(
-      (await shopifyRepository.findStoreForChannel(orgA.id, serviceNumberA.id))?.id === storeA2.id && switched.shopifyStoreId === storeA2.id,
-      "After disconnecting it from its store, the number can be connected to another store"
+      (await shopifyRepository.findStoresForChannel(orgA.id, serviceNumberA.id)).map((s) => s.id).join() === String(storeA2.id),
+      "Disconnecting the number from one store keeps its other stores"
     );
     assert(
       await rejects(() =>

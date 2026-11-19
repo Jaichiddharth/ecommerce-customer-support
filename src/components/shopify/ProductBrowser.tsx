@@ -29,10 +29,12 @@ export interface ShareProductArgs {
 }
 
 /**
- * Which store to browse: the store mapped to channelId, else to the contact's channel (there is no default store).
- * Pass the same channel and contact the product will be shared through, so browsing and sharing use one store.
+ * Which store to browse: storeId (the store picked in the inbox's switcher; must be one of the channel's stores),
+ * else the channel's oldest store, else the contact's channel's (there is no default store). Pass the same scope
+ * the product will be shared with, so browsing and sharing use one store.
  */
 export interface ProductStoreScope {
+  storeId?: number | null;
   channelId?: number | null;
   customerId?: number | null;
 }
@@ -91,6 +93,7 @@ const Availability: React.FC<{ available: boolean }> = ({ available }) => (
 );
 
 export const ProductBrowser: React.FC<ProductBrowserProps> = ({ storeScope, onShare, onInsertText, shareDisabledReason, className = '' }) => {
+  const scopeStoreId = storeScope?.storeId ?? undefined;
   const scopeChannelId = storeScope?.channelId ?? undefined;
   const scopeCustomerId = storeScope?.customerId ?? undefined;
 
@@ -120,7 +123,7 @@ export const ProductBrowser: React.FC<ProductBrowserProps> = ({ storeScope, onSh
     else setIsSearching(true);
     try {
       const res = await apiClient.get('/api/integrations/shopify/products', {
-        params: { q: term || undefined, after: after || undefined, channelId: scopeChannelId, customerId: scopeCustomerId },
+        params: { q: term || undefined, after: after || undefined, storeId: scopeStoreId, channelId: scopeChannelId, customerId: scopeCustomerId },
       });
       if (seq !== searchSeq.current) return;
       const page: ShopifyPage<ShopifyProductSummary> = { items: res.data.items, hasNextPage: res.data.hasNextPage, endCursor: res.data.endCursor };
@@ -136,7 +139,7 @@ export const ProductBrowser: React.FC<ProductBrowserProps> = ({ storeScope, onSh
         setIsLoadingMore(false);
       }
     }
-  }, [scopeChannelId, scopeCustomerId]);
+  }, [scopeStoreId, scopeChannelId, scopeCustomerId]);
 
   // Debounced search as the agent types
   useEffect(() => {
@@ -149,7 +152,7 @@ export const ProductBrowser: React.FC<ProductBrowserProps> = ({ storeScope, onSh
     setProductError(null);
     try {
       const res = await apiClient.get(`/api/integrations/shopify/products/${id}`, {
-        params: { channelId: scopeChannelId, customerId: scopeCustomerId },
+        params: { storeId: scopeStoreId, channelId: scopeChannelId, customerId: scopeCustomerId },
       });
       const detail: ShopifyProductDetail = res.data.product;
       setProduct(detail);
@@ -159,14 +162,14 @@ export const ProductBrowser: React.FC<ProductBrowserProps> = ({ storeScope, onSh
     } catch (err) {
       setProductError(toApiError(err));
     }
-  }, [scopeChannelId, scopeCustomerId]);
+  }, [scopeStoreId, scopeChannelId, scopeCustomerId]);
 
   // Another conversation (or send channel) can mean another store: a product picked in the old one isn't valid here
   useEffect(() => {
     setProductId(null);
     setProduct(null);
     setIsReviewing(false);
-  }, [scopeChannelId, scopeCustomerId]);
+  }, [scopeStoreId, scopeChannelId, scopeCustomerId]);
 
   useEffect(() => {
     if (productId) loadProduct(productId);

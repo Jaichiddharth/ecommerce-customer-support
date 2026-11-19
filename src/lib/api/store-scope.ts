@@ -19,3 +19,12 @@ export function optionalBodyId(value: unknown, field: string): number | undefine
   if (value === undefined || value === null || value === "") return undefined;
   return parseId(String(value), field);
 }
+
+/** WooCommerce inbox scope from ?storeId=&channelId=&customerId=: storeId is required (the store picked in the inbox) */
+export function wooInboxScopeFromQuery(searchParams: URLSearchParams): { storeId: number; channelId?: number; customerId?: number } {
+  const read = (name: string) => {
+    const value = searchParams.get(name);
+    return value === null || value === "" ? undefined : parseId(value, name);
+  };
+  return { storeId: parseId(searchParams.get("storeId"), "storeId"), channelId: read("channelId"), customerId: read("customerId") };
+}
