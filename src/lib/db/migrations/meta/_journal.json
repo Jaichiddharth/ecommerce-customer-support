@@ -85,6 +85,20 @@
       "when": 1794477528130,
       "tag": "0011_gorgeous_talisman",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794600000000,
+      "tag": "0013_commerce_stores",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794700000000,
+      "tag": "0014_channel_multi_store",
+      "breakpoints": true
     }
   ]
 }

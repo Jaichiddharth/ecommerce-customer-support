@@ -19,7 +19,7 @@ import { useRealtime } from '@/lib/hooks/useRealtime';
 
 interface ShopifyOrdersSectionProps {
   contact: { id: number; name: string; email: string | null; phone: string | null };
-  /** The store the conversation's WhatsApp number is connected to (useChannelShopifyStore); null: it has none */
+  /** The store the conversation's WhatsApp number is connected to (the Shopify store picked in the inbox, useConversationStores); null: none */
   store: ShopifyChannelStore | null;
   storeLoading: boolean;
   /** For the "Connect store" / "Associate store" prompt when the number has no store */
