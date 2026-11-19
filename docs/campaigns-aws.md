@@ -85,8 +85,8 @@ throughput, and quality rating. It warns when the campaign has more contacts tha
 
 ## Setup
 
-1. **Database**: `npm run db:migrate` applies `0012_campaigns.sql` (`campaigns`, `campaign_recipients`),
-   `0013_campaigns_one_running_pricing.sql` (pricing columns) and `0014_campaigns_one_active_per_org.sql`
+1. **Database**: `npm run db:migrate` applies `0015_campaigns.sql` (`campaigns`, `campaign_recipients`),
+   `0016_campaigns_one_running_pricing.sql` (pricing columns) and `0017_campaigns_one_active_per_org.sql`
    (one scheduled or sending campaign per workspace).
 2. **Worker secret**: generate one with `openssl rand -hex 32`. The same value goes into the stack parameter
    `WorkerSecret` and the app's `CAMPAIGN_WORKER_SECRET`.
