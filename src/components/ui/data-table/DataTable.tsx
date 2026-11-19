@@ -64,6 +64,11 @@ export interface DataTableProps<T> {
   emptyState?: React.ReactNode | ((filtered: boolean) => React.ReactNode);
   onRowClick?: (row: T) => void;
   rowClassName?: (row: T) => string;
+  /**
+   * Client mode only: rows with a lower rank always come first, whatever column is sorted; the chosen sort
+   * applies within each rank (e.g. keep drafts and active items on top).
+   */
+  pinRank?: (row: T) => number;
   /** Classes for the outer wrapper (e.g. `flex-1`). */
   className?: string;
   /** Render without the card border (when embedded in another card). */
@@ -75,6 +80,8 @@ const JUSTIFY = { left: 'justify-start', center: 'justify-center', right: 'justi
 
 const resolve = <S,>(updater: Updater<S>, prev: S): S => (typeof updater === 'function' ? (updater as (p: S) => S)(prev) : updater);
 const toSorting = (s: SortState): SortingState => [{ id: s.sortBy, desc: s.sortOrder === 'desc' }];
+/** Hidden column that carries `pinRank`, always sorted first */
+const PIN_COLUMN = '__pin';
 
 function SortIcon({ sorted }: { sorted: false | 'asc' | 'desc' }) {
   if (!sorted) return <ChevronsUpDown className="w-3 h-3 text-slate-300 group-hover:text-slate-400" aria-hidden />;
@@ -115,6 +122,7 @@ export function DataTable<T>({
   emptyState,
   onRowClick,
   rowClassName,
+  pinRank,
   className = '',
   bare = false,
 }: DataTableProps<T>) {
@@ -131,14 +139,20 @@ export function DataTable<T>({
       ? { ...clientPagination, pageIndex: clientLastPage }
       : clientPagination;
 
+  const pinned = Boolean(pinRank) && !server;
+  const tableColumns: ColumnDef<T, any>[] = pinned // eslint-disable-line @typescript-eslint/no-explicit-any
+    ? [{ id: PIN_COLUMN, header: '', accessorFn: (row: T) => pinRank!(row), enableSorting: true, sortingFn: 'basic' }, ...columns]
+    : columns;
+  const tableSorting: SortingState = pinned ? [{ id: PIN_COLUMN, desc: false }, ...sorting] : sorting;
+
   const table = useReactTable<T>({
     data,
-    columns,
+    columns: tableColumns,
     getRowId: (row) => String(getRowId(row)),
     defaultColumn: { enableSorting: false },
     enableMultiSort: false,
     enableSortingRemoval: false,
-    state: { sorting, pagination },
+    state: { sorting: tableSorting, pagination, ...(pinned ? { columnVisibility: { [PIN_COLUMN]: false } } : {}) },
     getCoreRowModel: getCoreRowModel(),
     ...(server
       ? {
@@ -154,7 +168,7 @@ export function DataTable<T>({
           autoResetPageIndex: false,
         }),
     onSortingChange: (updater) => {
-      const next = resolve(updater, sorting)[0];
+      const next = resolve(updater, tableSorting).find((s) => s.id !== PIN_COLUMN);
       if (!next) return;
       if (server) server.onSortChange({ sortBy: next.id, sortOrder: next.desc ? 'desc' : 'asc' });
       else {

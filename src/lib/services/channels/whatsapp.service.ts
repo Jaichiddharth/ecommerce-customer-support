@@ -767,6 +767,11 @@ export class WhatsAppService {
      * read them again. `contact` must be the row for `customerId` in this organization.
      */
     preloaded?: { contact?: Customer; connections?: Channel[] };
+    /**
+     * Send only: no customer row is created and nothing is written to the messages table or the inbox
+     * (campaigns, which keep their own per-recipient log). Opt-out and rate limits still apply.
+     */
+    skipHistory?: boolean;
   }) {
     const orgId = params.organizationId;
     const connections = params.preloaded?.connections ?? (await this.getConnections(orgId));
@@ -1054,6 +1059,16 @@ export class WhatsAppService {
     // Extract Meta WAMID (e.g. wamid.HBg...)
     const metaMessageId = metaRes?.messages?.[0]?.id || null;
     log.info("WhatsApp message accepted by Meta", { ...sendContext, wamid: metaMessageId });
+
+    if (params.skipHistory) {
+      return {
+        success: true,
+        persisted: false,
+        message: null,
+        channel: { id: targetChannel.id, name: targetChannel.name, phoneNumber: targetChannel.phoneNumber },
+        metaResponse: metaRes,
+      };
+    }
 
     let storedMessage: (Message & { senderName?: string | null }) | null = null;
     try {

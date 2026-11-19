@@ -47,7 +47,10 @@ export interface MetaPhoneData {
   code_verification_status?: string;
   name_status?: string;
   platform_type?: string;
+  /** Deprecated by Meta (per-number tier); kept as a fallback */
   messaging_limit_tier?: string;
+  /** Current limit, shared by every number of the business portfolio: TIER_250, TIER_2K, TIER_10K, TIER_100K, TIER_UNLIMITED */
+  whatsapp_business_manager_messaging_limit?: string;
   is_on_biz_app?: boolean;
   throughput?: {
     level: string;
@@ -505,20 +508,44 @@ const PHONE_STATUS_FIELDS = [
   'is_on_biz_app',
 ].join(',');
 
+/**
+ * The business portfolio's messaging limit (unique customers per rolling 24 h, shared by all its numbers):
+ * GET /{phone-number-id}?fields=whatsapp_business_manager_messaging_limit. It replaces the deprecated
+ * per-number `messaging_limit_tier`. Asked for on its own so a Graph version or token that doesn't support it
+ * can't break the rest of the phone status; null when Meta doesn't return it.
+ */
+const getPortfolioMessagingLimit = async (phoneNumberId: string, accessToken: string): Promise<string | null> => {
+  try {
+    const response = await graphHttp.get<{ whatsapp_business_manager_messaging_limit?: string }>(`/${phoneNumberId}`, {
+      params: { fields: 'whatsapp_business_manager_messaging_limit' },
+      headers: bearer(accessToken),
+      operation: 'phone.messaging_limit',
+    });
+    return response.data?.whatsapp_business_manager_messaging_limit ?? null;
+  } catch (err) {
+    log.warn('Could not read the portfolio messaging limit', { err, phoneNumberId });
+    return null;
+  }
+};
+
 const getPhoneNumberStatus = async (phoneNumberId: string, accessToken: string): Promise<MetaPhoneData> => {
+  const limit = getPortfolioMessagingLimit(phoneNumberId, accessToken);
+  let phone: MetaPhoneData;
   try {
     const response = await graphHttp.get<MetaPhoneData>(`/${phoneNumberId}`, {
       params: { fields: PHONE_STATUS_FIELDS },
       headers: bearer(accessToken),
       operation: 'phone.status',
     });
-    return response.data;
+    phone = response.data;
   } catch (err) {
     // Older Graph versions reject fields they don't know; the default field set still has the essentials
     if ((err as AppError).code !== 'META_INVALID_REQUEST') throw err;
     log.warn('Phone status fields rejected — falling back to default phone fields', { phoneNumberId });
-    return getPhoneNumberFromCode(phoneNumberId, accessToken);
+    phone = await getPhoneNumberFromCode(phoneNumberId, accessToken);
   }
+  const portfolioLimit = await limit;
+  return portfolioLimit ? { ...phone, whatsapp_business_manager_messaging_limit: portfolioLimit } : phone;
 };
 
 /* ----------------------------------------------------

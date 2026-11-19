@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { messageRepository, customerRepository, channelRepository, messageReactionRepository } from '../../db/repositories';
+import { messageRepository, customerRepository, channelRepository, messageReactionRepository, campaignRepository } from '../../db/repositories';
 import { MessageStatus, MESSAGE_STATUS_VALUES } from '../../db/schema';
 import { publish } from '@/lib/realtime';
 import { AppError, describeMessageFailure, getMetaErrorInfo } from '@/lib/errors';
@@ -308,6 +308,8 @@ export class WhatsAppWebhookService {
       statuses: result.processedStatuses,
       duplicates: result.duplicatesIgnored,
       failed: result.failed,
+      // The whole webhook body as Meta sent it (statuses with pricing, messages, contacts…), for debugging
+      payload,
     };
     if (result.failed > 0) log.warn('Webhook processed with failures', summary);
     else log.info('Webhook processed', summary);
@@ -714,13 +716,29 @@ export class WhatsAppWebhookService {
     }
 
     const updatedMsg = await messageRepository.updateStatusByMetaId(messageId, orgId, mappedStatus, errorCode);
-    publish(orgId, {
-      type: "message.status",
-      ...(updatedMsg ? { customerId: updatedMsg.customerId } : {}),
-      metaMessageId: messageId,
-      status: mappedStatus,
-      errorCode: errorCode,
-    });
+
+    // Campaign messages: keep the recipient's delivery status (campaign progress and stats) in step
+    const campaignStatus = status.toLowerCase();
+    let campaignId: number | null = null;
+    if (campaignStatus === 'sent' || campaignStatus === 'delivered' || campaignStatus === 'read' || campaignStatus === 'failed') {
+      try {
+        // `pricing` (billable, category, pricing_model) arrives with the status; Meta doesn't send the amount
+        campaignId = await campaignRepository.applyDeliveryStatus(messageId, orgId, campaignStatus, errorCode, st.pricing ?? null);
+      } catch (err) {
+        log.warn('Could not apply a delivery status to a campaign recipient', { err, wamid: messageId, status });
+      }
+    }
+
+    // Campaign messages aren't in the inbox (no message row): don't broadcast an inbox status event for each one
+    if (updatedMsg || !campaignId) {
+      publish(orgId, {
+        type: "message.status",
+        ...(updatedMsg ? { customerId: updatedMsg.customerId } : {}),
+        metaMessageId: messageId,
+        status: mappedStatus,
+        errorCode: errorCode,
+      });
+    }
 
     if (mappedStatus === MessageStatus.FAILED) {
       // Message failure details — what Meta said, what the agent sees, and how to fix it

@@ -1,0 +1,261 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  UnoCX campaigns. EventBridge Scheduler starts each campaign on time by putting a message on SQS; a Lambda
+  (code inline below) receives every SQS message and hands it to the app (POST /api/campaigns/worker). The app
+  checks the campaign is still running, sends to Meta, records the result and queues the next tick itself.
+  See docs/campaigns-aws.md.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: prod
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Environment name (prod, stage, dev…). Used in resource names so environments can share an account.
+  AppUrl:
+    Type: String
+    AllowedPattern: "https?://.+"
+    Description: Base URL of the app the Lambda calls, e.g. https://app.unocx.in (no trailing path)
+  WorkerSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Shared secret; set the same value as CAMPAIGN_WORKER_SECRET in the app (e.g. openssl rand -hex 32)
+  MaxConcurrency:
+    Type: Number
+    Default: 5
+    MinValue: 2
+    MaxValue: 100
+    Description: Most Lambda invocations at once (= campaign ticks the app runs in parallel)
+
+Resources:
+  # ─── Queues ──────────────────────────────────────────────────────────────────
+
+  CampaignDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "unocx-${Stage}-campaigns-dlq"
+      MessageRetentionPeriod: 1209600 # 14 days to inspect failures
+      SqsManagedSseEnabled: true
+
+  CampaignQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "unocx-${Stage}-campaigns"
+      # AWS recommends at least 6x the function timeout for Lambda-consumed queues; failed messages are
+      # retried sooner, because the Lambda shortens their visibility to 30 s
+      VisibilityTimeout: 720
+      MessageRetentionPeriod: 345600 # 4 days
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt CampaignDeadLetterQueue.Arn
+        maxReceiveCount: 3 # first try + 2 retries, then the dead-letter queue
+
+  # ─── Scheduler: one-time "start" per campaign ────────────────────────────────
+
+  CampaignScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Properties:
+      Name: !Sub "unocx-${Stage}-campaigns"
+
+  # Assumed by EventBridge Scheduler to put {"type":"start","campaignId":…} on the queue
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "unocx-${Stage}-campaign-scheduler"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: send-to-campaign-queue
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt CampaignQueue.Arn
+
+  # ─── Lambda: SQS → app ───────────────────────────────────────────────────────
+
+  WorkerFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "unocx-${Stage}-campaign-worker"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: consume-campaign-queue
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:ChangeMessageVisibility
+                Resource: !GetAtt CampaignQueue.Arn
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/unocx-${Stage}-campaign-worker"
+      RetentionInDays: 30
+
+  WorkerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: WorkerLogGroup
+    Properties:
+      FunctionName: !Sub "unocx-${Stage}-campaign-worker"
+      Description: Hands each campaign SQS message to the app (POST /api/campaigns/worker)
+      Runtime: nodejs22.x
+      Handler: index.handler
+      Role: !GetAtt WorkerFunctionRole.Arn
+      # A tick sends up to 50 messages; the app normally answers in a few seconds
+      Timeout: 120
+      MemorySize: 256
+      Environment:
+        Variables:
+          WORKER_URL: !Sub "${AppUrl}/api/campaigns/worker"
+          WORKER_SECRET: !Ref WorkerSecret
+          QUEUE_URL: !Ref CampaignQueue
+          APP_TIMEOUT_MS: "100000"
+          RETRY_AFTER_SECONDS: "30"
+      Code:
+        ZipFile: |
+          // SQS → app. The app decides everything (still running? send, record, queue the next tick);
+          // this function only delivers messages and reports the ones the app couldn't take.
+          const { SQSClient, ChangeMessageVisibilityCommand } = require("@aws-sdk/client-sqs");
+          const sqs = new SQSClient({});
+          const { WORKER_URL, WORKER_SECRET, QUEUE_URL } = process.env;
+          const APP_TIMEOUT_MS = Number(process.env.APP_TIMEOUT_MS) || 100000;
+          const RETRY_AFTER_SECONDS = Number(process.env.RETRY_AFTER_SECONDS) || 30;
+
+          async function deliver(record) {
+            const res = await fetch(WORKER_URL, {
+              method: "POST",
+              headers: { "content-type": "application/json", authorization: `Bearer ${WORKER_SECRET}` },
+              body: record.body,
+              signal: AbortSignal.timeout(APP_TIMEOUT_MS),
+            });
+            if (!res.ok) throw new Error(`app answered ${res.status}: ${(await res.text()).slice(0, 300)}`);
+          }
+
+          exports.handler = async (event) => {
+            const batchItemFailures = [];
+            await Promise.all(
+              event.Records.map(async (record) => {
+                try {
+                  await deliver(record);
+                } catch (err) {
+                  console.error(JSON.stringify({
+                    msg: "Campaign message not processed; SQS will retry it",
+                    messageId: record.messageId,
+                    receiveCount: record.attributes && record.attributes.ApproximateReceiveCount,
+                    body: record.body,
+                    error: String(err),
+                  }));
+                  batchItemFailures.push({ itemIdentifier: record.messageId });
+                  // Retry in 30 s instead of waiting for the full visibility timeout (after 2 retries → DLQ)
+                  await sqs
+                    .send(new ChangeMessageVisibilityCommand({ QueueUrl: QUEUE_URL, ReceiptHandle: record.receiptHandle, VisibilityTimeout: RETRY_AFTER_SECONDS }))
+                    .catch(() => {});
+                }
+              })
+            );
+            return { batchItemFailures };
+          };
+
+  WorkerEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt CampaignQueue.Arn
+      FunctionName: !Ref WorkerFunction
+      BatchSize: 5
+      MaximumBatchingWindowInSeconds: 0
+      FunctionResponseTypes: [ReportBatchItemFailures]
+      ScalingConfig:
+        MaximumConcurrency: !Ref MaxConcurrency
+
+  # ─── Monitoring ──────────────────────────────────────────────────────────────
+
+  DeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "unocx-${Stage}-campaigns-dlq-not-empty"
+      AlarmDescription: Campaign messages failed 3 times (first try + 2 retries) (app unreachable, wrong secret…). Add an SNS action to get notified.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt CampaignDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  # ─── App permissions ─────────────────────────────────────────────────────────
+
+  # Attach to the IAM user/role the app runs with: it queues ticks and manages start schedules
+  AppPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "unocx-${Stage}-campaigns-app"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: QueueNextTick
+            Effect: Allow
+            Action: sqs:SendMessage
+            Resource: !GetAtt CampaignQueue.Arn
+          - Sid: CampaignSchedules
+            Effect: Allow
+            Action:
+              - scheduler:CreateSchedule
+              - scheduler:UpdateSchedule
+              - scheduler:DeleteSchedule
+              - scheduler:GetSchedule
+            Resource: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${CampaignScheduleGroup}/*"
+          - Sid: HandSchedulerRoleToEventBridge
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !GetAtt SchedulerRole.Arn
+            Condition:
+              StringEquals:
+                iam:PassedToService: scheduler.amazonaws.com
+
+Outputs:
+  CampaignQueueUrl:
+    Description: CAMPAIGN_QUEUE_URL
+    Value: !Ref CampaignQueue
+  CampaignQueueArn:
+    Description: CAMPAIGN_QUEUE_ARN
+    Value: !GetAtt CampaignQueue.Arn
+  SchedulerRoleArn:
+    Description: CAMPAIGN_SCHEDULER_ROLE_ARN
+    Value: !GetAtt SchedulerRole.Arn
+  ScheduleGroup:
+    Description: CAMPAIGN_SCHEDULE_GROUP
+    Value: !Ref CampaignScheduleGroup
+  WorkerFunctionName:
+    Description: Lambda that forwards queue messages to the app (logs in CloudWatch)
+    Value: !Ref WorkerFunction
+  DeadLetterQueueUrl:
+    Description: Messages that failed 3 times (first try + 2 retries) end up here
+    Value: !Ref CampaignDeadLetterQueue
+  AppPolicyArn:
+    Description: Attach this policy to the app's IAM user or role
+    Value: !Ref AppPolicy
