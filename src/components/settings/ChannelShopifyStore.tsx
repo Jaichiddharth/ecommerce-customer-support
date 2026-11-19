@@ -1,16 +1,16 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
-import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, RefreshCw, ShoppingBag } from 'lucide-react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 
 import apiClient from '@/lib/api/client';
 import { notifyError } from '@/lib/api/notify';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 import { notifyShopifyChanged } from '@/components/shopify/useShopifyStore';
 import { Modal } from '@/components/ui/Modal';
-import { SearchableSelect } from '@/components/ui/SearchableSelect';
+import { ChannelStoreLinks } from './ChannelStoreLinks';
 import type {
+  ChannelStoreLink,
   ShopifyChannelStoreStatus,
   ShopifyChannelUnmapImpact,
   ShopifyChannelUnmapResult,
@@ -46,12 +46,10 @@ export function useChannelStores(enabled: boolean) {
   return { stores, channels, loaded, refresh };
 }
 
-const NO_STORE = 'none';
-
 /**
- * Which Shopify store this number works with: products shared, customers matched and orders shown in its
- * conversations all come from that store. There is no default store: until the number is connected (synced) to
- * a store, its conversations show no Shopify data. "No store linked" removes the connection.
+ * The Shopify stores this number works with. A number can be linked to several stores (and to WooCommerce stores
+ * too); in the inbox the agent picks which of them products, customers and orders come from. There is no default
+ * store: a number without a linked store shows no Shopify data. Unlinking a store first shows what goes with it.
  */
 export function ChannelShopifyStore({
   channelId,
@@ -66,149 +64,59 @@ export function ChannelShopifyStore({
   loaded: boolean;
   onChanged: () => void;
 }) {
-  const current = status?.via === 'mapping' && status.effectiveStoreId ? String(status.effectiveStoreId) : NO_STORE;
-  const [choice, setChoice] = useState(current);
-  const [syncing, setSyncing] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-
-  useEffect(() => setChoice(current), [current]);
-
-  const effective = status?.via === 'mapping' ? (stores.find((s) => s.id === status.effectiveStoreId) ?? null) : null;
+  const [confirming, setConfirming] = useState<ChannelStoreLink | null>(null);
   const storeLabel = (s: ShopifyStoreInfo) => s.name || s.shopDomain;
-  const target = choice === NO_STORE ? null : (stores.find((s) => String(s.id) === choice) ?? null);
 
-  // Leaving its current store removes that store's contact and order links of this number: confirm first
-  const onSyncClick = () => {
-    if (choice === current) return;
-    if (status?.mappingId) setConfirming(true);
-    else sync();
-  };
-
-  const sync = async () => {
-    if (choice === current) return;
-    setConfirming(false);
-    setSyncing(true);
-    let removed: ShopifyChannelUnmapResult['removed'] | null = null;
+  const link = async (storeId: number): Promise<boolean> => {
+    const target = stores.find((s) => s.id === storeId);
     try {
-      // A number belongs to one store: disconnect it from its store before connecting it to another
-      if (status?.mappingId) {
-        const res = await apiClient.delete<ShopifyChannelUnmapResult>(`/api/integrations/shopify/channel-mappings/${status.mappingId}`);
-        removed = res.data?.removed ?? null;
-      }
-      if (target) {
-        try {
-          await apiClient.post('/api/integrations/shopify/channel-mappings', { storeId: target.id, channelId });
-        } catch (err) {
-          // Don't leave the number without its previous store because the new connection failed
-          if (effective) {
-            await apiClient.post('/api/integrations/shopify/channel-mappings', { storeId: effective.id, channelId }).catch(() => undefined);
-          }
-          throw err;
-        }
-      }
-      const removedText = removed ? removedSummary(removed.contactLinks, removed.orderLinks) : null;
-      gooeyToast.success(target ? 'Number synced with Shopify store' : 'Number disconnected from Shopify', {
-        description:
-          (target
-            ? `${storeLabel(target)}: products and orders now show in this number's conversations.`
-            : "This number's conversations no longer show Shopify products or orders.") + (removedText ? ` Removed ${removedText}.` : ''),
+      await apiClient.post('/api/integrations/shopify/channel-mappings', { storeId, channelId });
+      gooeyToast.success('Number linked to Shopify store', {
+        description: `${target ? storeLabel(target) : 'The store'}: its products and orders are now available in this number's conversations.`,
       });
       // The inbox (and anything else showing Shopify data) picks up the new store
       notifyShopifyChanged();
+      return true;
     } catch (err) {
-      notifyError(err, { where: 'ChannelShopifyStore.sync', title: "Couldn't sync the Shopify store" });
+      notifyError(err, { where: 'ChannelShopifyStore.link', title: "Couldn't link the Shopify store" });
+      return false;
     } finally {
-      setSyncing(false);
       onChanged();
     }
   };
 
-  if (!loaded) {
-    return <div className="h-9 rounded-lg bg-slate-100 animate-pulse" />;
-  }
-
-  if (stores.length === 0) {
-    return (
-      <div className="flex items-center gap-3 rounded-lg border border-dashed border-slate-300 px-3 py-2.5">
-        <ShoppingBag className="w-4 h-4 text-slate-400 shrink-0" />
-        <p className="flex-1 text-xs text-slate-500">No Shopify store connected. Connect one to share products and see orders in this number&apos;s chats.</p>
-        <Link href="/integrations/shopify" className="shrink-0 text-xs font-semibold text-[#3440a8] hover:underline">
-          Connect Shopify
-        </Link>
-      </div>
-    );
-  }
-
-  const description = !status
-    ? { text: "Couldn't read which store this number uses. Choose one to sync it.", className: 'text-slate-500', icon: null }
-    : effective && effective.status !== 'connected'
-      ? {
-        text: `Synced with ${storeLabel(effective)}, but the store needs to be reconnected before its data shows in the inbox.`,
-        className: 'text-amber-700',
-        icon: <AlertTriangle className="w-3.5 h-3.5 shrink-0" />,
-      }
-      : effective
-        ? { text: `Synced with ${storeLabel(effective)}`, className: 'text-emerald-700', icon: <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> }
-        : status.mappingId
-          ? { text: 'Its store was disconnected. Choose another store and sync.', className: 'text-amber-700', icon: null }
-          : { text: 'No store linked: this number’s conversations show no Shopify data. Choose a store and sync.', className: 'text-slate-500', icon: null };
+  const unlink = async (target: ChannelStoreLink) => {
+    setConfirming(null);
+    try {
+      const res = await apiClient.delete<ShopifyChannelUnmapResult>(`/api/integrations/shopify/channel-mappings/${target.mappingId}`);
+      const removed = res.data?.removed;
+      const removedText = removed ? removedSummary(removed.contactLinks, removed.orderLinks) : null;
+      gooeyToast.success('Shopify store unlinked', {
+        description: `This number's conversations no longer show ${target.storeName}.` + (removedText ? ` Removed ${removedText}.` : ''),
+      });
+      notifyShopifyChanged();
+    } catch (err) {
+      notifyError(err, { where: 'ChannelShopifyStore.unlink', title: "Couldn't unlink the Shopify store" });
+    } finally {
+      onChanged();
+    }
+  };
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-        <SearchableSelect
-          className="flex-1 min-w-0"
-          value={choice}
-          onChange={setChoice}
-          disabled={syncing}
-          aria-label="Shopify store for this number"
-          placeholder="Choose a Shopify store"
-          searchPlaceholder="Search stores by name or domain"
-          emptyText="No store matches your search"
-          options={[
-            { value: NO_STORE, label: 'No store linked', description: 'Conversations on this number show no Shopify data', dividerAfter: true },
-            ...stores.map((s) => ({
-              value: String(s.id),
-              label: storeLabel(s),
-              description: s.shopDomain,
-              badge: s.status !== 'connected' ? { text: 'Reconnect needed', tone: 'warning' as const } : undefined,
-            })),
-          ]}
-        />
-        <button
-          type="button"
-          onClick={onSyncClick}
-          disabled={syncing || choice === current}
-          className="shrink-0 inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold text-white bg-[#3440a8] hover:bg-[#2b358c] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {syncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-          {syncing ? 'Syncing…' : 'Sync store'}
-        </button>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className={`text-[11px] inline-flex items-center gap-1 ${description.className}`}>
-          {description.icon}
-          {description.text}
-        </p>
-        {effective && (
-          <Link
-            href={`/integrations/shopify/stores/${effective.id}`}
-            className="text-[11px] font-semibold text-[#3440a8] hover:underline inline-flex items-center gap-1"
-          >
-            View store <ArrowRight className="w-3 h-3" />
-          </Link>
-        )}
-      </div>
-
-      {confirming && status?.mappingId && (
-        <LeaveStoreConfirm
-          mappingId={status.mappingId}
-          target={target ? { name: storeLabel(target) } : null}
-          onCancel={() => setConfirming(false)}
-          onConfirm={sync}
-        />
-      )}
-    </div>
+    <>
+      <ChannelStoreLinks
+        platform="Shopify"
+        links={status?.links}
+        stores={stores.map((s) => ({ id: s.id, name: storeLabel(s), address: s.shopDomain, status: s.status }))}
+        loaded={loaded}
+        connectHref="/integrations/shopify"
+        storeHref={(id) => `/integrations/shopify/stores/${id}`}
+        emptyText="No Shopify store linked: this number's conversations show no Shopify data."
+        onLink={link}
+        onUnlink={(l) => setConfirming(l)}
+      />
+      {confirming && <LeaveStoreConfirm mappingId={confirming.mappingId} onCancel={() => setConfirming(null)} onConfirm={() => unlink(confirming)} />}
+    </>
   );
 }
 
@@ -224,19 +132,16 @@ function removedSummary(contactLinks: number, orderLinks: number): string | null
 }
 
 /**
- * Confirms disconnecting a number from its store, or moving it to another store. Either way the current store's
- * links of this number's contacts are deleted by the server (DELETE /channel-mappings/:id); the counts come from
+ * Confirms unlinking a number from one of its stores. That store's links of this number's contacts are deleted
+ * by the server (DELETE /channel-mappings/:id); the counts come from
  * GET /channel-mappings/:id/impact, so the warning says exactly what will go.
  */
 function LeaveStoreConfirm({
   mappingId,
-  target,
   onCancel,
   onConfirm,
 }: {
   mappingId: number;
-  /** The store the number moves to; null: it's only disconnected */
-  target: { name: string } | null;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -275,12 +180,10 @@ function LeaveStoreConfirm({
           </span>
           <div className="min-w-0">
             <h3 className="text-[15px] font-bold text-slate-900">
-              {target ? `Move ${numberName} to ${target.name}?` : `Disconnect ${numberName} from ${storeName}?`}
+              {`Unlink ${numberName} from ${storeName}?`}
             </h3>
             <p className="mt-1 text-[12.5px] text-slate-600 leading-relaxed">
-              {target
-                ? `Conversations on this number will show products, customers and orders from ${target.name} instead of ${storeName}.`
-                : `Conversations on this number will stop showing products, customers and orders from ${storeName}.`}
+              {`Conversations on this number will stop showing products, customers and orders from ${storeName}. Its other stores stay linked.`}
             </p>
           </div>
         </div>
@@ -324,7 +227,6 @@ function LeaveStoreConfirm({
           {hasLinks || failed
             ? ` If this number is connected to ${storeName} again, contacts are re-matched automatically by phone and email where there is exactly one match; links and orders your team added manually have to be added again.`
             : ''}
-          {target ? ` On ${target.name}, contacts are matched automatically by phone and email.` : ''}
         </p>
       )}
 
@@ -354,7 +256,7 @@ function LeaveStoreConfirm({
           disabled={loading || (needsAck && !acknowledged)}
           className="px-3.5 py-2 rounded-lg text-xs font-semibold text-white bg-red-600 hover:bg-red-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {target ? 'Move number' : 'Disconnect number'}
+          Unlink store
         </button>
       </div>
     </Modal>

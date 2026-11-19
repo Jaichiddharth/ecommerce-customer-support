@@ -9,3 +9,4 @@ export * from "./shopify.repository";
 export * from "./invitation.repository";
 export * from "./whatsapp-flow.repository";
 export * from "./automation.repository";
+export * from "./commerce.repository";

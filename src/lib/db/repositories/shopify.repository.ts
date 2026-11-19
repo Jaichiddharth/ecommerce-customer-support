@@ -244,9 +244,9 @@ export class ShopifyRepository {
     return row ? toStoreChannelRow(row) : null;
   }
 
-  /** The store a channel is mapped to (whatever its status), or null when the channel isn't mapped */
-  async findStoreForChannel(organizationId: number, channelId: number): Promise<ShopifyStoreWithUser | null> {
-    const [row] = await db
+  /** The stores a channel is mapped to (whatever their status), oldest connection first; empty when it has none */
+  async findStoresForChannel(organizationId: number, channelId: number): Promise<ShopifyStoreWithUser[]> {
+    const rows = await db
       .select({ store: shopifyStores, connectedByName: users.name })
       .from(shopifyStoreChannels)
       .innerJoin(
@@ -255,15 +255,14 @@ export class ShopifyRepository {
       )
       .leftJoin(users, eq(users.id, shopifyStores.connectedById))
       .where(and(eq(shopifyStoreChannels.organizationId, organizationId), eq(shopifyStoreChannels.channelId, channelId)))
-      .limit(1);
+      .orderBy(asc(shopifyStoreChannels.id));
 
-    return row ? { ...row.store, connectedByName: row.connectedByName } : null;
+    return rows.map((row) => ({ ...row.store, connectedByName: row.connectedByName }));
   }
 
   /**
-   * Connects a channel to a store. Fails with a unique violation (23505) when the channel is already connected
-   * to a store: a channel belongs to one store, and has to be disconnected (deleteChannelMapping) before it can
-   * be connected to another. Rows are never re-pointed at another store.
+   * Connects a channel to a store. A channel can use many stores; fails with a unique violation (23505) when the
+   * channel is already connected to this store (uq_shopify_store_channels_store_channel).
    */
   async createChannelMapping(data: { organizationId: number; storeId: number; channelId: number; userId: number }): Promise<ShopifyStoreChannel> {
     const [created] = await db

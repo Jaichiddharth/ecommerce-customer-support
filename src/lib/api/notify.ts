@@ -12,6 +12,7 @@ const TITLE_BY_SOURCE: Record<ErrorSource, string> = {
   webhook: 'Webhook error',
   upload: 'File upload failed',
   shopify: 'Shopify error',
+  woocommerce: 'WooCommerce error',
   database: 'Server problem',
   network: 'Connection problem',
   internal: 'Something went wrong',
