@@ -8,6 +8,8 @@ import { apiClient } from '@/lib/api/client';
 import { notifyError } from '@/lib/api/notify';
 import { gooeyToast } from '@/components/ui/goey-toaster';
 import { formatPhone } from '@/components/inbox/inbox-types';
+import { PhoneNumberInput } from '@/components/ui/PhoneNumberInput';
+import { emptyPhone, phoneError as getPhoneError, toPhoneDigits, type PhoneValue } from '@/lib/phone';
 import type { ContactChannelSummary } from '@/types/contacts';
 
 interface AddContactModalProps {
@@ -28,21 +30,26 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
   const numbers = channels.filter((c) => c.type === 'whatsapp');
   const [channelId, setChannelId] = useState<number | null>(null);
   const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
+  const [phone, setPhone] = useState<PhoneValue>(() => emptyPhone());
+  const [phoneTouched, setPhoneTouched] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   // Each time it opens: an empty form on the number the page is showing (or the first number)
   useEffect(() => {
     if (!isOpen) return;
     setName('');
-    setPhone('');
+    // Keep the last picked country; only the number is cleared
+    setPhone((p) => emptyPhone(p.country));
+    setPhoneTouched(false);
     setChannelId(numbers.some((c) => c.id === defaultChannelId) ? defaultChannelId : numbers[0]?.id ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  const digits = phone.replace(/\D/g, '');
-  const phoneError = phone && (digits.length < 8 || digits.length > 15) ? 'Enter 8 to 15 digits, with the country code.' : null;
-  const canSave = Boolean(channelId && name.trim() && digits && !phoneError && !isSaving);
+  const digits = toPhoneDigits(phone);
+  const phoneError = getPhoneError(phone);
+  // Shown once the field was left, or as soon as what's typed can't become valid (too long / leading 0)
+  const shownPhoneError = phone.number && (phoneTouched || phone.number.startsWith('0')) ? phoneError : null;
+  const canSave = Boolean(channelId && name.trim() && !phoneError && !isSaving);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -118,19 +125,14 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
             <label htmlFor="add-contact-phone" className="block font-semibold text-slate-700 mb-1">
               Phone number
             </label>
-            <input
+            <PhoneNumberInput
               id="add-contact-phone"
-              type="tel"
-              inputMode="tel"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="e.g. 919876543210"
-              aria-invalid={Boolean(phoneError)}
-              className={`${inputClass} ${phoneError ? 'border-red-300 focus:border-red-400 focus:ring-red-400' : ''}`}
+              onChange={setPhone}
+              onBlur={() => setPhoneTouched(true)}
+              error={shownPhoneError}
+              hint={!phoneError ? `Will be saved as +${digits}` : undefined}
             />
-            <p className={`text-[11px] mt-1 ${phoneError ? 'text-red-600' : 'text-slate-400'}`}>
-              {phoneError ?? 'With country code, e.g. 91 for India.'}
-            </p>
           </div>
 
           <div className="flex justify-end gap-2 pt-1">

@@ -28,15 +28,28 @@ interface WhatsAppChatPreviewProps {
   footerText?: string;
   buttons: (Pick<TemplateButton, 'id' | 'text'> & { type: PreviewButtonType })[];
   timeString?: string;
+  /** Values by variable key (`'1'`, `'first_name'`), used instead of headerSample when given */
+  headerValues?: Record<string, string>;
+  /** Values by variable key (`'1'`, `'first_name'`), used instead of bodySamples when given */
+  bodyValues?: Record<string, string>;
+  /** Mark filled-in variables so it's clear which parts of the message come from the data */
+  highlightVariables?: boolean;
 }
 
-const TOKEN_RE = /(\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|```[^`]+```|\{\{\d+\}\})/g;
+const TOKEN_RE = /(\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|```[^`]+```|\{\{\s*[a-zA-Z0-9_]+\s*\}\})/g;
+
+/** Positional samples (`samples[n-1]` fills `{{n}}`) or values by variable key */
+type Samples = string[] | Record<string, string>;
+
+const sampleFor = (samples: Samples, key: string): string | undefined =>
+  Array.isArray(samples) ? (/^\d+$/.test(key) ? samples[Number(key) - 1] : undefined) : samples[key];
 
 /**
- * Fills `{{n}}` with `samples[n-1]` (unfilled ones stay highlighted)
+ * Fills `{{n}}` / `{{name}}` from `samples` (unfilled ones stay highlighted as placeholders)
  * and renders WhatsApp formatting (*bold*, _italic_, ~strike~, ```monospace```).
+ * With `highlight`, filled values are marked too.
  */
-export const formatWhatsAppText = (text: string, samples: string[] = []): React.ReactNode => {
+export const formatWhatsAppText = (text: string, samples: Samples = [], highlight = false): React.ReactNode => {
   if (!text) return null;
 
   const lines = text.split('\n');
@@ -44,9 +57,20 @@ export const formatWhatsAppText = (text: string, samples: string[] = []): React.
     <React.Fragment key={lineIdx}>
       {line.split(TOKEN_RE).map((token, i) => {
         if (!token) return null;
-        const variable = token.match(/^\{\{(\d+)\}\}$/);
+        const variable = token.match(/^\{\{\s*([a-zA-Z0-9_]+)\s*\}\}$/);
         if (variable) {
-          const sample = samples[Number(variable[1]) - 1]?.trim();
+          const sample = sampleFor(samples, variable[1])?.trim();
+          if (sample && highlight) {
+            return (
+              <mark
+                key={i}
+                title={`Variable {{${variable[1]}}}`}
+                className="bg-amber-100 text-amber-950 ring-1 ring-amber-300/70 rounded px-1 [box-decoration-break:clone]"
+              >
+                {sample}
+              </mark>
+            );
+          }
           return sample ? (
             <span key={i}>{sample}</span>
           ) : (
@@ -58,19 +82,19 @@ export const formatWhatsAppText = (text: string, samples: string[] = []): React.
         if (token.length > 6 && token.startsWith('```') && token.endsWith('```')) {
           return (
             <code key={i} className="font-mono bg-slate-100 px-1 py-0.5 rounded text-[12px] text-slate-800">
-              {formatWhatsAppText(token.slice(3, -3), samples)}
+              {formatWhatsAppText(token.slice(3, -3), samples, highlight)}
             </code>
           );
         }
         const inner = token.slice(1, -1);
         if (token.length > 2 && token.startsWith('*') && token.endsWith('*')) {
-          return <strong key={i} className="font-semibold text-slate-900">{formatWhatsAppText(inner, samples)}</strong>;
+          return <strong key={i} className="font-semibold text-slate-900">{formatWhatsAppText(inner, samples, highlight)}</strong>;
         }
         if (token.length > 2 && token.startsWith('_') && token.endsWith('_')) {
-          return <em key={i} className="italic text-slate-800">{formatWhatsAppText(inner, samples)}</em>;
+          return <em key={i} className="italic text-slate-800">{formatWhatsAppText(inner, samples, highlight)}</em>;
         }
         if (token.length > 2 && token.startsWith('~') && token.endsWith('~')) {
-          return <span key={i} className="line-through text-slate-600">{formatWhatsAppText(inner, samples)}</span>;
+          return <span key={i} className="line-through text-slate-600">{formatWhatsAppText(inner, samples, highlight)}</span>;
         }
         return <span key={i}>{token}</span>;
       })}
@@ -100,6 +124,9 @@ export const WhatsAppChatPreview: React.FC<WhatsAppChatPreviewProps> = ({
   footerText,
   buttons,
   timeString = '10:02',
+  headerValues,
+  bodyValues,
+  highlightVariables = false,
 }) => {
   const initials = businessName.trim().slice(0, 2).toUpperCase() || 'WA';
 
@@ -143,7 +170,7 @@ export const WhatsAppChatPreview: React.FC<WhatsAppChatPreviewProps> = ({
             {/* Header Content */}
             {headerType === 'TEXT' && headerText && (
               <div className="font-bold text-[14px] text-slate-900 pb-1.5 mb-1.5 border-b border-slate-100 leading-snug">
-                {formatWhatsAppText(headerText, headerSample ? [headerSample] : [])}
+                {formatWhatsAppText(headerText, headerValues ?? (headerSample ? [headerSample] : []), highlightVariables)}
               </div>
             )}
 
@@ -181,7 +208,7 @@ export const WhatsAppChatPreview: React.FC<WhatsAppChatPreviewProps> = ({
             {/* Body Content */}
             <div className="whitespace-pre-wrap text-slate-800 text-[13px]">
               {bodyText ? (
-                formatWhatsAppText(bodyText, bodySamples)
+                formatWhatsAppText(bodyText, bodyValues ?? bodySamples, highlightVariables)
               ) : (
                 <span className="text-slate-400 italic">Your message body will appear here...</span>
               )}

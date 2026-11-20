@@ -1,0 +1,2 @@
+DROP INDEX "uq_campaigns_one_running_per_org";--> statement-breakpoint
+CREATE UNIQUE INDEX "uq_campaigns_one_active_per_org" ON "campaigns" USING btree ("organization_id") WHERE "campaigns"."status" IN ('scheduled', 'running');

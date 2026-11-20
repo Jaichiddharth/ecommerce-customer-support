@@ -38,14 +38,14 @@ The integration only reads data. It never writes to the store.
 ## Data model
 
 ```
-organizations 1─* shopify_stores 1─* shopify_store_channels *─1 channels      (one store per channel)
+organizations 1─* shopify_stores 1─* shopify_store_channels *─1 channels      (many to many: a number can use several stores)
                   shopify_stores 1─* shopify_customer_links *─1 customers     (primary contact of a profile)
                   shopify_stores 1─* shopify_order_links    *─1 customers     (+ channel it was linked through)
 customers.primary_customer_id ─> customers.id   (other channel identities of the same person)
 ```
 
-- `shopify_stores`: one row per (organization, shop domain). The access token is encrypted. A workspace can connect several stores. There is **no default store**: a number only uses the store it's connected to (`shopify_store_channels`), and a number without one shows no Shopify data in the inbox. (`is_default` is a legacy column that nothing reads.) Disconnecting keeps the row with its token cleared, so reconnecting the same shop brings back its links and channel mappings.
-- `shopify_store_channels`: which store a channel (number) uses. A workspace can connect any number of stores, and a store can have many numbers (e.g. one for sales, one for service). A number belongs to **one** store only (`uq_shopify_store_channels_channel`). To use a number with another store, disconnect it from its current store first (`DELETE /channel-mappings/:id`), then connect it to the new one. There is no one-step move: connecting a number that's already on another store returns `409 SHOPIFY_CHANNEL_ALREADY_MAPPED`, naming that store.
+- `shopify_stores`: one row per (organization, shop domain). The access token is encrypted. A workspace can connect several stores. There is **no default store**: a number only uses the stores it's connected to (`shopify_store_channels`), and a number without one shows no Shopify data in the inbox. (`is_default` is a legacy column that nothing reads.) Disconnecting keeps the row with its token cleared, so reconnecting the same shop brings back its links and channel mappings.
+- `shopify_store_channels`: which stores a channel (number) uses. Many to many: a store can have many numbers (e.g. one for sales, one for service) and a number can be connected to several stores, plus WooCommerce stores (`commerce_store_channels`) at the same time. A (store, number) pair exists once (`uq_shopify_store_channels_store_channel`, migration `0014_channel_multi_store`). Unlinking a number from one store (`DELETE /channel-mappings/:id`) leaves its other stores alone.
 - `shopify_order_links`: an order associated with a profile (always its primary contact's id), with the channel it was associated through. Each order belongs to at most one profile per store. Only the GID and the order name are stored; details are read from Shopify. Links move with the profile when contacts are linked or unlinked.
 - **Isolation**: every row carries `organization_id`, and rows that point at a store or channel use a composite `(organization_id, id)` foreign key (`uq_shopify_stores_org_id`, `uq_channels_org_id`), so the database rejects any row tying one workspace's data to another workspace's store or channel.
 - **Contact profiles**: a person can reach the workspace on several channels (WhatsApp numbers, Instagram, Messenger, ...), and each channel has its own `customers` row. An agent can link those rows into one profile. The oldest contact stays the primary contact (`primary_customer_id IS NULL`), and the others point at it. Profiles are never nested: when two profiles are linked, every contact of one moves to the other.
@@ -58,14 +58,14 @@ customers.primary_customer_id ─> customers.id   (other channel identities of t
 
 Every Shopify call resolves its store in this order (`shopifyStoreConnectionService.resolveStore`):
 
-1. `storeId`, when given. It must be an active store of the workspace. If the channel in scope is mapped to another store, the request is rejected (`SHOPIFY_STORE_CHANNEL_MISMATCH`).
-2. The store mapped to `channelId`, or to the channel of `customerId` (the contact).
+1. `storeId`, when given. It must be an active store of the workspace. If the channel in scope is connected to stores and this isn't one of them, the request is rejected (`SHOPIFY_STORE_CHANNEL_MISMATCH`).
+2. Otherwise the oldest live store (that the member can use) connected to `channelId`, or to the channel of `customerId` (the contact). The inbox always sends `storeId`, so this fallback only matters to other callers.
 
 There is no default store. If the channel isn't connected to a store, or its store is disconnected, the request has **no** store (`SHOPIFY_NOT_CONNECTED`; the contact orders endpoint returns `connected: false`). It never falls back to another store's data.
 
 Members limited to some stores (`users.stores`: shop domains, empty or `All` = every store) get `SHOPIFY_STORE_ACCESS_DENIED` for other stores. Owners and admins are never limited.
 
-**Inbox**: when a conversation opens, the inbox asks `GET /channel-store?channelId=` which store the conversation's own number uses. Products, the contact's Shopify customer and orders only show when it has one, and every call passes that `storeId` (with `customerId`). Connecting a number to a store happens in Settings → Channels → the number → Shopify store → Sync store.
+**Inbox**: when a conversation opens, the inbox asks `GET /channel-store?channelId=` which stores the conversation's own number uses (`stores`, oldest connection first). Products, the contact's Shopify customer and orders only show when it has one. With several stores the customer panel (and the composer's product picker) shows one store switcher listing the number's Shopify **and** WooCommerce stores: one store is active at a time (Shopify stores first, oldest link first, until the agent picks another; the pick is remembered per number for the session). For a WooCommerce store the panel shows its products (`/api/integrations/woocommerce/products`, `/share`) and the contact's orders matched by billing email or phone (`/api/integrations/woocommerce/contacts/:customerId/orders`). For a Shopify store every call — products, orders, linking, sharing — passes the picked `storeId` (with `customerId`). Linking stores to a number happens in Settings → Channels → the number → Shopify stores → Link store.
 
 ## Flows
 
@@ -87,9 +87,9 @@ Members limited to some stores (`users.stores`: shop domains, empty or `All` = e
 | GET | `/api/integrations/shopify/callback` | OAuth redirect |
 | GET | `/api/integrations/shopify/stores` | Stores with their mapped channels (admin) |
 | GET / DELETE | `/api/integrations/shopify/stores/:storeId` | One store / disconnect (admin) |
-| GET | `/api/integrations/shopify/channel-store?channelId=` | The store a number is connected to, or `store: null` (any member; used by the inbox) |
+| GET | `/api/integrations/shopify/channel-store?channelId=` | The stores a number is connected to: `stores` (empty when none) and `hasStores` (any member; used by the inbox's store switcher) |
 | GET / POST | `/api/integrations/shopify/channel-mappings?storeId=&channelId=` | Mappings plus the store every live channel uses (`via`: mapping or none) / connect `{ storeId, channelId }`. 409 if the number is on another store (admin) |
-| GET / DELETE | `/api/integrations/shopify/channel-mappings/:mappingId` | One mapping / disconnect the number from its store (it then has no store). DELETE also removes that store's contact ↔ customer links and order links of the number's contacts (contacts that also use another number of the same store keep theirs) and returns `removed: { contactLinks, orderLinks }` (admin) |
+| GET / DELETE | `/api/integrations/shopify/channel-mappings/:mappingId` | One mapping / unlink the number from that store (its other stores stay linked). DELETE also removes that store's contact ↔ customer links and order links of the number's contacts (contacts that also use another number of the same store keep theirs) and returns `removed: { contactLinks, orderLinks }` (admin) |
 | GET | `/api/integrations/shopify/channel-mappings/:mappingId/impact` | What that DELETE would remove (`linkedContacts`, `manuallyLinkedContacts`, `linkedOrders`), for the confirmation in Settings; changes nothing (admin) |
 | GET | `/api/integrations/shopify/products?q=&after=&scope` | Search active products (title, SKU, barcode) |
 | GET | `/api/integrations/shopify/products/:id?scope` | Product detail with options and variants |

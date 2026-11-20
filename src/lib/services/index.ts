@@ -6,4 +6,7 @@ export * from "./customer.service";
 export * from "./conversation.service";
 export * from "./shopify.service";
 export * from "./shopify-store-connection.service";
+export * from "./commerce-store-connection.service";
+export * from "./woocommerce.service";
+export * from "./woocommerce-inbox.service";
 export * from "./consent.service";

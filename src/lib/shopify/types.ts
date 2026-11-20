@@ -34,8 +34,8 @@ export interface ShopifyConnectionResponse {
 }
 
 /**
- * The store a WhatsApp number (channel) is connected to: GET /api/integrations/shopify/channel-store?channelId=.
- * The inbox only shows Shopify for a conversation whose number has one.
+ * A store a WhatsApp number (channel) is connected to: GET /api/integrations/shopify/channel-store?channelId=.
+ * A number can be connected to several stores; the inbox lets the agent pick one of them.
  */
 export interface ShopifyChannelStore {
   id: number;
@@ -47,8 +47,11 @@ export interface ShopifyChannelStore {
 
 export interface ShopifyChannelStoreResponse {
   success: true;
-  /** null: the number isn't connected to a store (or the store is disconnected, or the member can't use it) */
-  store: ShopifyChannelStore | null;
+  /**
+   * The number's stores this member can use, oldest connection first. Empty: the number isn't connected to a store
+   * (or its stores are disconnected, or the member can't use them).
+   */
+  stores: ShopifyChannelStore[];
   /** Whether the workspace has a store this member can use: "Associate a store" (true) or "Connect a store" (false) */
   hasStores: boolean;
 }
@@ -77,8 +80,18 @@ export interface ShopifyStoreWithChannels extends ShopifyStoreInfo {
   channels: ShopifyChannelMapping[];
 }
 
+/** One store a channel is connected to (any platform) */
+export interface ChannelStoreLink {
+  mappingId: number;
+  storeId: number;
+  /** The store's name, or its domain / host */
+  storeName: string;
+  /** connected | reauth_required | disconnected: a disconnected store's link is kept for a reconnect */
+  storeStatus: string;
+}
+
 /**
- * Which store each live channel uses: its mapping, or none (there is no default store).
+ * Which stores each live channel is connected to (there is no default store).
  * GET /api/integrations/shopify/channel-mappings → `channels`
  */
 export interface ShopifyChannelStoreStatus {
@@ -86,10 +99,8 @@ export interface ShopifyChannelStoreStatus {
   name: string;
   type: string;
   status: string;
-  mappingId: number | null;
-  /** The store the channel uses right now; null when it has none (e.g. its mapped store is disconnected) */
-  effectiveStoreId: number | null;
-  via: "mapping" | "none";
+  /** Every Shopify store the channel is connected to, oldest connection first; empty when none */
+  links: ChannelStoreLink[];
 }
 
 /**

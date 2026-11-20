@@ -27,6 +27,21 @@ export interface SharedShopifyProduct {
   productUrl: string | null;
 }
 
+/** WooCommerce product/variation reference recorded on a shared-product message */
+export interface SharedWooProduct {
+  storeId: number;
+  productId: number;
+  variationId: number | null;
+  title: string;
+  options: { name: string; value: string }[];
+  sku: string | null;
+  price: string;
+  currencyCode: string;
+  available: boolean;
+  imageUrl: string | null;
+  productUrl: string | null;
+}
+
 /** Extra data attached to a message, e.g. which action the AI agent performed */
 /** A template button as shown in the thread (display only; WhatsApp sends the approved button itself) */
 export interface TemplateMessageButton {
@@ -44,6 +59,7 @@ export const sanitizeTemplateButtons = (buttons: unknown): TemplateMessageButton
 export interface MessageMetadata {
   aiAction?: string; // e.g. 'catalog lookup'
   shopifyProduct?: SharedShopifyProduct; // Set when an agent shares a Shopify product
+  wooProduct?: SharedWooProduct; // Set when an agent shares a WooCommerce product
   /**
    * Set on template messages; `headerFormat` tells the UI how to show the header media in `mediaUrl`.
    * `buttons` are the template's approved buttons (WhatsApp shows them to the customer), kept so the thread can too.

@@ -63,9 +63,10 @@ export const shopifyStores = pgTable(
 );
 
 /**
- * Which store a channel (WhatsApp number, Instagram account, ...) works with. A channel uses at most one store;
- * a store can serve many channels. Products, customer matching and orders for a conversation come from the
- * store of its channel. Channels without a row have no store: there is no default store.
+ * Which stores a channel (WhatsApp number, Instagram account, ...) works with. A channel can use many stores (and
+ * WooCommerce stores too, see commerce_store_channels); a store can serve many channels. In the inbox the agent
+ * picks which of the channel's stores products, customer matching and orders come from. Channels without a row
+ * have no store: there is no default store.
  * Rows are kept while the store is disconnected, so reconnecting it restores its channels.
  */
 export const shopifyStoreChannels = pgTable(
@@ -93,9 +94,10 @@ export const shopifyStoreChannels = pgTable(
       columns: [table.organizationId, table.channelId],
       foreignColumns: [channels.organizationId, channels.id],
     }).onDelete("cascade"),
-    // One store per channel
-    unique("uq_shopify_store_channels_channel").on(table.channelId),
+    // A channel can use many stores, each at most once
+    unique("uq_shopify_store_channels_store_channel").on(table.shopifyStoreId, table.channelId),
     index("idx_shopify_store_channels_org_store").on(table.organizationId, table.shopifyStoreId),
+    index("idx_shopify_store_channels_org_channel").on(table.organizationId, table.channelId),
   ]
 );
 

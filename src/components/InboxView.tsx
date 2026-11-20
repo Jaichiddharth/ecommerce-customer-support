@@ -56,7 +56,9 @@ import { ConsentBadge, ConsentEventRow } from './inbox/ConsentStatus';
 import { VirtualMessageList } from './inbox/VirtualMessageList';
 import { InboxTopBar } from './inbox/InboxTopBar';
 import { ProductBrowser, type ShareProductArgs } from './shopify/ProductBrowser';
-import { useChannelShopifyStore } from './shopify/useChannelShopifyStore';
+import { WooProductBrowser, type ShareWooProductArgs } from './woocommerce/WooProductBrowser';
+import { useConversationStores } from './inbox/useConversationStores';
+import { StoreSwitcher } from './inbox/StoreSwitcher';
 import { TemplateButtonIcon, TemplateComposer, forgetCachedTemplates, type TemplateDraft } from './inbox/TemplateComposer';
 import { FlowResponseCard } from './inbox/FlowResponseCard';
 import { ReplyQuote, quoteFromMessage, quoteFromPreview } from './inbox/ReplyQuote';
@@ -86,6 +88,8 @@ import {
 } from './inbox/inbox-types';
 import { TicketCreditsBar, TicketEventRow, TicketStatusMenu } from './inbox/TicketStatus';
 import { SearchableSelect } from '@/components/ui/SearchableSelect';
+import { PhoneNumberInput } from '@/components/ui/PhoneNumberInput';
+import { emptyPhone, parsePhone, phoneError as getPhoneError, toPhoneDigits, type PhoneValue } from '@/lib/phone';
 import { AssigneeMenu } from './inbox/AssigneeMenu';
 import type { TicketCredits } from '@/types/ticket';
 
@@ -1275,8 +1279,11 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // The store of the open conversation's own WhatsApp number. There is no default store: a number that isn't
   // connected to a store (Settings → Channels) shows no Shopify products or orders.
   const conversationChannelId = activeConv ? (activeConv.channel?.id ?? activeConv.customer.channelId ?? null) : null;
-  const shopifyStore = useChannelShopifyStore(conversationChannelId);
-  const shopifyScope = { channelId: conversationChannelId ?? undefined, customerId: activeConv?.customer.id };
+  // Every store (Shopify and WooCommerce) linked to the number; one is active at a time (the switcher's pick), and
+  // browsing, sharing and orders all use it
+  const convStores = useConversationStores(conversationChannelId);
+  const selectedStore = convStores.selected;
+  const shopifyScope = { storeId: convStores.shopifyStore?.id, channelId: conversationChannelId ?? undefined, customerId: activeConv?.customer.id };
 
   const shareDisabledReason = !activeConv
     ? null
@@ -1301,6 +1308,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       const res = await apiClient.post('/api/integrations/shopify/share', {
         customerId: activeConv.customer.id,
         channelId: conversationSendChannel?.id,
+        storeId: convStores.shopifyStore?.id,
         productId: product.legacyId,
         variantId: variant.legacyId,
         caption,
@@ -1316,6 +1324,33 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       return true;
     } catch (err) {
       notifyError(err, { where: 'InboxView.handleShareProduct', title: 'Product not shared' });
+      return false;
+    }
+  };
+
+  /** Sends a WooCommerce product through the regular WhatsApp send path (the server re-reads it from the store) */
+  const handleShareWooProduct = async ({ storeId, product, variation, caption }: ShareWooProductArgs): Promise<boolean> => {
+    if (!activeConv || shareDisabledReason) return false;
+    try {
+      const res = await apiClient.post('/api/integrations/woocommerce/share', {
+        customerId: activeConv.customer.id,
+        channelId: conversationSendChannel?.id,
+        storeId,
+        productId: product.id,
+        variationId: variation?.id,
+        caption,
+      });
+      if (res.data?.persisted === false) {
+        notifyWarning('Product delivered, but not saved', res.data?.warning);
+      } else {
+        gooeyToast.success(`${product.name} shared`);
+      }
+      setShowProductPicker(false);
+      fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
+      refreshConversationsSoon();
+      return true;
+    } catch (err) {
+      notifyError(err, { where: 'InboxView.handleShareWooProduct', title: 'Product not shared' });
       return false;
     }
   };
@@ -1476,7 +1511,9 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
   // NEW CONTACT
   // -------------------------------------------------------------
   const [newContactName, setNewContactName] = useState('');
-  const [newContactPhone, setNewContactPhone] = useState('');
+  const [newContactPhone, setNewContactPhone] = useState<PhoneValue>(() => emptyPhone());
+  const [newContactPhoneTouched, setNewContactPhoneTouched] = useState(false);
+  const newContactPhoneError = getPhoneError(newContactPhone);
   const [newContactChannelId, setNewContactChannelId] = useState<number | null>(null);
   const [isCreatingContact, setIsCreatingContact] = useState(false);
 
@@ -1490,13 +1527,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       initialChannelId = selectedChannelId;
     }
     setNewContactChannelId(initialChannelId);
+    // A search that looks like a number prefills the phone (country code detected); anything else is the name
     const digits = prefill.replace(/\D/g, '');
+    setNewContactPhoneTouched(false);
     if (digits.length >= 6) {
-      setNewContactPhone(digits);
+      setNewContactPhone(parsePhone(prefill, newContactPhone.country));
       setNewContactName('');
     } else {
       setNewContactName(prefill);
-      setNewContactPhone('');
+      setNewContactPhone(emptyPhone(newContactPhone.country));
     }
     setShowNewContactModal(true);
   };
@@ -1507,11 +1546,13 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       gooeyToast.error('No WhatsApp channel available. Please connect a channel first.');
       return;
     }
-    const cleanPhone = newContactPhone.replace(/\D/g, '');
-    if (!newContactName.trim() || !cleanPhone) {
-      gooeyToast.error('Please enter a name and a valid phone number (digits only, e.g. 919876543210)');
+    setNewContactPhoneTouched(true);
+    if (!newContactName.trim()) {
+      gooeyToast.error('Please enter the customer’s name.');
       return;
     }
+    if (newContactPhoneError) return; // shown under the phone field
+    const cleanPhone = toPhoneDigits(newContactPhone);
     const targetChannelId = newContactChannelId || whatsappChannels[0]?.id;
 
     try {
@@ -1526,7 +1567,8 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         gooeyToast.success(`Customer ${newContactName.trim()} created under ${channelName}!`);
         setShowNewContactModal(false);
         setNewContactName('');
-        setNewContactPhone('');
+        setNewContactPhone((p) => emptyPhone(p.country));
+        setNewContactPhoneTouched(false);
         // A conversation is created with the first message; show the contact right away
         await fetchConversations();
         fetchChannels(); // the channel's contact count went up
@@ -2395,23 +2437,23 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
                         <button
                           type="button"
                           onClick={() => setShowProductPicker(true)}
-                          disabled={composerMode !== 'reply' || !shopifyStore.isConnected || isCustomerOptedOut || (activeChannelType === 'whatsapp' && isWindowExpired)}
+                          disabled={composerMode !== 'reply' || !convStores.isConnected || isCustomerOptedOut || (activeChannelType === 'whatsapp' && isWindowExpired)}
                           title={
                             isCustomerOptedOut
                               ? OPTED_OUT_MESSAGE
                               : activeChannelType === 'whatsapp' && isWindowExpired
                                 ? 'Products cannot be sent outside the 24-hour window'
-                                : shopifyStore.isConnected
-                                  ? `Share a product from ${shopifyStore.store?.name || shopifyStore.store?.shopDomain}`
-                                  : shopifyStore.needsReauth
-                                    ? "This number's Shopify store needs to be reconnected"
-                                    : shopifyStore.isLoading
-                                      ? "Checking this number's Shopify store…"
-                                      : shopifyStore.failed
-                                        ? "Couldn't check this number's Shopify store"
-                                        : shopifyStore.hasStores
-                                          ? 'No Shopify store is associated with this number'
-                                          : 'No Shopify store connected'
+                                : convStores.isConnected
+                                  ? `Share a product from ${selectedStore?.name}`
+                                  : convStores.needsReauth
+                                    ? `${selectedStore?.name} needs to be reconnected`
+                                    : convStores.isLoading
+                                      ? "Checking this number's stores…"
+                                      : convStores.failed
+                                        ? "Couldn't check this number's stores"
+                                        : convStores.hasStores
+                                          ? 'No store is associated with this number'
+                                          : 'No store connected'
                           }
                           className="p-1.5 rounded-lg cursor-pointer text-slate-500 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
@@ -2471,16 +2513,10 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
             <CustomerPanel
               conversation={activeConv}
               lastAiAction={lastAiAction}
-              shopify={{
-                store: shopifyStore.store,
-                loading: shopifyStore.isLoading,
-                hasStores: shopifyStore.hasStores,
-                channelId: shopifyStore.channelId,
-                failed: shopifyStore.failed,
-                retry: shopifyStore.retry,
-              }}
+              stores={convStores}
               productStoreScope={shopifyScope}
               onShareProduct={handleShareProduct}
+              onShareWooProduct={handleShareWooProduct}
               onInsertProductText={productTextBlocked ? undefined : handleInsertProductText}
               shareDisabledReason={shareDisabledReason}
               onConsentChange={setCustomerOptedOut}
@@ -2500,19 +2536,40 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
       />
 
       <Modal
-        isOpen={showProductPicker && Boolean(activeConv) && shopifyStore.isConnected}
+        isOpen={showProductPicker && Boolean(activeConv) && Boolean(selectedStore)}
         onClose={() => setShowProductPicker(false)}
         title={`Share a product with ${activeConv?.customer.name ?? 'customer'}`}
         icon={<ShoppingBag className="w-4 h-4 text-[#3440a8]" />}
         maxWidth="md"
       >
-        <ProductBrowser
-          className="h-[min(560px,70vh)]"
-          storeScope={shopifyScope}
-          onShare={handleShareProduct}
-          onInsertText={productTextBlocked ? undefined : handleInsertProductText}
-          shareDisabledReason={shareDisabledReason}
-        />
+        {selectedStore && (
+          <div className="mb-3">
+            <StoreSwitcher stores={convStores.stores} selected={selectedStore} onSelect={convStores.select} prefix="Products from" />
+          </div>
+        )}
+        {selectedStore && selectedStore.status !== 'connected' ? (
+          <p className="rounded-lg bg-slate-100/80 px-3 py-2.5 text-xs text-slate-600 leading-relaxed">
+            The connection to {selectedStore.name} has expired. Reconnect the store from Integrations, or pick another store.
+          </p>
+        ) : selectedStore?.platform === 'woocommerce' ? (
+          <WooProductBrowser
+            key={selectedStore.key}
+            className="h-[min(520px,66vh)]"
+            scope={{ storeId: selectedStore.id, channelId: conversationChannelId, customerId: activeConv?.customer.id }}
+            onShare={handleShareWooProduct}
+            onInsertText={productTextBlocked ? undefined : handleInsertProductText}
+            shareDisabledReason={shareDisabledReason}
+          />
+        ) : selectedStore ? (
+          <ProductBrowser
+            key={selectedStore.key}
+            className="h-[min(520px,66vh)]"
+            storeScope={shopifyScope}
+            onShare={handleShareProduct}
+            onInsertText={productTextBlocked ? undefined : handleInsertProductText}
+            shareDisabledReason={shareDisabledReason}
+          />
+        ) : null}
       </Modal>
 
       <Modal
@@ -2573,16 +2630,15 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
 
           <div>
             <label className="block font-semibold text-slate-700 mb-1">Phone number</label>
-            <input
-              type="text"
-              required
+            <PhoneNumberInput
+              size="sm"
               disabled={whatsappChannels.length === 0}
               value={newContactPhone}
-              onChange={(e) => setNewContactPhone(e.target.value)}
-              placeholder="e.g. 919876543210"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#3440a8] disabled:bg-slate-100 disabled:cursor-not-allowed"
+              onChange={setNewContactPhone}
+              onBlur={() => setNewContactPhoneTouched(true)}
+              error={newContactPhoneTouched || newContactPhone.number.startsWith('0') ? newContactPhoneError : null}
+              hint={!newContactPhoneError ? `Will be saved as +${toPhoneDigits(newContactPhone)}` : undefined}
             />
-            <p className="text-[11px] text-slate-400 mt-1">Digits only, with country code and without +.</p>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">

@@ -17,6 +17,29 @@ export default function IntegrationDetailPage({ params }: Props) {
   // The OAuth result already announced: effects can run twice (Strict Mode) before the URL is cleaned up
   const handledResultRef = useRef<string | null>(null);
 
+  // Handle the WooCommerce authorization result (/api/integrations/woocommerce/return redirects here)
+  useEffect(() => {
+    const result = searchParams.get('woocommerce');
+    if (!result) return;
+    const resultKey = searchParams.toString();
+    if (handledResultRef.current === resultKey) return;
+    handledResultRef.current = resultKey;
+
+    const store = searchParams.get('store');
+    const name = searchParams.get('name');
+    const storeLabel = name && store ? `${name} (${store})` : name || store || 'Your WooCommerce store';
+    if (result === 'connected') {
+      gooeyToast.success('WooCommerce store connected', { description: `${storeLabel} has been connected. Its API key was generated automatically.` });
+    } else if (result === 'reconnected') {
+      gooeyToast.success('WooCommerce store reconnected', { description: `${storeLabel} has a new API key.` });
+    } else if (result === 'error') {
+      gooeyToast.error('Unable to connect WooCommerce store', {
+        description: searchParams.get('message') || 'WooCommerce authorization could not be completed. Please try again.',
+      });
+    }
+    window.history.replaceState(null, '', `/integrations/${key}`);
+  }, [key, searchParams]);
+
   // Handle Shopify OAuth callback result
   useEffect(() => {
     const result = searchParams.get('shopify');

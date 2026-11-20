@@ -12,6 +12,12 @@ export async function register() {
   if (process.env.AUTOMATION_SCHEDULER === "off" || !process.env.DATABASE_URL) return;
   const { startAutomationScheduler } = await import("./lib/automation/scheduler");
   startAutomationScheduler();
+
+  // Campaign sending (SQS consumer, or in-process when CAMPAIGN_QUEUE_URL is unset) and its safety-net sweep
+  if (process.env.CAMPAIGN_WORKER !== "off") {
+    const { startCampaignWorker } = await import("./lib/campaigns/worker");
+    startCampaignWorker();
+  }
 }
 
 export async function onRequestError(

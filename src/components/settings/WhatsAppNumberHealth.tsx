@@ -14,6 +14,9 @@ interface PhoneStatus {
   verified_name?: string;
   name_status?: string;
   quality_rating?: string;
+  /** Business portfolio limit (current); shared by every number of the portfolio */
+  whatsapp_business_manager_messaging_limit?: string;
+  /** Deprecated per-number tier, used only when the portfolio limit is missing */
   messaging_limit_tier?: string;
   throughput?: { level?: string };
   is_on_biz_app?: boolean;
@@ -148,7 +151,7 @@ export function WhatsAppNumberHealth({ channel }: { channel: Channel }) {
               </div>
             )}
           </Metric>
-          <Metric label="Messaging limit" value={paused ? 'Paused' : messagingLimit(phone?.messaging_limit_tier)} loading={metricsLoading} />
+          <Metric label="Messaging limit" value={paused ? 'Paused' : messagingLimit(phone?.whatsapp_business_manager_messaging_limit ?? phone?.messaging_limit_tier)} loading={metricsLoading} />
           <Metric
             label="Throughput"
             value={paused ? 'Paused' : phone?.throughput?.level ? THROUGHPUT[phone.throughput.level] ?? phone.throughput.level : null}
