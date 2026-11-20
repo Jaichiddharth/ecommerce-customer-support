@@ -11,6 +11,7 @@ import {
   type NewCampaign,
 } from "../schema";
 import type { CampaignRecipient } from "@/lib/campaigns/contact-file";
+import { getMetaErrorInfo } from "@/lib/errors/meta-errors";
 
 const INSERT_CHUNK = 1000;
 
@@ -355,14 +356,16 @@ export class CampaignRepository {
   /**
    * Applies a WhatsApp status webhook to the campaign recipient with this wamid. Moves forward only
    * (sent → delivered → read); `failed` wins over sent/delivered. Returns the campaign's id, or null when it isn't
-   * a campaign message.
+   * a campaign message. A failure stores the code and its message from the Meta error catalog; for codes not in the
+   * catalog, Meta's own error text (`metaErrorText`) is stored instead.
    */
   async applyDeliveryStatus(
     wamid: string,
     organizationId: number,
     status: "sent" | "delivered" | "read" | "failed",
     errorCode?: number | null,
-    pricing?: DeliveryPricing | null
+    pricing?: DeliveryPricing | null,
+    metaErrorText?: string | null
   ): Promise<number | null> {
     const [row] = await db
       .select({ id: campaignRecipients.id, status: campaignRecipients.status, campaignId: campaignRecipients.campaignId })
@@ -383,9 +386,12 @@ export class CampaignRepository {
 
     if (status === "failed") {
       if (row.status === RecipientStatus.READ) return row.campaignId;
+      const errorMessage =
+        getMetaErrorInfo(errorCode)?.userMessage ??
+        (metaErrorText?.trim() ? metaErrorText.trim().slice(0, 1000) : "The message could not be delivered.");
       await db
         .update(campaignRecipients)
-        .set({ status: RecipientStatus.FAILED, errorCode: errorCode ?? null, updatedAt: now, ...pricingPatch })
+        .set({ status: RecipientStatus.FAILED, errorCode: errorCode ?? null, errorMessage, updatedAt: now, ...pricingPatch })
         .where(eq(campaignRecipients.id, row.id));
       return row.campaignId;
     }

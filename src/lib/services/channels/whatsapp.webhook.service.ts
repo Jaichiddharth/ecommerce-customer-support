@@ -723,7 +723,9 @@ export class WhatsAppWebhookService {
     if (campaignStatus === 'sent' || campaignStatus === 'delivered' || campaignStatus === 'read' || campaignStatus === 'failed') {
       try {
         // `pricing` (billable, category, pricing_model) arrives with the status; Meta doesn't send the amount
-        campaignId = await campaignRepository.applyDeliveryStatus(messageId, orgId, campaignStatus, errorCode, st.pricing ?? null);
+        // Meta's own text is the fallback for error codes not in the catalog
+        const metaErrorText = firstErr ? firstErr.error_data?.details || firstErr.message || firstErr.title || null : null;
+        campaignId = await campaignRepository.applyDeliveryStatus(messageId, orgId, campaignStatus, errorCode, st.pricing ?? null, metaErrorText);
       } catch (err) {
         log.warn('Could not apply a delivery status to a campaign recipient', { err, wamid: messageId, status });
       }
