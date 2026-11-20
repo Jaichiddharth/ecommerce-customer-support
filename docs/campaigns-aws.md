@@ -65,6 +65,18 @@ resumes it manually. Contacts already marked failed are not re-sent on resume.
 | Timeout without a response | `unknown` (not retried; may have been sent) | Yes |
 | Anything else: template paused/disabled (132015/132016), token expired (190), account blocked, payment (131042), number disconnected, invalid number (131026)… | `failed` | Yes |
 
+## Marketing Messages API
+
+Campaigns that use a **MARKETING** template are sent through Meta's Marketing Messages API for WhatsApp
+(`POST /{phone-number-id}/marketing_messages`); utility and other templates stay on `POST /{phone-number-id}/messages`.
+The body, the `wamid` in the response and the status webhooks are the same. Only campaign sends use it; the inbox and
+automations are unchanged.
+
+To get the optimized delivery, someone with full control of the business portfolio accepts the Marketing Messages
+terms (WhatsApp Manager → Overview → Alerts → Accept terms). Until then, Meta's default policy
+(`CLOUD_API_FALLBACK`) delivers the message through Cloud API, so campaigns keep working. The route shows in the
+recipient's `pricing_category`: `marketing_lite` = Marketing Messages API, `marketing` = Cloud API.
+
 ## Pricing from webhooks
 
 WhatsApp status webhooks carry a `pricing` object. Each campaign recipient stores `billable`,
@@ -95,12 +107,15 @@ throughput, and quality rating. It warns when the campaign has more contacts tha
    app policy:
    ```sh
    aws cloudformation deploy \
-     --stack-name unocx-prod-campaigns \
+     --stack-name unocx-dev-campaigns \
      --template-file infra/campaigns/cloudformation.yaml \
-     --parameter-overrides Stage=prod AppUrl=https://app.unocx.in WorkerSecret=<secret> MaxConcurrency=5 \
+     --parameter-overrides Stage=dev AppUrl=https://<app-url> WorkerSecret=<secret> MaxConcurrency=5 \
      --capabilities CAPABILITY_NAMED_IAM
-   aws cloudformation describe-stacks --stack-name unocx-prod-campaigns --query "Stacks[0].Outputs"
+   aws cloudformation describe-stacks --stack-name unocx-dev-campaigns --query "Stacks[0].Outputs"
    ```
+   `Stage` defaults to `dev` and names every resource `unocx-<stage>-…`; use another value (e.g. `prod`) for a
+   separate environment. Changing `Stage` on an existing stack replaces all its resources (new queue URL/ARN,
+   schedule group, roles, Lambda, log group, app policy): update the app's variables and re-attach the policy.
    `AppUrl` must be reachable from the Lambda; the public URL works.
 4. **IAM**: attach the `AppPolicyArn` output to the IAM user or role the app runs with. It allows sending to
    the queue and managing schedules; the app doesn't read the queue.

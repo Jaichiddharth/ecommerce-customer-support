@@ -385,7 +385,13 @@ const sendWhatsAppTextMessage = async (
 };
 
 /**
- * Send a WhatsApp template message (Marketing, Utility, Auth)
+ * Send a WhatsApp template message (Marketing, Utility, Auth).
+ *
+ * `marketingApi: true` sends through the Marketing Messages API for WhatsApp
+ * (POST /{phone-number-id}/marketing_messages): same body and response as /messages, MARKETING templates only.
+ * With Meta's default product policy (CLOUD_API_FALLBACK), a WABA that hasn't accepted the Marketing Messages
+ * terms is still delivered through Cloud API; status webhooks then report pricing category `marketing` instead of
+ * `marketing_lite`. https://developers.facebook.com/documentation/business-messaging/whatsapp/marketing-messages/send-marketing-messages
  */
 const sendWhatsAppTemplateMessage = async (
   phoneNumberId: string,
@@ -393,12 +399,14 @@ const sendWhatsAppTemplateMessage = async (
   to: string,
   templateName: string,
   languageCode: string = 'en_US',
-  components: Array<Record<string, unknown>> = []
+  components: Array<Record<string, unknown>> = [],
+  options: { marketingApi?: boolean } = {}
 ) => {
-  log.debug('Sending template message', { phoneNumberId, to, templateName, languageCode });
+  const marketingApi = Boolean(options.marketingApi);
+  log.debug('Sending template message', { phoneNumberId, to, templateName, languageCode, marketingApi });
 
   const response = await graphHttp.post(
-    `/${phoneNumberId}/messages`,
+    `/${phoneNumberId}/${marketingApi ? 'marketing_messages' : 'messages'}`,
     {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
@@ -410,7 +418,7 @@ const sendWhatsAppTemplateMessage = async (
         components: components.length > 0 ? components : undefined,
       },
     },
-    { headers: bearer(accessToken), operation: 'whatsapp.send_template' }
+    { headers: bearer(accessToken), operation: marketingApi ? 'whatsapp.send_marketing_template' : 'whatsapp.send_template' }
   );
   return response.data;
 };

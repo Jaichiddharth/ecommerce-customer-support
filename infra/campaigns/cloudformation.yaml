@@ -8,7 +8,7 @@ Description: >
 Parameters:
   Stage:
     Type: String
-    Default: prod
+    Default: dev
     AllowedPattern: "[a-z0-9-]+"
     Description: Environment name (prod, stage, dev…). Used in resource names so environments can share an account.
   AppUrl:

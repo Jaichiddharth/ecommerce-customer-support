@@ -209,6 +209,8 @@ async function sendBatch(campaign: Campaign, claimed: CampaignRecipientRow[]): P
         languageCode: template.language,
         components: buildTemplateSendComponents(template, values),
         templateHeaderSampleOf: headerSampleOf,
+        // Marketing templates go through Meta's Marketing Messages API; utility and others stay on /messages
+        useMarketingApi: String(template.category).toUpperCase() === "MARKETING",
         preloaded: { connections },
         // Campaign sends stay out of the messages table and the inbox; campaign_recipients is their log
         skipHistory: true,

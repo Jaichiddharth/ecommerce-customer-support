@@ -7,7 +7,7 @@ import { toApiError } from '@/lib/api/api-error';
 import { SearchableSelect } from '@/components/ui/SearchableSelect';
 import { WhatsAppChatPreview } from '@/components/templates/WhatsAppChatPreview';
 import { formatPhone } from '@/components/inbox/inbox-types';
-import { fillTemplateText, getTemplateSendBlocker } from '@/lib/whatsapp-templates';
+import { getTemplateSendBlocker } from '@/lib/whatsapp-templates';
 import { inputCls } from '@/components/ui/controls';
 import type { HeaderType, WhatsAppTemplate } from '@/types/templates';
 import { NumberHealth } from './NumberHealth';
@@ -112,6 +112,16 @@ export const StepMessage: React.FC<Props> = ({ message, audience, onChange }) =>
   const values = resolveValues(message.variables, audience?.recipients[0]);
   const find = (type: string) => template?.components.find((c) => c.type === type);
   const header = find('HEADER');
+  // Values by variable key, so the preview can mark which words come from the contact file or fixed text
+  const headerValues: Record<string, string> = {};
+  for (const m of (header?.text ?? '').matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g)) {
+    if (values.header?.trim()) headerValues[m[1]] = values.header;
+  }
+  const bodyValues = Object.fromEntries(
+    Object.entries(values)
+      .filter(([id, v]) => id.startsWith('body:') && v?.trim())
+      .map(([id, v]) => [id.slice(5), v])
+  );
   const headerType: HeaderType =
     header?.format === 'TEXT' || header?.format === 'IMAGE' || header?.format === 'VIDEO' || header?.format === 'DOCUMENT' ? header.format : 'NONE';
   const headerHandle = header?.example?.header_handle?.[0];
@@ -204,9 +214,12 @@ export const StepMessage: React.FC<Props> = ({ message, audience, onChange }) =>
               <WhatsAppChatPreview
                 businessName={message.senderLabel.replace(/\s*\(.*\)$/, '') || 'Your business'}
                 headerType={headerType}
-                headerText={headerType === 'TEXT' ? fillTemplateText(header?.text, values, 'header') : undefined}
+                headerText={headerType === 'TEXT' ? header?.text : undefined}
+                headerValues={headerValues}
                 headerMediaUrl={headerType === 'IMAGE' && headerHandle?.startsWith('http') ? headerHandle : undefined}
-                bodyText={fillTemplateText(find('BODY')?.text, values, 'body')}
+                bodyText={find('BODY')?.text ?? ''}
+                bodyValues={bodyValues}
+                highlightVariables
                 footerText={find('FOOTER')?.text}
                 buttons={(find('BUTTONS')?.buttons ?? []).map((b, i) => ({
                   id: String(i),

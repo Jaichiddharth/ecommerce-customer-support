@@ -759,6 +759,11 @@ export class WhatsAppService {
      * is uploaded to the number the template is sent from, and its media id fills the `header` component.
      */
     templateHeaderSampleOf?: string;
+    /**
+     * Send the template through Meta's Marketing Messages API (/marketing_messages) instead of /messages.
+     * Only for MARKETING templates (Meta rejects other categories there); used by campaigns.
+     */
+    useMarketingApi?: boolean;
     /** The template's buttons, stored so the thread shows them like the customer sees them (display only) */
     templateButtons?: TemplateMessageButton[];
     metadata?: MessageMetadata | null;
@@ -1010,7 +1015,8 @@ export class WhatsAppService {
           cleanTo,
           params.templateName,
           params.languageCode || 'en_US',
-          components
+          components,
+          { marketingApi: params.useMarketingApi }
         );
         storedMediaType = 'template';
 
