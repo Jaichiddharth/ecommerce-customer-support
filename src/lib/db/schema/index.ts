@@ -12,3 +12,4 @@ export * from "./invitations";
 
 export * from "./whatsapp_flows";
 export * from "./automations";
+export * from "./campaigns";

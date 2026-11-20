@@ -44,6 +44,8 @@ import {
 import { apiClient } from '@/lib/api/client';
 import { notifyError } from '@/lib/api/notify';
 import { gooeyToast } from '@/components/ui/goey-toaster';
+import { PhoneNumberInput } from '@/components/ui/PhoneNumberInput';
+import { parsePhone, toE164, type PhoneValue } from '@/lib/phone';
 
 export type TemplateEditorMode = 'create' | 'edit' | 'duplicate';
 
@@ -160,6 +162,35 @@ const FieldProblems: React.FC<{ problems: string[] }> = ({ problems }) =>
       ))}
     </ul>
   );
+
+/**
+ * The call button's number: country picker + number, stored in the form as "+<country code><number>".
+ * Business lines can be landlines or toll-free, so the length isn't capped at the mobile length; Meta's
+ * format check (buttonProblems) still runs on the stored value.
+ */
+const ButtonPhoneInput: React.FC<{ value: string; onChange: (value: string) => void }> = ({ value, onChange }) => {
+  const [phone, setPhone] = useState<PhoneValue>(() => parsePhone(value));
+
+  // Follow changes from outside (e.g. the form was reloaded); while typing, the picked country is kept
+  useEffect(() => {
+    if (value !== toE164(phone)) setPhone((p) => parsePhone(value, p.country));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  return (
+    <PhoneNumberInput
+      size="sm"
+      mono
+      strictLength={false}
+      hint={null}
+      value={phone}
+      onChange={(next) => {
+        setPhone(next);
+        onChange(toE164(next));
+      }}
+    />
+  );
+};
 
 /** Meta template → editor form (samples are read back from the `example` blocks) */
 function templateToForm(tpl: WhatsAppTemplate, mode: TemplateEditorMode): FormState {
@@ -909,13 +940,9 @@ export const TemplateEditorView: React.FC<TemplateEditorViewProps> = ({
                   )}
 
                   {btn.type === 'PHONE_NUMBER' && (
-                    <CountedInput
-                      type="tel"
+                    <ButtonPhoneInput
                       value={btn.phone_number ?? ''}
-                      max={TEMPLATE_LIMITS.phoneNumber}
-                      onChange={(e) => updateButton(btn.id, { phone_number: e.target.value })}
-                      placeholder="+919876543210"
-                      className="font-mono text-xs"
+                      onChange={(phone_number) => updateButton(btn.id, { phone_number })}
                     />
                   )}
 
