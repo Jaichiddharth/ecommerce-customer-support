@@ -256,6 +256,10 @@ export class CampaignRepository {
   /**
    * Claims the next due pending recipients in file order: moved to `sending` with a lease and one more
    * attempt, in one statement. SKIP LOCKED keeps two workers from ever claiming the same row.
+   *
+   * The ids are taken with `= ANY(ARRAY(subquery))`, not `IN (subquery)`: Postgres evaluates ARRAY(...) once,
+   * up front, whereas an `IN (... LIMIT n FOR UPDATE SKIP LOCKED)` subquery can be re-run during the update and
+   * claim more than `n` rows (it claimed the whole list), which broke the one-contact-per-tick pacing.
    */
   async claimDue(campaignId: number, limit: number, lockedUntil: Date): Promise<CampaignRecipientRow[]> {
     const now = new Date();
@@ -280,7 +284,7 @@ export class CampaignRepository {
         attempts: sql`${campaignRecipients.attempts} + 1`,
         updatedAt: now,
       })
-      .where(and(inArray(campaignRecipients.id, due), eq(campaignRecipients.status, RecipientStatus.PENDING)))
+      .where(and(sql`${campaignRecipients.id} = ANY(ARRAY(${due}))`, eq(campaignRecipients.status, RecipientStatus.PENDING)))
       .returning();
   }
 
