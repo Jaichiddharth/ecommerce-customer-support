@@ -85,12 +85,12 @@ export class UserService {
       slug: workspaceSlug,
     });
 
-    // First user in the workspace is always ADMIN
+    // First user in the workspace is always OWNER
     return await userRepository.create({
       organizationId: org.id,
       email,
       name: profile.name || decodedToken.name || email.split("@")[0] || "Team Member",
-      role: "ADMIN",
+      role: "OWNER",
       avatarUrl: profile.avatarUrl ?? (decodedToken.picture as string | undefined) ?? null,
       isOnline: true,
       firebaseIdToken: uid,

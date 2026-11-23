@@ -5,12 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { auth, googleProvider } from '@/lib/firebase/config';
 import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
   signInWithPopup,
   signOut,
-  updateProfile,
-  sendEmailVerification,
 } from 'firebase/auth';
 import {
   ShieldCheck,
@@ -23,8 +19,6 @@ import {
   Building2,
   UserCheck,
   ArrowRight,
-  Eye,
-  EyeOff,
   Sparkles,
   KeyRound,
   Store,
@@ -72,10 +66,6 @@ export default function AcceptInvitePage({ params }: { params: Promise<{ token: 
   const [invalidReason, setInvalidReason] = useState<string | null>(null);
 
   // Form states
-  const [password, setPassword] = useState('');
-  const [showPw, setShowPw] = useState(false);
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -229,78 +219,11 @@ export default function AcceptInvitePage({ params }: { params: Promise<{ token: 
       return;
     }
 
-    const isPrivileged = invitation.role === 'ADMIN' || invitation.role === 'OWNER';
+    const isPrivileged = invitation.role === 'OWNER';
     if (isPrivileged) {
       await start2FASetup();
     } else {
       await completeAcceptance(false);
-    }
-  };
-
-  // Handle Sign In with Password
-  const handleSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!invitation) return;
-    setFormError(null);
-
-    if (!password) {
-      setFormError('Please enter your password.');
-      return;
-    }
-
-    try {
-      setIsSubmitting(true);
-      const cred = await signInWithEmailAndPassword(auth, invitation.email, password);
-      if (!cred.user.emailVerified) {
-        setFormError('Please verify your email address before signing in.');
-        return;
-      }
-      await handleAuthenticatedUser();
-    } catch (err: any) {
-      let msg = 'Incorrect password or sign-in issue.';
-      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        msg = 'Incorrect password. Please try again.';
-      } else if (err.code === 'auth/too-many-requests') {
-        msg = 'Too many failed login attempts. Please reset your password or try again later.';
-      }
-      setFormError(msg);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Handle Sign Up with Password
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!invitation) return;
-    setFormError(null);
-
-    if (!firstName.trim() || !lastName.trim()) {
-      setFormError('Please enter your first and last name.');
-      return;
-    }
-
-    if (password.length < 8 || !/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
-      setFormError('Password must be at least 8 characters and contain both letters and numbers.');
-      return;
-    }
-
-    try {
-      setIsSubmitting(true);
-      const fullName = `${firstName.trim()} ${lastName.trim()}`;
-      const cred = await createUserWithEmailAndPassword(auth, invitation.email, password);
-      await updateProfile(cred.user, { displayName: fullName });
-      await sendEmailVerification(cred.user);
-      setEmailVerificationSent(true);
-      gooeyToast.success('Verification email sent! Check your inbox.');
-    } catch (err: any) {
-      let msg = err.message || 'Could not create account.';
-      if (err.code === 'auth/email-already-in-use') {
-        msg = 'An account already exists for this email. Please sign in instead.';
-      }
-      setFormError(msg);
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -442,7 +365,7 @@ export default function AcceptInvitePage({ params }: { params: Promise<{ token: 
             <div>
               <h1 className="text-lg font-bold text-slate-900">2-Step Verification Required</h1>
               <p className="text-xs text-slate-500">
-                Administrators and Owners must configure an authenticator app before entering.
+                Workspace Owners must configure an authenticator app before entering.
               </p>
             </div>
           </div>
@@ -721,26 +644,22 @@ export default function AcceptInvitePage({ params }: { params: Promise<{ token: 
             </div>
           )}
 
-          {/* Not Signed In: Show Sign-in or Sign-up */}
+          {/* Not Signed In: Show Google Sign-in */}
           {!authUser && (
             <div>
               <div className="mb-6">
-                <h2 className="text-xl font-bold text-slate-900">
-                  {invitation.accountExists ? 'Sign in to accept' : 'Create account to join'}
-                </h2>
+                <h2 className="text-xl font-bold text-slate-900">Sign in to join</h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  {invitation.accountExists
-                    ? `Sign in with ${invitation.email} to join the workspace.`
-                    : `Complete your profile for ${invitation.email} to join.`}
+                  Sign in with {invitation.email} to join the workspace.
                 </p>
               </div>
 
-              {/* Google Sign In / Sign Up */}
+              {/* Google Sign In */}
               <button
                 type="button"
                 onClick={handleGoogleAuth}
                 disabled={googleLoading || isSubmitting}
-                className="w-full h-10 px-4 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors flex items-center justify-center gap-2.5 cursor-pointer shadow-2xs mb-5"
+                className="w-full h-11 px-4 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors flex items-center justify-center gap-2.5 cursor-pointer shadow-2xs"
               >
                 {googleLoading ? (
                   <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
@@ -766,132 +685,6 @@ export default function AcceptInvitePage({ params }: { params: Promise<{ token: 
                 )}
                 Continue with Google ({invitation.email})
               </button>
-
-              <div className="relative mb-5 text-center">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-slate-200" />
-                </div>
-                <span className="relative bg-white px-3 text-[11px] font-medium text-slate-400 uppercase">
-                  or with password
-                </span>
-              </div>
-
-              {/* Form: Sign In vs Sign Up */}
-              {invitation.accountExists ? (
-                /* Existing user: Sign In Form */
-                <form onSubmit={handleSignIn} className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Work Email</label>
-                    <input
-                      type="email"
-                      disabled
-                      value={invitation.email}
-                      className="w-full px-3 py-2 text-xs bg-slate-100 border border-slate-200 rounded-xl text-slate-500 cursor-not-allowed select-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Password</label>
-                    <div className="relative">
-                      <input
-                        type={showPw ? 'text' : 'password'}
-                        required
-                        placeholder="••••••••"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="w-full px-3 py-2 pr-10 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:border-[#1e2a78] focus:ring-1 focus:ring-[#1e2a78]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPw(!showPw)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
-                      >
-                        {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="w-full py-2.5 bg-[#1e2a78] hover:bg-[#16205e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Sign in & Join Workspace
-                  </button>
-                </form>
-              ) : (
-                /* New user: Sign Up Form */
-                <form onSubmit={handleSignUp} className="space-y-4">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">First name *</label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="Divya"
-                        value={firstName}
-                        onChange={(e) => setFirstName(e.target.value)}
-                        className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:border-[#1e2a78] focus:ring-1 focus:ring-[#1e2a78]"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Last name *</label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="V."
-                        value={lastName}
-                        onChange={(e) => setLastName(e.target.value)}
-                        className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:border-[#1e2a78] focus:ring-1 focus:ring-[#1e2a78]"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Work Email</label>
-                    <input
-                      type="email"
-                      disabled
-                      value={invitation.email}
-                      className="w-full px-3 py-2 text-xs bg-slate-100 border border-slate-200 rounded-xl text-slate-500 cursor-not-allowed select-none"
-                    />
-                    <p className="text-[10px] text-slate-400 mt-0.5">
-                      Locked to the invited email address.
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Create Password *</label>
-                    <div className="relative">
-                      <input
-                        type={showPw ? 'text' : 'password'}
-                        required
-                        placeholder="At least 8 characters (letters + numbers)"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="w-full px-3 py-2 pr-10 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:border-[#1e2a78] focus:ring-1 focus:ring-[#1e2a78]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPw(!showPw)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
-                      >
-                        {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="w-full py-2.5 bg-[#1e2a78] hover:bg-[#16205e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Create Account & Join
-                  </button>
-                </form>
-              )}
             </div>
           )}
         </div>
