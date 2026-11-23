@@ -6,6 +6,8 @@ import { AlertTriangle, ArrowLeft, CheckCheck, Clock, Eye, Lock, RefreshCw, Send
 import { secondaryBtn } from '@/components/ui/controls';
 import { DataTable, createColumnHelper, useServerTable, type FilterDef } from '@/components/ui/data-table';
 import { mappableFields } from '@/lib/campaigns/message';
+import { messageFailureSummary } from '@/lib/errors/meta-errors';
+import { MessageIssuePopover } from '@/components/ui/MessageIssuePopover';
 import type { CampaignRecipientDto } from '@/lib/services/campaign.service';
 import { useCampaignActions } from './campaign-actions';
 import { getCampaign, listCampaignRecipients } from './campaign-store';
@@ -27,6 +29,23 @@ function shortTime(iso: string | null, timeZone: string): string {
   } catch {
     return new Date(iso).toLocaleString();
   }
+}
+
+/**
+ * Status badge plus a one-line summary of the problem; hovering (or focusing) it shows the whole issue (same
+ * popover as a failed message in the inbox). Rows that only stored a code get their text from the catalog.
+ */
+function RecipientIssue({ recipient: r, badge }: { recipient: CampaignRecipientDto; badge: { label: string; className: string } }) {
+  const { label } = messageFailureSummary(r.errorCode, r.errorMessage);
+  return (
+    <MessageIssuePopover errorCode={r.errorCode} errorMessage={r.errorMessage} badge={badge} className="flex flex-col items-start gap-0.5">
+      <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-md border whitespace-nowrap ${badge.className}`}>{badge.label}</span>
+      <span className="text-[10px] leading-snug text-slate-600 line-clamp-2">
+        {r.errorCode ? `${r.errorCode} · ` : ''}
+        {label}
+      </span>
+    </MessageIssuePopover>
+  );
 }
 
 const RECIPIENT_STATUS: Record<CampaignRecipientDto['status'], { label: string; className: string }> = {
@@ -132,12 +151,10 @@ export const CampaignDetails: React.FC<{ initial: Campaign }> = ({ initial }) =>
         const s = RECIPIENT_STATUS[r.status];
         return (
           <div className="flex flex-col items-start gap-0.5 max-w-[260px]">
-            <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-md border whitespace-nowrap ${s.className}`}>{s.label}</span>
-            {(r.status === 'failed' || r.status === 'unknown' || r.status === 'skipped') && (r.errorMessage || r.errorCode) && (
-              <span className="text-[10px] leading-snug text-slate-500 line-clamp-2" title={r.errorMessage ?? undefined}>
-                {r.errorCode ? `${r.errorCode} · ` : ''}
-                {r.errorMessage ?? ''}
-              </span>
+            {(r.status === 'failed' || r.status === 'unknown' || r.status === 'skipped') && (r.errorMessage || r.errorCode) ? (
+              <RecipientIssue recipient={r} badge={s} />
+            ) : (
+              <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-md border whitespace-nowrap ${s.className}`}>{s.label}</span>
             )}
             {r.status === 'pending' && r.attempts > 0 && <span className="text-[10px] text-slate-400">Retry {r.attempts + 1} pending</span>}
           </div>

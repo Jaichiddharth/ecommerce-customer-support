@@ -13,7 +13,7 @@ import { mapLimit } from "@/lib/concurrency";
 import { createLogger } from "@/lib/logger";
 import { enqueue, isSchedulerConfigured, MAX_DELAY_SECONDS, type CampaignQueueMessage } from "./aws";
 import { classifySendError, countsAsFailure } from "./errors";
-import { resolveValues } from "./message";
+import { emptyFieldsFor, resolveValues } from "./message";
 
 /**
  * Campaign sending. One "tick chain" per running campaign: each tick claims the next recipients, sends them,
@@ -197,6 +197,17 @@ async function sendBatch(campaign: Campaign, claimed: CampaignRecipientRow[]): P
 
     try {
       const values = resolveValues(campaign.variables, recipient);
+      // An empty variable would be rejected by Meta (131008): don't send, and don't count it toward the
+      // "failures in a row" pause, since it's this contact's data, not a problem with the campaign
+      const empty = emptyFieldsFor(template, campaign.variables, values);
+      if (empty.length) {
+        await campaignRepository.settle(recipient.id, {
+          status: RecipientStatus.FAILED,
+          errorCode: null,
+          errorMessage: `Not sent: no value for ${empty.map((f) => f.label).join(", ")} (the mapped column is empty for this contact).`,
+        });
+        return;
+      }
       const result = await whatsAppService.sendMessage({
         organizationId: campaign.organizationId,
         channelId: campaign.channelId ?? undefined,

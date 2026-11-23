@@ -93,3 +93,16 @@ export function describeMessageFailure(metaCode?: number | null): string {
   if (!metaCode) return "The message could not be delivered.";
   return getMetaErrorInfo(metaCode)?.userMessage ?? `The message could not be delivered (WhatsApp error ${metaCode}).`;
 }
+
+/**
+ * Short label and hover text for a failed message, the same in the inbox and the campaign contacts table:
+ * label "Payment Configuration Error", tooltip "Payment Configuration Error — <what happened> — (WhatsApp error 131042)".
+ */
+export function messageFailureSummary(metaCode?: number | null, storedMessage?: string | null): { label: string; tooltip: string } {
+  const info = getMetaErrorInfo(metaCode);
+  const reason = storedMessage?.trim() || describeMessageFailure(metaCode);
+  return {
+    label: info?.title ?? reason,
+    tooltip: [info?.title, reason, metaCode ? `(WhatsApp error ${metaCode})` : null].filter(Boolean).join(" — "),
+  };
+}

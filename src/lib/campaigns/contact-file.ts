@@ -39,6 +39,11 @@ export interface AudienceSummary {
   duplicates: number;
   /** Recipients whose country code came from `defaultCountry` */
   countryAdded: number;
+  /**
+   * Recipients with an empty cell, per column (columns with none are left out). Missing on audiences imported
+   * before this was added.
+   */
+  emptyCells?: Record<string, number>;
 }
 
 /** A full import: the summary plus every valid recipient */
@@ -202,6 +207,13 @@ export function buildAudience(
     recipients.push({ phone: e164, fields, ...(added ? { countryAdded: true } : {}) });
   });
 
+  // Empty cells among the contacts that will be sent to, so the variable mapping can warn about them
+  const emptyCells: Record<string, number> = {};
+  for (const col of sheet.columns) {
+    const empty = recipients.reduce((n, r) => (r.fields[col]?.trim() ? n : n + 1), 0);
+    if (empty > 0) emptyCells[col] = empty;
+  }
+
   return {
     fileName: meta.fileName,
     fileSize: meta.fileSize,
@@ -215,6 +227,7 @@ export function buildAudience(
     rejected,
     duplicates,
     countryAdded,
+    emptyCells,
   };
 }
 

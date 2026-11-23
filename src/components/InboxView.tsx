@@ -46,7 +46,8 @@ import { ApiError, toApiError } from '@/lib/api/api-error';
 import { notifyError, notifyWarning } from '@/lib/api/notify';
 import { clientLogger } from '@/lib/client-logger';
 import { ErrorState } from '@/components/ui/states';
-import { describeMessageFailure, getMetaErrorInfo } from '@/lib/errors/meta-errors';
+import { messageFailureSummary } from '@/lib/errors/meta-errors';
+import { MessageIssuePopover } from '@/components/ui/MessageIssuePopover';
 import { validateWhatsAppMedia } from '@/lib/media-limits';
 import { formatElapsedDuration } from '@/lib/utils';
 import { ChannelsPane } from './inbox/ChannelsPane';
@@ -93,6 +94,9 @@ import { emptyPhone, parsePhone, phoneError as getPhoneError, toPhoneDigits, typ
 import { AssigneeMenu } from './inbox/AssigneeMenu';
 import type { TicketCredits } from '@/types/ticket';
 
+/** Badge at the top of a failed message's explanation popover (same look as the campaign contacts table) */
+const FAILED_BADGE = { label: 'Failed', className: 'bg-red-50 text-red-600 border-red-200' };
+
 /**
  * Render Status Indicator for an outbound message
  * 0 (Sent): Single check
@@ -122,17 +126,17 @@ const renderMessageStatusIndicator = (statusVal: unknown, errorCode?: number | n
         </span>
       );
     case MessageStatus.FAILED: { // short reason on the badge, full explanation on hover
-      const info = getMetaErrorInfo(errorCode);
-      const reason = errorMessage || describeMessageFailure(errorCode);
-      const tooltip = [info?.title, reason, errorCode ? `(WhatsApp error ${errorCode})` : null].filter(Boolean).join(' — ');
+      const { label } = messageFailureSummary(errorCode, errorMessage);
       return (
-        <span
-          title={tooltip}
-          className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 cursor-help max-w-[240px]"
+        <MessageIssuePopover
+          errorCode={errorCode}
+          errorMessage={errorMessage}
+          badge={FAILED_BADGE}
+          className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 max-w-[240px]"
         >
           <AlertCircle className="w-3 h-3 shrink-0" />
-          <span className="truncate">Failed · {info?.title ?? reason}</span>
-        </span>
+          <span className="truncate">Failed · {label}</span>
+        </MessageIssuePopover>
       );
     }
     default:
