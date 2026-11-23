@@ -28,6 +28,16 @@ export class OrganizationRepository {
     return org;
   }
 
+  /** Updates the workspace's editable details (currently its display name). */
+  async updateDetails(id: number, details: { name: string }): Promise<Organization | null> {
+    const [updated] = await db
+      .update(organizations)
+      .set({ name: details.name, updatedAt: new Date() })
+      .where(eq(organizations.id, id))
+      .returning();
+    return updated || null;
+  }
+
   async updatePermissions(id: number, permissions: Record<string, unknown>): Promise<Organization | null> {
     const [updated] = await db
       .update(organizations)
