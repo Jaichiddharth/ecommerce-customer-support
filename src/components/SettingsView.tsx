@@ -45,6 +45,7 @@ import type { ShopifyChannelStoreStatus, ShopifyStoreInfo } from '@/lib/shopify/
 import { TeamRolesSection } from './settings/TeamRolesSection';
 import { ConsentPrivacySection } from './settings/ConsentPrivacySection';
 import { RoutingHoursSection } from './settings/RoutingHoursSection';
+import { GeneralSection } from './settings/GeneralSection';
 
 interface DetailField {
   icon: React.ReactNode;
@@ -535,7 +536,7 @@ type Section = 'general' | 'channels' | 'team' | 'routing' | 'consent' | 'langua
 
 /** Sections with `soon` are listed but open a "coming soon" panel */
 const SECTIONS: { key: Section; label: string; subtitle: string; icon: LucideIcon; soon?: boolean }[] = [
-  { key: 'general', label: 'General', subtitle: 'Workspace name, timezone and notification preferences.', icon: Settings, soon: true },
+  { key: 'general', label: 'General', subtitle: 'Workspace name and the details your team shares.', icon: Settings },
   { key: 'channels', label: 'Channels', subtitle: 'Connect the messaging accounts your team replies from and manage the ones already connected', icon: Layers },
   { key: 'team', label: 'Team & roles', subtitle: 'Invite teammates, assign roles and control who can reply.', icon: Users },
   { key: 'routing', label: 'Routing & hours', subtitle: 'Assign conversations automatically and set business hours and away messages.', icon: Route },
@@ -689,6 +690,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
           ) : (
             <>
               {active.soon && <ComingSoonSection icon={active.icon} title={active.label} description={active.subtitle} />}
+              {activeSection === 'general' && <GeneralSection />}
               {activeSection === 'channels' && (
                 <>
                   <p className="px-8 pt-2 pb-5 text-xs text-slate-500">{active.subtitle}</p>
