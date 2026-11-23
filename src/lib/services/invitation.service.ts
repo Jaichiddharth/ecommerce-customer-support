@@ -364,11 +364,11 @@ export class InvitationService {
       });
     }
 
-    // Role check: Admins and Owners must set up 2-step verification before entering
-    const isPrivileged = invitation.role === "ADMIN" || invitation.role === "OWNER";
+    // Role check: Only Workspace Owners must set up 2-step verification before entering (no authenticator required for Admins)
+    const isPrivileged = invitation.role === "OWNER";
     if (isPrivileged && !twoFactorVerified) {
       throw new AppError("FORBIDDEN", {
-        message: "Administrators and Owners are required to set up 2-step verification before entering the workspace.",
+        message: "Workspace Owners are required to set up 2-step verification before entering the workspace.",
         details: { requiresTwoFactor: true },
         expected: true,
       });
