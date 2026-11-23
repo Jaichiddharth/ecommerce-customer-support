@@ -186,7 +186,10 @@ function parseVariables(value: unknown): Record<string, CampaignVariableSource> 
   const out: Record<string, CampaignVariableSource> = {};
   for (const [id, source] of Object.entries(value as Record<string, any>)) {
     if (!/^(header|header_media|body:[\w]+|button:\d+)$/.test(id)) continue;
-    if (source?.type === "column" && typeof source.column === "string") out[id] = { type: "column", column: source.column.slice(0, 200) };
+    if (source?.type === "column" && typeof source.column === "string") {
+      const fallback = typeof source.fallback === "string" ? source.fallback.slice(0, 1000) : "";
+      out[id] = { type: "column", column: source.column.slice(0, 200), ...(fallback ? { fallback } : {}) };
+    }
     else if (source?.type === "text" && typeof source.value === "string") out[id] = { type: "text", value: source.value.slice(0, 1000) };
   }
   return out;
@@ -365,8 +368,13 @@ export class CampaignService {
 
     await resolveChannel(organizationId, campaign.phoneNumberId!);
     const template = await this.currentTemplate(organizationId, campaign.phoneNumberId!, campaign.template!);
-    const missing = unmappedFields(template, campaign.variables ?? {});
-    if (missing.length) throw AppError.validation(`Fill these template variables: ${missing.map((f) => f.label).join(", ")}.`, "variables");
+    const missing = unmappedFields(template, campaign.variables ?? {}, campaign.audience?.emptyCells);
+    if (missing.length) {
+      throw AppError.validation(
+        `Fill these template variables: ${missing.map((f) => f.label).join(", ")}. A column that is empty for some contacts needs a value to use when empty.`,
+        "variables"
+      );
+    }
     const columns = new Set(campaign.audience?.columns ?? []);
     const badColumn = Object.values(campaign.variables ?? {}).find((v) => v.type === "column" && !columns.has(v.column));
     if (badColumn?.type === "column") throw AppError.validation(`The column "${badColumn.column}" isn't in the contact file anymore.`, "variables");

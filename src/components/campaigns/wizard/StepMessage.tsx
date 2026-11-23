@@ -11,8 +11,8 @@ import { getTemplateSendBlocker } from '@/lib/whatsapp-templates';
 import { inputCls } from '@/components/ui/controls';
 import type { HeaderType, WhatsAppTemplate } from '@/types/templates';
 import { NumberHealth } from './NumberHealth';
-import { autoMapVariables, mappableFields, resolveValues } from '@/lib/campaigns/message';
-import { FieldLabel, SectionCard } from '../ui';
+import { autoMapVariables, emptyCellCount, mappableFields, resolveValues } from '@/lib/campaigns/message';
+import { FieldLabel, SectionCard, formatNumber } from '../ui';
 import type { CampaignAudience, CampaignMessage, VariableSource } from '../types';
 
 interface Sender {
@@ -92,6 +92,13 @@ export const StepMessage: React.FC<Props> = ({ message, audience, onChange }) =>
   const fields = useMemo(() => mappableFields(template), [template]);
   const mediaField = template?.components.find((c) => c.type === 'HEADER' && c.format && c.format !== 'TEXT');
   const columns = audience?.columns ?? [];
+  const emptyCells = audience?.emptyCells;
+  const totalContacts = audience?.recipientCount ?? 0;
+  const columnLabel = (c: string) => {
+    const empty = emptyCells?.[c] ?? 0;
+    if (!empty) return c;
+    return empty >= totalContacts ? `${c} (empty column)` : `${c} (${formatNumber(empty)} empty)`;
+  };
 
   const pickSender = (phoneNumberId: string) => {
     const s = senders?.find((x) => x.phoneNumberId === phoneNumberId);
@@ -243,7 +250,10 @@ export const StepMessage: React.FC<Props> = ({ message, audience, onChange }) =>
                 <div className="space-y-3">
                   {fields.map((field) => {
                     const source = message.variables[field.id];
-                    const mapped = source && (source.type === 'column' ? Boolean(source.column) : Boolean(source.value.trim()));
+                    const empty = emptyCellCount(source, emptyCells);
+                    const needsFallback = empty > 0 && source?.type === 'column' && !source.fallback?.trim();
+                    const mapped =
+                      source && (source.type === 'column' ? Boolean(source.column) && !needsFallback : Boolean(source.value.trim()));
                     return (
                       <div key={field.id} className={`p-3 rounded-xl border ${mapped ? 'border-slate-200' : 'border-amber-200 bg-amber-50/30'}`}>
                         <div className="flex items-center justify-between gap-2 mb-1.5">
@@ -257,14 +267,24 @@ export const StepMessage: React.FC<Props> = ({ message, audience, onChange }) =>
                           className={`${inputCls} cursor-pointer`}
                           value={source?.type === 'text' ? TEXT_SOURCE : source?.column ?? ''}
                           onChange={(e) =>
-                            setVariable(field.id, e.target.value === TEXT_SOURCE ? { type: 'text', value: '' } : { type: 'column', column: e.target.value })
+                            setVariable(
+                              field.id,
+                              e.target.value === TEXT_SOURCE
+                                ? { type: 'text', value: '' }
+                                : {
+                                    type: 'column',
+                                    column: e.target.value,
+                                    // Keep a fallback already typed when switching to another column
+                                    ...(source?.type === 'column' && source.fallback ? { fallback: source.fallback } : {}),
+                                  }
+                            )
                           }
                         >
                           <option value="">Choose a column…</option>
                           <optgroup label="Columns in your file">
                             {columns.map((c) => (
                               <option key={c} value={c}>
-                                {c}
+                                {columnLabel(c)}
                               </option>
                             ))}
                           </optgroup>
@@ -280,6 +300,24 @@ export const StepMessage: React.FC<Props> = ({ message, audience, onChange }) =>
                               value={source.value}
                               placeholder={field.example ?? 'Value'}
                               onChange={(e) => setVariable(field.id, { type: 'text', value: e.target.value })}
+                            />
+                          </div>
+                        )}
+                        {source?.type === 'column' && empty > 0 && (
+                          <div className="mt-2">
+                            <p className={`mb-1 text-[11px] flex items-start gap-1.5 ${needsFallback ? 'text-amber-800' : 'text-slate-500'}`}>
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                              {empty >= totalContacts
+                                ? `"${source.column}" is empty for every contact.`
+                                : `"${source.column}" is empty for ${formatNumber(empty)} of ${formatNumber(totalContacts)} contacts.`}{' '}
+                              WhatsApp rejects a message with an empty variable, so enter what to send instead.
+                            </p>
+                            <input
+                              className={inputCls}
+                              value={source.fallback ?? ''}
+                              placeholder={`Value when empty, e.g. ${field.example ?? 'Customer'}`}
+                              aria-label={`Value for ${field.label} when the column is empty`}
+                              onChange={(e) => setVariable(field.id, { ...source, fallback: e.target.value })}
                             />
                           </div>
                         )}

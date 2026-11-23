@@ -58,8 +58,11 @@ export const RecipientStatus = {
 } as const;
 export type RecipientStatus = (typeof RecipientStatus)[keyof typeof RecipientStatus];
 
-/** Where a template variable gets its value: a column of the file, or the same text for everyone */
-export type CampaignVariableSource = { type: "column"; column: string } | { type: "text"; value: string };
+/**
+ * Where a template variable gets its value: a column of the file, or the same text for everyone.
+ * `fallback` is sent to contacts whose cell in that column is empty (Meta rejects empty parameters with 131008).
+ */
+export type CampaignVariableSource = { type: "column"; column: string; fallback?: string } | { type: "text"; value: string };
 
 export const campaigns = pgTable(
   "campaigns",

@@ -6,7 +6,8 @@ import { AlertTriangle, ArrowLeft, CheckCheck, Clock, Eye, Lock, RefreshCw, Send
 import { secondaryBtn } from '@/components/ui/controls';
 import { DataTable, createColumnHelper, useServerTable, type FilterDef } from '@/components/ui/data-table';
 import { mappableFields } from '@/lib/campaigns/message';
-import { getMetaErrorInfo } from '@/lib/errors/meta-errors';
+import { messageFailureSummary } from '@/lib/errors/meta-errors';
+import { MessageIssuePopover } from '@/components/ui/MessageIssuePopover';
 import type { CampaignRecipientDto } from '@/lib/services/campaign.service';
 import { useCampaignActions } from './campaign-actions';
 import { getCampaign, listCampaignRecipients } from './campaign-store';
@@ -31,67 +32,19 @@ function shortTime(iso: string | null, timeZone: string): string {
 }
 
 /**
- * Status badge plus a one-line summary of the problem; hovering (or focusing) it shows the whole issue: Meta's code,
- * the catalog's title, message, cause and fix. Rows that only stored a code get their text from the catalog.
- * The popover is `position: fixed` so the table's scroll container doesn't clip it.
+ * Status badge plus a one-line summary of the problem; hovering (or focusing) it shows the whole issue (same
+ * popover as a failed message in the inbox). Rows that only stored a code get their text from the catalog.
  */
 function RecipientIssue({ recipient: r, badge }: { recipient: CampaignRecipientDto; badge: { label: string; className: string } }) {
-  const [pos, setPos] = useState<{ top: number; left: number; above: boolean } | null>(null);
-  const info = getMetaErrorInfo(r.errorCode);
-  const message = r.errorMessage || info?.userMessage || (r.errorCode ? `WhatsApp error ${r.errorCode}.` : '');
-
-  const show = (e: React.SyntheticEvent<HTMLElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const width = 320;
-    const above = rect.bottom + 240 > window.innerHeight;
-    setPos({
-      top: above ? rect.top - 6 : rect.bottom + 6,
-      left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
-      above,
-    });
-  };
-
+  const { label } = messageFailureSummary(r.errorCode, r.errorMessage);
   return (
-    <div
-      className="flex flex-col items-start gap-0.5 cursor-help outline-none"
-      tabIndex={0}
-      onMouseEnter={show}
-      onMouseLeave={() => setPos(null)}
-      onFocus={show}
-      onBlur={() => setPos(null)}
-    >
+    <MessageIssuePopover errorCode={r.errorCode} errorMessage={r.errorMessage} badge={badge} className="flex flex-col items-start gap-0.5">
       <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-md border whitespace-nowrap ${badge.className}`}>{badge.label}</span>
       <span className="text-[10px] leading-snug text-slate-600 line-clamp-2">
         {r.errorCode ? `${r.errorCode} · ` : ''}
-        {info?.title ?? message}
+        {label}
       </span>
-      {pos && (
-        <div
-          role="tooltip"
-          className="fixed z-50 w-[320px] rounded-lg border border-slate-200 bg-white p-3 shadow-lg text-left whitespace-normal"
-          style={{ top: pos.top, left: pos.left, transform: pos.above ? 'translateY(-100%)' : undefined }}
-        >
-          <div className="flex items-center gap-2 mb-1.5">
-            <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-md border ${badge.className}`}>{badge.label}</span>
-            {r.errorCode ? <span className="font-mono text-[11px] text-slate-700">Error {r.errorCode}</span> : null}
-          </div>
-          {info?.title && <p className="text-[12px] font-semibold text-slate-900 mb-1">{info.title}</p>}
-          {message && <p className="text-[12px] leading-snug text-slate-800">{message}</p>}
-          {info?.description && info.description !== message && (
-            <p className="mt-2 text-[11px] leading-snug text-slate-700">
-              <span className="font-semibold text-slate-900">Why: </span>
-              {info.description}
-            </p>
-          )}
-          {info?.solution && (
-            <p className="mt-1.5 text-[11px] leading-snug text-slate-700">
-              <span className="font-semibold text-slate-900">What to do: </span>
-              {info.solution}
-            </p>
-          )}
-        </div>
-      )}
-    </div>
+    </MessageIssuePopover>
   );
 }
 

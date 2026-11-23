@@ -38,7 +38,7 @@ interface LaunchCheck {
 /** What still blocks each step; Continue and Schedule stay disabled until they pass (the server re-checks) */
 function getChecks(c: Campaign): LaunchCheck[] {
   const recipients = c.recipientCount;
-  const missing = unmappedFields(c.message.template, c.message.variables);
+  const missing = unmappedFields(c.message.template, c.message.variables, c.audience?.emptyCells);
   const sendAt = c.schedule.sendAt ? new Date(c.schedule.sendAt).getTime() : null;
   const interval = c.schedule.intervalSeconds;
   return [
