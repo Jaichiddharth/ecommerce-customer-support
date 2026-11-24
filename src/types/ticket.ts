@@ -19,6 +19,8 @@ export type TicketEventAction =
   /** The AI agent was turned on / paused for the conversation */
   | 'ai_on'
   | 'ai_off'
+  /** The AI agent (an automation's AI Agent Reply step) handed the conversation to the team */
+  | 'ai_handover'
   /** A teammate's first reply made the ticket billable (one ticket credit) */
   | 'billable';
 
@@ -37,6 +39,8 @@ export interface TicketEvent {
   assigneeName?: string | null;
   assignReason?: TicketAssignReason;
   previousStatus?: string | null;
+  /** ai_handover: why the agent handed over, readable ("Refund request") */
+  reason?: string | null;
   status?: string | null;
   /** ISO 8601 */
   occurredAt: string;

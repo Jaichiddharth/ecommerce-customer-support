@@ -120,6 +120,41 @@
       "when": 1794987418533,
       "tag": "0017_campaigns_one_active_per_org",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1795000000000,
+      "tag": "0013_ai_agent",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795600000000,
+      "tag": "0014_ai_widget_byo",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795700000000,
+      "tag": "0015_ai_sample_data",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1795800000000,
+      "tag": "0016_rate_limits",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1795900000000,
+      "tag": "0017_webchat_channel",
+      "breakpoints": true
     }
   ]
 }

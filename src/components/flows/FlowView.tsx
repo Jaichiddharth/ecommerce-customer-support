@@ -33,7 +33,7 @@ import { DRAG_TYPE } from './NodeCatalogList';
 import { BuilderContext, type BuilderActions, type PickerRequest } from './builder-context';
 import { themeOf } from './palette-config';
 import {
-  END_SIZE, NODE_WIDTH, STEP_GAP_Y, appendAfter, createNode, freeHandles, insertOnEdge, newEdgeId, styleEdge,
+  END_SIZE, NODE_WIDTH, STEP_GAP_Y, appendAfter, createNode, freeHandles, insertOnEdge, newEdgeId, styleEdge, isBranchHandle,
 } from './graph-ops';
 import type { AutomationNodeData, WorkflowGraph } from './flow-types';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
@@ -389,8 +389,8 @@ function FlowEditor({ initial, onBack, onCreated }: { initial: LoadedAutomation 
       // Triggers cannot receive connections (no incoming)
       if (targetType.startsWith('trigger_')) return false;
 
-      // Each TRUE/FALSE handle may only have one outgoing edge
-      if (sourceHandle === 'true' || sourceHandle === 'false') {
+      // Each named output (True/False, Replied/Handover) may only have one outgoing edge
+      if (isBranchHandle(sourceHandle)) {
         const alreadyUsed = edges.some(
           (e) => e.source === source && e.sourceHandle === sourceHandle,
         );

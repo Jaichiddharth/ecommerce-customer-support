@@ -1,6 +1,7 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react';
 import type { AutomationNodeData } from './flow-types';
 import { getPaletteItem } from './palette-config';
+import { BRANCH_OUTPUTS } from '@/lib/automation/validate';
 
 /**
  * Pure helpers for the builder's graph: edge styling, new nodes and the geometry used when a step
@@ -23,9 +24,18 @@ export const EDGE_COLORS = {
   selected: '#3440a8',
 } as const;
 
-export type BranchHandle = 'true' | 'false';
+/** Named outputs: True/False of If / Else, Replied/Handover of AI Agent Reply (see BRANCH_OUTPUTS). */
+export type BranchHandle = 'true' | 'false' | 'replied' | 'handover';
 
-export const isBranchHandle = (h: unknown): h is BranchHandle => h === 'true' || h === 'false';
+const BRANCH_HANDLES = new Set<string>(['true', 'false', 'replied', 'handover']);
+export const isBranchHandle = (h: unknown): h is BranchHandle => typeof h === 'string' && BRANCH_HANDLES.has(h);
+
+/** Readable name of a named output ("True", "Handover"). */
+export const branchLabel = (h: BranchHandle) =>
+  Object.values(BRANCH_OUTPUTS).flat().find((b) => b.handle === h)?.label ?? h;
+
+/** Named outputs drawn on the left (True, Replied) and on the right (False, Handover). */
+const LEFT_BRANCHES = new Set<string>(['true', 'replied']);
 
 export const newNodeId = () => `node_${crypto.randomUUID()}`;
 export const newEdgeId = () => `edge_${crypto.randomUUID()}`;
@@ -41,7 +51,7 @@ export function styleEdge<E extends Edge>(edge: E): Edge {
   return {
     ...edge,
     type: 'automation',
-    label: handle === 'true' ? 'TRUE' : handle === 'false' ? 'FALSE' : edge.label,
+    label: isBranchHandle(handle) ? branchLabel(handle).toUpperCase() : edge.label,
     style: { stroke: EDGE_COLORS.default, strokeWidth: 1.5 },
     markerEnd: marker(EDGE_COLORS.default),
   };
@@ -65,7 +75,8 @@ const typeOf = (n: Node) => String((n.data as Record<string, unknown>)?.type ?? 
 /** Output handles a step type has: null is the single unnamed output. */
 export function sourceHandlesOf(type: string): (BranchHandle | null)[] {
   if (type === 'flow_end') return [];
-  if (type === 'condition_if_else') return ['true', 'false'];
+  const branches = BRANCH_OUTPUTS[type];
+  if (branches) return branches.map((b) => b.handle as BranchHandle);
   return [null];
 }
 
@@ -110,7 +121,7 @@ export function insertOnEdge(nodes: Node[], edges: Edge[], edge: Edge, type: str
     .map((n) => (moved.has(n.id) ? { ...n, position: { ...n.position, y: n.position.y + push } } : n))
     .concat(node);
 
-  // A condition continues on its True path; an end step has no output to reconnect.
+  // A condition continues on its True path (an AI reply on Replied); an end step has no output to reconnect.
   const outHandle = sourceHandlesOf(type)[0];
   const nextEdges = edges
     .filter((e) => e.id !== edge.id)
@@ -124,7 +135,7 @@ export function insertOnEdge(nodes: Node[], edges: Edge[], edge: Edge, type: str
 export function appendAfter(nodes: Node[], edges: Edge[], sourceId: string, handle: string | null, type: string) {
   const source = nodes.find((n) => n.id === sourceId);
   if (!source) return null;
-  const dx = handle === 'true' ? -BRANCH_OFFSET_X : handle === 'false' ? BRANCH_OFFSET_X : 0;
+  const dx = !isBranchHandle(handle) ? 0 : LEFT_BRANCHES.has(handle) ? -BRANCH_OFFSET_X : BRANCH_OFFSET_X;
   const node = createNode(type, { x: source.position.x + dx, y: source.position.y + STEP_GAP_Y });
   return {
     nodes: nodes.concat(node),

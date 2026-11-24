@@ -10,3 +10,6 @@ export * from "./commerce-store-connection.service";
 export * from "./woocommerce.service";
 export * from "./woocommerce-inbox.service";
 export * from "./consent.service";
+export * from "./ai-agent.service";
+export * from "./ai-widget.service";
+export * from "./ai-sample-data.service";

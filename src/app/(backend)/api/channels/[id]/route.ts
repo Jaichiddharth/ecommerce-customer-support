@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { channels } from "@/lib/services";
+import { aiWidgetService, channels } from "@/lib/services";
 import { channelRepository } from "@/lib/db/repositories/channel.repository";
 import { withAuth, AuthenticatedRequest } from "@/lib/security/auth";
 import { AppError } from "@/lib/errors";
@@ -26,6 +26,8 @@ export const DELETE = withAuth(async (req: AuthenticatedRequest, context?: { par
     meta = await channels.whatsapp.disconnect(channel);
   } else {
     await channelRepository.markDisconnected(channel.id, channel.organizationId);
+    // the website chat stops answering on every site it's embedded in
+    if (channel.type === "webchat") await aiWidgetService.channelDisconnected(channel.organizationId, channel.id);
   }
   publish(channel.organizationId, { type: "channel.updated", channelId: channel.id });
 

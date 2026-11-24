@@ -16,6 +16,7 @@ import { usePublishedFlows } from './use-published-flows';
 import { VariableInput, VariablesContext, type VariableGroup } from './VariableInput';
 import { TemplateFields } from './TemplateFields';
 import { MessageMediaField } from './MessageMediaField';
+import { AiAgentFields } from './AiAgentFields';
 import { automationMediaOf } from '@/lib/automation/media';
 
 /** Where the selected step sits relative to Flow sends and waits (from validate.flowsInScope). */
@@ -300,6 +301,20 @@ export function ConfigPanel({ nodeId, data, issues = [], flowContext, onUpdate, 
               </div>
             </Section>
           )}
+          {data.type === 'action_ai_agent' && (
+            <Section title="Paths">
+              <div className="space-y-2 text-[11.5px] text-slate-600 leading-snug">
+                <p className="flex items-start gap-2">
+                  <span className="mt-0.5 px-1.5 rounded-full text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200">Replied</span>
+                  The agent answered the customer (or asked them for details).
+                </p>
+                <p className="flex items-start gap-2">
+                  <span className="mt-0.5 px-1.5 rounded-full text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-200">Handover</span>
+                  A person should take over: refunds, exchanges, an upset customer, a request for a person, or the agent is paused. Add Assign Conversation here.
+                </p>
+              </div>
+            </Section>
+          )}
         </FieldErrorsContext.Provider>
         </VariablesContext.Provider>
       </div>
@@ -481,6 +496,9 @@ function TypeFields({
         </>
       );
     }
+
+    case 'action_ai_agent':
+      return <AiAgentFields local={local} set={set} inputCls={inputCls} invalidCls={invalidCls} errors={errors} Field={Field} />;
 
     case 'action_send_whatsapp_flow':
       return <SendWhatsAppFlowFields local={local} set={set} inputCls={inputCls} Field={Field} />;

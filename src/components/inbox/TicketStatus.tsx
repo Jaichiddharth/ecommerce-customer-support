@@ -15,6 +15,7 @@ import {
   TicketPlus,
   UserMinus,
   UserPlus,
+  Hand,
 } from 'lucide-react';
 import { isClosedTicketStatus, type TicketCredits, type TicketEvent, type TicketEventAction } from '@/types/ticket';
 
@@ -34,6 +35,7 @@ const EVENT_ICON: Record<TicketEventAction, React.ElementType> = {
   unassigned: UserMinus,
   ai_on: Sparkles,
   ai_off: CirclePause,
+  ai_handover: Hand,
   billable: Coins,
 };
 

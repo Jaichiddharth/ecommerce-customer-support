@@ -11,6 +11,7 @@ import { whatsappFlowSubmissionService, parseFlowReply, summarizeFlowReply } fro
 import { consentService, consentKeywordCandidates, matchConsentKeyword } from '../consent.service';
 import { whatsAppService } from './whatsapp.service';
 import { assignmentEngine } from '../assignment.service';
+import { quickReplyText } from '../../meta/whatsapp/quick-replies';
 
 const log = createLogger('WhatsAppWebhook');
 
@@ -684,7 +685,8 @@ export class WhatsAppWebhookService {
           customerId,
           messageId,
           wamid: msg.id,
-          text: msg.type === 'text' ? text : null,
+          // Typed text, or the option the customer tapped: both can match keyword triggers
+          text: msg.type === 'text' || quickReplyText(msg.interactive) ? text : null,
           pending: true,
         });
       });
@@ -887,21 +889,13 @@ export class WhatsAppWebhookService {
         };
 
       case 'interactive':
-        if (msg.interactive?.type === 'button_reply') {
-          return {
-            summary: `[Interactive Button Clicked] "${msg.interactive.button_reply?.title}" (ID: ${msg.interactive.button_reply?.id})`,
-            details: msg.interactive,
-          };
+        // A tapped reply button / list row reads as what the customer chose ("Track my order"), like typed text
+        if (msg.interactive?.type === 'button_reply' || msg.interactive?.type === 'list_reply') {
+          return { summary: quickReplyText(msg.interactive) ?? '', details: { type: msg.interactive.type } };
         }
         if (msg.interactive?.type === 'nfm_reply') {
           const reply = parseFlowReply(msg);
           return { summary: summarizeFlowReply(reply?.response ?? {}), details: { type: 'nfm_reply' } };
-        }
-        if (msg.interactive?.type === 'list_reply') {
-          return {
-            summary: `[Interactive List Selection] "${msg.interactive.list_reply?.title}" (ID: ${msg.interactive.list_reply?.id})`,
-            details: msg.interactive,
-          };
         }
         return { summary: `[Interactive Message] ${msg.interactive?.type}`, details: msg.interactive };
 

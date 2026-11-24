@@ -1,0 +1,94 @@
+[
+  {
+    "q": "What are your customer support hours?",
+    "a": "Our support team is available Monday to Saturday, 10 AM to 7 PM IST, by chat and email at support@unocx.example. Messages sent outside these hours are answered the next working day."
+  },
+  {
+    "q": "Do you have a physical store?",
+    "a": "No. UnoCX is an online-only brand. We sell through our website and app only."
+  },
+  {
+    "q": "Do you offer gift wrapping?",
+    "a": "Yes. Gift wrapping with a handwritten note is available for ₹49 per order. Select it at checkout. Prices are not shown on the packing slip for gift-wrapped orders."
+  },
+  {
+    "q": "How do gift cards work?",
+    "a": "UnoCX gift cards are available from ₹500 to ₹10,000 and are valid for 12 months from purchase. They can be used across multiple orders until the balance runs out. Gift cards cannot be refunded, returned or exchanged for cash."
+  },
+  {
+    "q": "Do you take bulk or corporate orders?",
+    "a": "Yes, for orders of 25 or more pieces. Email bulk@unocx.example with the products, quantities and delivery city, and our team will reply within 2 business days."
+  },
+  {
+    "q": "Are your products sustainable?",
+    "a": "Most of our cotton is BCI-certified and our packaging is 100% plastic-free and recyclable. Each product page lists the fabric composition."
+  },
+  {
+    "q": "How should I wash my UnoCX clothes?",
+    "a": "Machine wash cold on a gentle cycle, inside out, with similar colours. Do not bleach or tumble dry. Dry in shade to protect the colour. Always check the care label, as some items are dry clean only."
+  },
+  {
+    "q": "Can I modify an order after placing it?",
+    "a": "You can't add or remove items after placing an order. You can cancel it before dispatch and place a new one. The delivery address can be changed before dispatch from My Orders."
+  },
+  {
+    "q": "Will an out-of-stock item come back?",
+    "a": "Many items are restocked. Tap Notify me on the product page to get an email when your size is back. We can't confirm restock dates."
+  },
+  {
+    "q": "Do you deliver on Sundays?",
+    "a": "Our courier partners deliver Monday to Saturday in most areas. Sunday delivery depends on the courier and location and isn't guaranteed."
+  },
+  {
+    "q": "How can I contact customer support?",
+    "a": "You can chat with us in the Help section of the website and app, or email support@unocx.example. Our team is available Monday to Saturday, 10 AM to 7 PM IST. Please share your order number so we can help faster. We don't have a phone helpline at the moment."
+  },
+  {
+    "q": "I didn't get an order confirmation. Was my order placed?",
+    "a": "Check My Orders in your account. If the order is listed, it was placed successfully and the confirmation may be in your spam folder. If it isn't listed but money was deducted, the payment will be reversed by your bank within 5–7 business days."
+  },
+  {
+    "q": "Do you offer alterations or custom tailoring?",
+    "a": "No. We don't alter, hem or custom-tailor garments. Altered items can't be returned, so please check the size guide before ordering, or exchange for a different size within 7 days of delivery."
+  },
+  {
+    "q": "Are your products original?",
+    "a": "Yes. Everything sold on the UnoCX website and app is designed and made for UnoCX. We are not responsible for products bought from unauthorised sellers."
+  },
+  {
+    "q": "Do you match prices from other websites?",
+    "a": "No, we don't price match with other websites or stores. Our current offers are shown on the Offers page and at checkout."
+  },
+  {
+    "q": "Do you send updates on WhatsApp?",
+    "a": "Yes. If you opt in, we send order, shipping and delivery updates on WhatsApp. You can turn them off anytime in Account > Notifications."
+  },
+  {
+    "q": "Can I collect my order from your warehouse?",
+    "a": "No. We don't offer warehouse or self pick-up. All orders are delivered by our courier partners."
+  },
+  {
+    "q": "Do product colours look the same as in the photos?",
+    "a": "We photograph products in natural light to show colours as accurately as possible, but colours can look slightly different on different screens. A small colour difference from the photo is not considered a defect."
+  },
+  {
+    "q": "Can I place an order for delivery to someone else?",
+    "a": "Yes. Enter the recipient's name, address and phone number at checkout. Add gift wrapping if you'd like the prices hidden from the packing slip."
+  },
+  {
+    "q": "Do you have a referral programme?",
+    "a": "Not at the moment. We'll announce it on our website and app if we launch one."
+  },
+  {
+    "q": "Do you sell internationally through other websites?",
+    "a": "No. UnoCX products are currently available only in India, through our own website and app."
+  },
+  {
+    "q": "Can I change the payment method after placing an order?",
+    "a": "No. The payment method can't be changed after an order is placed. You can cancel the order before dispatch and place a new one with a different payment method."
+  },
+  {
+    "q": "Do you sell kids' clothes?",
+    "a": "No. UnoCX does not currently make kidswear or children's clothes. Our sizes start at women's XS and men's S."
+  }
+]

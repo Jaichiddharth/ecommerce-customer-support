@@ -15,6 +15,7 @@ export type ErrorSource =
   | "shopify"
   | "woocommerce"
   | "database"
+  | "ai"
   | "network"
   | "internal";
 
@@ -106,6 +107,10 @@ export const ERROR_DEFINITIONS = {
   WOOCOMMERCE_STORE_CHANNEL_MISMATCH: { status: 409, source: "woocommerce", message: "This conversation's number isn't linked to that WooCommerce store." },
   WOOCOMMERCE_PRODUCT_NOT_FOUND: { status: 404, source: "woocommerce", message: "This product wasn't found in the WooCommerce store." },
   WOOCOMMERCE_STORE_NOT_FOUND: { status: 404, source: "woocommerce", message: "This WooCommerce store isn't connected to your workspace." },
+  // AI agent service (Python, ai-service/)
+  AI_SERVICE_NOT_CONFIGURED: { status: 500, source: "ai", message: "The AI agent service is not configured on the server." },
+  AI_SERVICE_UNAVAILABLE: { status: 503, source: "ai", message: "The AI agent is temporarily unavailable. Please try again shortly.", retryable: true },
+  AI_SERVICE_ERROR: { status: 502, source: "ai", message: "The AI agent returned an error. Please try again." },
 
   // Database
   DB_UNAVAILABLE: { status: 503, source: "database", message: "The database is temporarily unavailable. Please try again shortly.", retryable: true },

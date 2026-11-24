@@ -401,6 +401,32 @@ export class ConversationRepository {
   }
 
   /**
+   * True when the AI agent must stay out of this conversation: it already handed it over and a person hasn't
+   * handed it back, or a teammate took it (replied on it, paused the AI for it or assigned it by hand) and
+   * nobody switched the AI back on since (switching it on sets handledBy = ai).
+   */
+  async isWithTeam(ticket: Ticket): Promise<boolean> {
+    if (ticket.needsHuman) return true;
+    if (ticket.handledBy === ConversationHandler.AI) return false;
+    if (ticket.billableAt) return true; // a teammate replied on this ticket
+    const event = sql`${messages.metadata}->'ticketEvent'`;
+    const [row] = await db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.organizationId, ticket.organizationId),
+          eq(messages.ticketId, ticket.id),
+          eq(messages.senderType, "system"),
+          eq(messages.isInternalNote, true),
+          sql`(${event}->>'action' = 'ai_off' or (${event}->>'action' = 'assigned' and ${event}->>'actorType' = 'agent'))`
+        )
+      )
+      .limit(1);
+    return Boolean(row);
+  }
+
+  /**
    * Records a ticket change in the thread as a team-only system note (the ticket's audit log) and tells open
    * inboxes. Never throws: the change itself already happened.
    */
@@ -759,6 +785,8 @@ export function describeTicketEvent(event: TicketEvent): string {
       return `AI agent turned on by ${actor}`;
     case "ai_off":
       return `AI agent paused by ${actor}`;
+    case "ai_handover":
+      return `AI agent handed over to the team${event.reason ? ` · ${event.reason}` : ""}`;
     case "billable":
       return `Billable · 1 ticket credit used · first reply by ${actor}`;
     default:

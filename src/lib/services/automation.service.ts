@@ -9,7 +9,7 @@ import { toListResult, type ListQuery } from "@/lib/api/list-query";
 import type { ListResult } from "@/lib/listing";
 import { SENDABLE_VERSION_STATUSES, type AutomationGraph, type WaFlowVersionStatusValue } from "../db/schema";
 import { AppError } from "@/lib/errors";
-import { SEND_FLOW_NODE, invalidateActiveAutomations } from "@/lib/automation/engine";
+import { AI_AGENT_NODE, SEND_FLOW_NODE, invalidateActiveAutomations } from "@/lib/automation/engine";
 import { summarizeIssues, validateAutomation, type AutomationIssue } from "@/lib/automation/validate";
 import { SENDABLE_TEMPLATE_STATUS } from "./whatsapp-flows/template.service";
 import { flowFieldsOf, type FlowField } from "@/lib/automation/variables";
@@ -212,6 +212,16 @@ export class AutomationService {
           add(`The Flow version used by template "${template.name}" is no longer published.`);
         }
       }
+    }
+
+    // AI Agent Reply needs the AI service; without it every run would take the Handover path
+    const aiStep = graph.nodes.find((n) => n.data.type === AI_AGENT_NODE);
+    if (aiStep && !(process.env.UNOCX_AI_URL && process.env.UNOCX_AI_TOKEN)) {
+      issues.push({
+        nodeId: aiStep.id,
+        nodeLabel: String(aiStep.data.label || aiStep.id),
+        message: "The AI agent service isn't connected on this server (UNOCX_AI_URL / UNOCX_AI_TOKEN).",
+      });
     }
 
     if (issues.length) {

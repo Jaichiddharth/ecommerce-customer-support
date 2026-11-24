@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { publishToOrg } from "@/lib/realtime";
 import { customerRepository } from "@/lib/db/repositories/customer.repository";
 import { shopifyRepository } from "@/lib/db/repositories/shopify.repository";
+import { forgetStoreOrders } from "@/lib/ai-agent/commerce";
 
 const log = createLogger("ShopifyWebhookReceiver");
 
@@ -120,6 +121,9 @@ export async function POST(req: NextRequest) {
     matchedCustomerId,
     durationMs: Date.now() - startedAt,
   });
+
+  // The AI agent's cached order data for this store is stale now
+  if (topic.startsWith("orders/")) forgetStoreOrders(store.organizationId, `shopify:${store.id}`);
 
   // Handle specific topics & broadcast realtime events to frontend
   switch (topic) {

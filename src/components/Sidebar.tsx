@@ -53,7 +53,7 @@ const WORKSPACE_ITEMS: NavItem[] = [
   { key: 'home', label: 'Home', icon: LayoutGrid, path: '/dashboard' },
   { key: 'inbox', label: 'Inbox', icon: Inbox, path: '/inbox', activePrefix: '/inbox', badge: 'unread' },
   { key: 'contacts', label: 'Contacts', icon: Users, path: '/contacts' },
-  { key: 'ai', label: 'AI agent', icon: Sparkles, badge: 'ai' },
+  { key: 'ai', label: 'AI agent', icon: Sparkles, path: '/ai-agent', activePrefix: '/ai-agent', badge: 'ai' },
   { key: 'flows', label: 'Flows', icon: Bot, path: '/flows/automations', activePrefix: '/flows' },
   // RBAC key stays 'broadcasts' (Settings → Roles labels it "Campaigns")
   { key: 'broadcasts', label: 'Campaigns', icon: Megaphone, path: '/campaigns', activePrefix: '/campaigns' },

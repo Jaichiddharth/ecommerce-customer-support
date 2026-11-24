@@ -64,6 +64,8 @@ interface CustomerPanelProps {
   shareDisabledReason?: string | null;
   /** A teammate changed the contact's WhatsApp consent */
   onConsentChange?: (customerId: number, isOptedOut: boolean) => void;
+  /** Switches the AI agent on or off for this ticket; absent without permission to update conversations */
+  onAiModeChange?: (handledBy: 'ai' | 'human') => void;
 }
 
 type PanelView = 'details' | 'products';
@@ -78,6 +80,7 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
   onInsertProductText,
   shareDisabledReason,
   onConsentChange,
+  onAiModeChange,
 }) => {
   const [view, setView] = useState<PanelView>('details');
   // Bumped when channels are linked or unlinked, so the orders reload for the (possibly different) Shopify customer
@@ -105,6 +108,7 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
     : conversation.handledBy === 'ai'
       ? { label: 'Active', className: 'bg-[#eef0fb] text-[#3440a8]' }
       : { label: 'Paused', className: 'bg-slate-100 text-slate-600' };
+  const aiOn = conversation.handledBy === 'ai' && !conversation.needsHuman;
 
   const actionsValue =
     conversation.aiActionsCount > 0
@@ -228,17 +232,41 @@ export const CustomerPanel: React.FC<CustomerPanelProps> = ({
           </section>
         )}
 
-        {/* AI agent */}
-        <section className="p-4 border-b border-slate-100 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <SectionLabel>AI AGENT</SectionLabel>
-            <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${aiBadge.className}`}>{aiBadge.label}</span>
-          </div>
-          <Row label="Intent" value={conversation.aiIntent || '—'} />
-          <Row label="Confidence" value={confidenceLabel(conversation.aiConfidence)} />
-          <Row label="Actions" value={actionsValue} />
-          <Row label="Model" value={conversation.aiModel || '—'} />
-        </section>
+      {/* AI agent */}
+      <section className="p-4 border-b border-slate-100 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <SectionLabel>AI AGENT</SectionLabel>
+          <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${aiBadge.className}`}>{aiBadge.label}</span>
+        </div>
+        <Row label="Intent" value={conversation.aiIntent || '—'} />
+        <Row label="Confidence" value={confidenceLabel(conversation.aiConfidence)} />
+        <Row label="Actions" value={actionsValue} />
+        <Row label="Model" value={conversation.aiModel || '—'} />
+        {onAiModeChange && (
+          aiOn ? (
+            <button
+              type="button"
+              onClick={() => onAiModeChange('human')}
+              className="w-full mt-1 py-1.5 rounded-lg border border-slate-300 bg-white text-[12.5px] font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
+            >
+              Pause AI for this ticket
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => onAiModeChange('ai')}
+                className="w-full mt-1 py-1.5 rounded-lg bg-[#3440a8] text-[12.5px] font-medium text-white hover:bg-[#2b358f] cursor-pointer"
+              >
+                Let AI reply
+              </button>
+              <p className="text-[11px] text-slate-400 leading-snug">
+                The AI answers this customer&apos;s next messages through your AI Agent Reply flow. Replying yourself pauses it again.
+              </p>
+            </>
+          )
+        )}
+      </section>
 
         {/* Shopify orders of the linked customer */}
         <section className="p-4 border-b border-slate-100 select-text">

@@ -6,6 +6,7 @@ import type { PaletteItem } from './flow-types';
 import { PICKABLE_ITEMS } from './palette-config';
 import { NodeCatalogList } from './NodeCatalogList';
 import type { PickerRequest } from './builder-context';
+import { branchLabel, isBranchHandle } from './graph-ops';
 
 const WIDTH = 340;
 const HEIGHT = 440;
@@ -33,7 +34,7 @@ function titleFor(request: PickerRequest): { title: string; subtitle: string } {
       return { title: 'Choose a trigger', subtitle: 'What should start this automation?' };
     case 'append':
       return {
-        title: request.handle === 'true' ? 'Add to the True path' : request.handle === 'false' ? 'Add to the False path' : 'Add the next step',
+        title: isBranchHandle(request.handle) ? `Add to the ${branchLabel(request.handle)} path` : 'Add the next step',
         subtitle: 'It is connected automatically.',
       };
     case 'insert':

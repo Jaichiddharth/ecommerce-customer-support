@@ -83,6 +83,12 @@ export function nodeSummary(data: AutomationNodeData): string {
       return d.flowName
         ? `${d.flowName}${d.sendMethod === 'interactive' ? ' · interactive' : d.templateName ? ` · ${d.templateName}` : ''}`
         : '';
+    case 'action_ai_agent':
+      return d.handoverReply === 'none'
+        ? 'Answers, or hands over silently'
+        : d.handoverReply === 'custom'
+          ? 'Answers, or hands over with your message'
+          : 'Answers, or hands over to your team';
     case 'flow_wait_flow_submission':
       return 'Continues when the customer submits the Flow';
     case 'flow_end':

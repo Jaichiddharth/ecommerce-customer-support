@@ -2,6 +2,7 @@ import { shopifyRepository, type ShopifyStoreWithUser } from "../db/repositories
 import { customerRepository } from "../db/repositories/customer.repository";
 import { channelRepository } from "../db/repositories/channel.repository";
 import { ShopifyLinkSource, ShopifyStoreStatus, type ShopifyStore, type SharedShopifyProduct } from "../db/schema";
+import type { Candidate } from "@/lib/ai-agent/shopping";
 import { AppError, toAppError } from "../errors";
 import { createLogger } from "../logger";
 import { encryptToken, decryptToken } from "../security/crypto";
@@ -166,6 +167,75 @@ const CUSTOMER_ORDERS_QUERY = /* GraphQL */ `
       orders(first: $first, after: $after, sortKey: CREATED_AT, reverse: true) {
         nodes { ${ORDER_FIELDS} }
         pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+`;
+
+/** A customer's recent orders with delivery progress, for the AI agent's order answers (WISMO) */
+/** Website chat widget: published products the shopping assistant may recommend */
+const AGENT_PRODUCTS_QUERY = /* GraphQL */ `
+  query AgentProducts($first: Int!, $query: String, $sortKey: ProductSortKeys, $reverse: Boolean) {
+    products(first: $first, query: $query, sortKey: $sortKey, reverse: $reverse) {
+      nodes {
+        id title handle onlineStoreUrl description(truncateAt: 240)
+        featuredMedia { preview { image { url(transform: { maxWidth: 480 }) } } }
+        priceRangeV2 { minVariantPrice { amount currencyCode } }
+        compareAtPriceRange { minVariantCompareAtPrice { amount currencyCode } }
+        variants(first: 10) { nodes { id availableForSale } }
+      }
+    }
+  }
+`;
+
+/** Tags that mark a store's best sellers (the Admin API has no sort by sales for products) */
+const BESTSELLER_TAGS = ["bestseller", "best-seller", "best seller", "bestsellers", "best sellers", "top seller", "popular", "featured"];
+
+/** Website chat: products with their variants (price, stock, size/colour options) for matching what a visitor wants */
+const AGENT_CANDIDATES_QUERY = /* GraphQL */ `
+  query AgentCandidates($first: Int!, $query: String, $sortKey: ProductSortKeys, $reverse: Boolean) {
+    shop { currencyCode }
+    products(first: $first, query: $query, sortKey: $sortKey, reverse: $reverse) {
+      nodes {
+        id title handle onlineStoreUrl description(truncateAt: 240) productType vendor tags
+        featuredMedia { preview { image { url(transform: { maxWidth: 480 }) } } }
+        variants(first: 40) { nodes { id price compareAtPrice availableForSale selectedOptions { name value } } }
+      }
+    }
+  }
+`;
+
+export interface AgentProduct {
+  id: string;
+  title: string;
+  description: string | null;
+  url: string;
+  imageUrl: string | null;
+  price: { amount: string; currencyCode: string } | null;
+  compareAtPrice: { amount: string; currencyCode: string } | null;
+  available: boolean;
+  /** Straight to checkout with one of the first available variant */
+  buyUrl: string | null;
+}
+
+/** Stores whose app has no access to shipping addresses, until when (ms): orders are read without them */
+const NO_ADDRESS_ACCESS = new Map<number, number>();
+
+const agentOrdersQuery = (withAddress: boolean) => /* GraphQL */ `
+  query AgentCustomerOrders($id: ID!, $first: Int!) {
+    customer(id: $id) {
+      id displayName
+      orders(first: $first, sortKey: CREATED_AT, reverse: true) {
+        nodes {
+          id name createdAt cancelledAt displayFulfillmentStatus currentSubtotalLineItemsQuantity
+          ${withAddress ? "shippingAddress { name address1 address2 city province zip country phone }" : ""}
+          totalPriceSet { shopMoney { amount currencyCode } }
+          lineItems(first: 3) { nodes { title quantity } pageInfo { hasNextPage } }
+          fulfillments(first: 5) {
+            status displayStatus createdAt inTransitAt estimatedDeliveryAt deliveredAt
+            trackingInfo(first: 1) { company number url }
+          }
+        }
       }
     }
   }
@@ -983,18 +1053,7 @@ export class ShopifyService {
     const emails = [...new Set(members.map((m) => m.email?.trim().toLowerCase()).filter((e): e is string => !!e && EMAIL_PATTERN.test(e)))];
     if (phones.length === 0 && emails.length === 0) return { status: "no_details", candidates: [] };
 
-    const clauses = [
-      ...phones.slice(0, MAX_MATCH_IDENTIFIERS).map((p) => `phone:${quoteSearchValue(`+${p}`)}`),
-      ...emails.slice(0, MAX_MATCH_IDENTIFIERS).map((e) => `email:${quoteSearchValue(e)}`),
-    ];
-    const data = await this.query<{ customers: { nodes: Node[] } }>(store, "match_customers", SEARCH_CUSTOMERS_QUERY, {
-      query: clauses.join(" OR "),
-    });
-
-    // Shopify search is fuzzy; only exact phone or email matches count
-    const candidates = data.customers.nodes
-      .map(mapCustomer)
-      .filter((c) => (c.phone && phones.includes(c.phone.replace(/\D/g, ""))) || (c.email && emails.includes(c.email.toLowerCase())));
+    const candidates = await this.exactCustomerMatches(store, phones, emails);
     if (candidates.length === 0) return { status: "none", candidates };
     if (candidates.length > 1) return { status: "review", candidates };
 
@@ -1018,6 +1077,177 @@ export class ShopifyService {
     }
     log.info("Contact linked to Shopify customer automatically", { profileId, storeId: store.id, shopifyCustomerId: match.id });
     return { status: "none", candidates: [] };
+  }
+
+  /** Customers of the store whose phone or email is exactly one of these (Shopify's search itself is fuzzy) */
+  private async exactCustomerMatches(store: ShopifyStore, phones: string[], emails: string[]): Promise<ShopifyCustomerSummary[]> {
+    const clauses = [
+      ...phones.slice(0, MAX_MATCH_IDENTIFIERS).map((p) => `phone:${quoteSearchValue(`+${p}`)}`),
+      ...emails.slice(0, MAX_MATCH_IDENTIFIERS).map((e) => `email:${quoteSearchValue(e)}`),
+    ];
+    if (clauses.length === 0) return [];
+    const data = await this.query<{ customers: { nodes: Node[] } }>(store, "match_customers", SEARCH_CUSTOMERS_QUERY, {
+      query: clauses.join(" OR "),
+    });
+    return data.customers.nodes
+      .map(mapCustomer)
+      .filter((c) => (c.phone && phones.includes(c.phone.replace(/\D/g, ""))) || (c.email && emails.includes(c.email.toLowerCase())));
+  }
+
+  /* ---------------- AI agent (system calls: no signed-in member) ---------------- */
+
+  /**
+   * The Shopify customer the contact profile is linked to in this store, matching it first like the contact panel
+   * does (exactly one customer with the profile's phone or email gets linked). Null when there's no single match,
+   * or an agent unlinked the contact (then it's never matched again automatically).
+   */
+  async agentCustomerFor(store: ShopifyStoreWithUser, organizationId: number, profileId: number): Promise<string | null> {
+    const link = await shopifyRepository.findLink(organizationId, store.id, profileId);
+    if (link) return link.shopifyCustomerId ?? null;
+    await this.autoMatch(store, organizationId, profileId);
+    return (await shopifyRepository.findLink(organizationId, store.id, profileId))?.shopifyCustomerId ?? null;
+  }
+
+  /** Read-only lookup for test chats: the one customer with this phone/email, without linking anything */
+  async agentFindCustomer(store: ShopifyStore, who: { phone?: string | null; email?: string | null }): Promise<string | null> {
+    const phone = who.phone?.replace(/\D/g, "");
+    const email = who.email?.trim().toLowerCase();
+    const matches = await this.exactCustomerMatches(
+      store,
+      phone && phone.length >= 6 ? [phone] : [],
+      email && EMAIL_PATTERN.test(email) ? [email] : []
+    );
+    return matches.length === 1 ? matches[0].id : null;
+  }
+
+  /**
+   * Products for the website chat widget, read-only: matching `term` (title, tag or type words), or the newest
+   * products when there's no term (the Admin API has no best-selling sort for products). Only products published
+   * to the online store, since the visitor must be able to buy them.
+   */
+  async agentProducts(store: ShopifyStore, term: string, first = 6): Promise<AgentProduct[]> {
+    if (store.status === ShopifyStoreStatus.REAUTH_REQUIRED) throw new AppError("SHOPIFY_AUTH_FAILED", { details: { storeId: store.id }, expected: true });
+    const words = prefixWords(term.slice(0, 100));
+    const data = await this.query<{ products: { nodes: Node[] } }>(store, "agent_products", AGENT_PRODUCTS_QUERY, {
+      first: Math.min(20, first * 2),
+      query: words ? `status:active AND (${words.split(" AND ").map((w) => `(title:${w} OR tag:${w} OR product_type:${w})`).join(" OR ")})` : "status:active",
+      sortKey: words ? "RELEVANCE" : "CREATED_AT",
+      reverse: !words,
+    });
+    const isPublished = (p: Node) => typeof p.onlineStoreUrl === "string" && p.onlineStoreUrl.startsWith("https://");
+    const nodes = data.products.nodes;
+    // Products published to the online store first; a store with none published (e.g. a development store) still
+    // gets its products, linked by handle, so the assistant can be tried before going live
+    const usable = nodes.some(isPublished) ? nodes.filter(isPublished) : nodes.filter((p) => typeof p.handle === "string" && p.handle);
+    return usable
+      .slice(0, first)
+      .map((p) => {
+        const variant = (p.variants?.nodes ?? []).find((v: Node) => v.availableForSale);
+        const variantId = variant ? shopifyLegacyId(variant.id) : null;
+        const url: string = isPublished(p) ? p.onlineStoreUrl : `https://${store.shopDomain}/products/${encodeURIComponent(p.handle)}`;
+        return {
+          id: p.id,
+          title: String(p.title ?? "").slice(0, 200),
+          description: p.description ? String(p.description).slice(0, 300) : null,
+          url,
+          imageUrl: p.featuredMedia?.preview?.image?.url ?? null,
+          price: money(p.priceRangeV2?.minVariantPrice),
+          compareAtPrice: money(p.compareAtPriceRange?.minVariantCompareAtPrice),
+          available: Boolean(variant),
+          buyUrl: variantId ? `${new URL(url).origin}/cart/${variantId}:1` : null,
+        };
+      });
+  }
+
+  /**
+   * Website chat: active products for matching a visitor's request, with every variant's price, stock and options.
+   * `term` words are searched in title, tags and product type (any word); `matchedTerm` is false when nothing
+   * matched them and the newest products were returned instead (the store has nothing of that kind).
+   */
+  async agentCandidates(
+    store: ShopifyStore,
+    term: string,
+    first = 40,
+    opts: { bestsellers?: boolean } = {},
+  ): Promise<{ items: Candidate[]; matchedTerm: boolean }> {
+    if (store.status === ShopifyStoreStatus.REAUTH_REQUIRED) throw new AppError("SHOPIFY_AUTH_FAILED", { details: { storeId: store.id }, expected: true });
+    const run = async (words: string, tagged = false) => {
+      const filter = tagged
+        ? `status:active AND (${BESTSELLER_TAGS.map((t) => `tag:${quoteSearchValue(t)}`).join(" OR ")})`
+        : words ? `status:active AND (${words.split(" AND ").map((w) => `(title:${w} OR tag:${w} OR product_type:${w})`).join(" OR ")})` : "status:active";
+      const data = await this.query<{ shop: { currencyCode: string }; products: { nodes: Node[] } }>(store, "agent_candidates", AGENT_CANDIDATES_QUERY, {
+        first: Math.min(50, first),
+        query: filter,
+        sortKey: words ? "RELEVANCE" : "CREATED_AT",
+        reverse: !words,
+      });
+      const isPublished = (p: Node) => typeof p.onlineStoreUrl === "string" && p.onlineStoreUrl.startsWith("https://");
+      const nodes = data.products.nodes;
+      // Published products first; a store with none published (a development store) still gets its products
+      const usable = nodes.some(isPublished) ? nodes.filter(isPublished) : nodes.filter((p) => typeof p.handle === "string" && p.handle);
+      const currency = data.shop?.currencyCode || "USD";
+      const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
+      return usable.map((p): Candidate => ({
+        id: p.id,
+        title: String(p.title ?? "").slice(0, 200),
+        description: p.description ? String(p.description).slice(0, 300) : null,
+        url: isPublished(p) ? p.onlineStoreUrl : `https://${store.shopDomain}/products/${encodeURIComponent(p.handle)}`,
+        imageUrl: p.featuredMedia?.preview?.image?.url ?? null,
+        productType: p.productType || null,
+        tags: Array.isArray(p.tags) ? p.tags.map(String) : [],
+        vendor: p.vendor || null,
+        currency,
+        variants: (p.variants?.nodes ?? []).map((v: Node) => ({
+          id: v.id,
+          price: num(v.price),
+          compareAtPrice: num(v.compareAtPrice),
+          available: Boolean(v.availableForSale),
+          options: Object.fromEntries(((v.selectedOptions ?? []) as Node[]).map((o) => [String(o.name).toLowerCase(), String(o.value)])),
+        })),
+      }));
+    };
+    const words = prefixWords(term.slice(0, 100));
+    if (!words && opts.bestsellers) {
+      // The store's best sellers (by tag: the Admin API can't sort products by sales); else its newest products
+      const tagged = await run("", true);
+      if (tagged.length) return { items: tagged, matchedTerm: true };
+    }
+    if (!words) return { items: await run(""), matchedTerm: true };
+    const items = await run(words);
+    return items.length ? { items, matchedTerm: true } : { items: await run(""), matchedTerm: false };
+  }
+
+  /** The storefront checkout link for one variant ("/cart/<variant>:1") on the product's own site */
+  agentBuyUrl(productUrl: string, variantGid: string | null): string | null {
+    const id = variantGid ? shopifyLegacyId(variantGid) : null;
+    return id ? `${new URL(productUrl).origin}/cart/${id}:1` : null;
+  }
+
+  /**
+   * The customer's latest orders with fulfillments, tracking and the shipping address, as Shopify returns them;
+   * null if the customer is gone. The address needs the app's protected-customer-data access to addresses: a store
+   * without it gets the orders without addresses (remembered for an hour), so order status keeps working.
+   */
+  async agentCustomerOrders(store: ShopifyStore, shopifyCustomerId: string, first = 10): Promise<{ name: string | null; orders: Node[] } | null> {
+    if (store.status === ShopifyStoreStatus.REAUTH_REQUIRED) throw new AppError("SHOPIFY_AUTH_FAILED", { details: { storeId: store.id }, expected: true });
+    const run = (withAddress: boolean) =>
+      this.query<{ customer: Node | null }>(store, "agent_customer_orders", agentOrdersQuery(withAddress), { id: shopifyCustomerId, first });
+    const noAddressUntil = NO_ADDRESS_ACCESS.get(store.id) ?? 0;
+    let customer: Node | null;
+    if (noAddressUntil > Date.now()) {
+      ({ customer } = await run(false));
+    } else {
+      try {
+        ({ customer } = await run(true));
+      } catch (err) {
+        if (!(err instanceof AppError && err.provider?.code === "ACCESS_DENIED")) throw err;
+        log.warn("Shopify store has no access to shipping addresses; reading orders without them", { storeId: store.id });
+        NO_ADDRESS_ACCESS.set(store.id, Date.now() + 60 * 60_000);
+        ({ customer } = await run(false));
+      }
+    }
+    if (!customer) return null;
+    return { name: customer.displayName ?? null, orders: customer.orders?.nodes ?? [] };
   }
 
   /**

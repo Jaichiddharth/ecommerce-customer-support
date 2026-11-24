@@ -112,9 +112,9 @@ export const isTicketUnassigned = (conv: InboxConversation) =>
   Boolean(conv.ticketCustomerMessageAt) &&
   (conv.handledBy !== 'ai' || conv.needsHuman);
 
-/** Channel types the inbox knows how to show; only WhatsApp can send today */
-export const CHANNEL_TYPES: ChannelType[] = ['whatsapp', 'instagram', 'messenger', 'email'];
-export const SENDABLE_CHANNEL_TYPES = ['whatsapp'];
+/** Channel types the inbox knows how to show; WhatsApp and the website chat can send today */
+export const CHANNEL_TYPES: ChannelType[] = ['whatsapp', 'webchat', 'instagram', 'messenger', 'email'];
+export const SENDABLE_CHANNEL_TYPES = ['whatsapp', 'webchat'];
 
 /** Channels in the order the Channels pane lists them: by type, then as the API returned them */
 export const channelsInPaneOrder = <T extends { type: string }>(channels: T[]): T[] =>
@@ -126,6 +126,7 @@ export const CHANNEL_LABELS: Record<string, string> = {
   messenger: 'Messenger',
   email: 'Email',
   sms: 'SMS',
+  webchat: 'Website chat',
 };
 
 /** Label used in the chat header, e.g. "Instagram DM" */
@@ -134,6 +135,7 @@ export const CHANNEL_THREAD_LABELS: Record<string, string> = {
   instagram: 'Instagram DM',
   messenger: 'Messenger',
   email: 'Email',
+  webchat: 'Website chat',
 };
 
 export const isChannelHealthy = (c: Pick<InboxChannel, 'status' | 'isActive'>) =>

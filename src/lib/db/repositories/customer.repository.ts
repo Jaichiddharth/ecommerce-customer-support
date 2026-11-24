@@ -179,6 +179,42 @@ export class CustomerRepository {
     }
 
     /**
+     * The contact for a channel-scoped external id (e.g. a website-chat visitor, `web:<visitor id>`), created if
+     * missing. Race-free like findOrCreateForChannel (transaction-scoped advisory lock).
+     */
+    async findOrCreateByExternalId(
+        orgId: number,
+        channelId: number,
+        externalId: string,
+        name: string
+    ): Promise<{ customer: Customer; created: boolean }> {
+        return db.transaction(async (tx) => {
+            await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`customer:${orgId}:${channelId}:ext:${externalId}`}, 0))`);
+            const [existing] = await tx
+                .select()
+                .from(customers)
+                .where(and(eq(customers.organizationId, orgId), eq(customers.channelId, channelId), eq(customers.externalId, externalId)))
+                .limit(1);
+            if (existing) return { customer: existing, created: false };
+            const [created] = await tx
+                .insert(customers)
+                .values({ organizationId: orgId, channelId, name, externalId, tags: [], isOptedOut: false })
+                .returning();
+            return { customer: created, created: true };
+        });
+    }
+
+    /** The contact for a channel-scoped external id, or null (never creates) */
+    async findByExternalId(orgId: number, channelId: number, externalId: string): Promise<Customer | null> {
+        const [row] = await db
+            .select()
+            .from(customers)
+            .where(and(eq(customers.organizationId, orgId), eq(customers.channelId, channelId), eq(customers.externalId, externalId)))
+            .limit(1);
+        return row ?? null;
+    }
+
+    /**
      * Find a customer by ID within an organization
      */
     async findById(id: number, organizationId: number): Promise<Customer | null> {

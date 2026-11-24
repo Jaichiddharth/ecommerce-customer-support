@@ -4,6 +4,7 @@ import { customerService } from "../customer.service";
 import { messageRepository } from "../../db/repositories/message.repository";
 import { messageReactionRepository } from "../../db/repositories/message-reaction.repository";
 import { metaApi, flowsApi } from "../../meta";
+import { buildQuickReplyInteractive, normalizeQuickReplies } from "../../meta/whatsapp/quick-replies";
 import type {
   CreateTemplatePayload,
   GetTemplatesOptions,
@@ -725,8 +726,8 @@ export class WhatsAppService {
     phoneNumberId?: string;
     senderId?: number | null;
     senderName?: string | null;
-    /** 'system' for automatic messages (e.g. opt-out confirmations): they don't hand the conversation to a human */
-    senderType?: "agent" | "system";
+    /** 'system' for automatic messages (e.g. opt-out confirmations) and 'ai' for AI agent replies: neither hands the conversation to a human */
+    senderType?: "agent" | "system" | "ai";
     /** Only for the automatic opt-out confirmation: lets that one message reach a customer who just opted out */
     allowOptedOut?: boolean;
     customerId?: number;
@@ -766,6 +767,8 @@ export class WhatsAppService {
     useMarketingApi?: boolean;
     /** The template's buttons, stored so the thread shows them like the customer sees them (display only) */
     templateButtons?: TemplateMessageButton[];
+    /** Text messages only: tappable options under the text (reply buttons, or a list when they don't fit) */
+    quickReplies?: string[];
     metadata?: MessageMetadata | null;
     /**
      * Already-loaded rows the caller holds (automation engine, Flow sends), so the send path doesn't
@@ -1049,12 +1052,27 @@ export class WhatsAppService {
         if (!params.text || !params.text.trim()) {
           throw AppError.validation("Message text or media attachment cannot be empty.", "text");
         }
-        metaRes = await metaApi.sendWhatsAppTextMessage(
-          targetChannel.metaPhoneNumberId,
-          rawToken,
-          cleanTo,
-          params.text.trim()
-        );
+        const quickReplies = normalizeQuickReplies(params.quickReplies);
+        const interactive = quickReplies.length ? buildQuickReplyInteractive(params.text, quickReplies) : null;
+        if (interactive) {
+          try {
+            metaRes = await metaApi.sendWhatsAppInteractiveMessage(targetChannel.metaPhoneNumberId, rawToken, cleanTo, interactive);
+            // Stored as text with its options, so the thread shows the options like the customer sees them
+            storedMetadata = { ...storedMetadata, quickReplies };
+          } catch (err) {
+            // Options rejected (e.g. a format WhatsApp doesn't accept): the reply itself must still arrive
+            if (toAppError(err).code !== "META_INVALID_REQUEST") throw err;
+            log.warn("WhatsApp rejected the quick replies; sending the text alone", { err, ...sendContext });
+          }
+        }
+        if (!metaRes) {
+          metaRes = await metaApi.sendWhatsAppTextMessage(
+            targetChannel.metaPhoneNumberId,
+            rawToken,
+            cleanTo,
+            params.text.trim()
+          );
+        }
         storedMediaType = 'text';
       }
     } catch (err) {

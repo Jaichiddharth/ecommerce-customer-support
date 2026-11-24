@@ -202,6 +202,25 @@ export class ChannelRepository {
    * Soft-disconnect a channel: kept for conversation history, but hidden and never used again.
    * The stored Meta token is wiped so it can't be used after the user disconnected.
    */
+  /** A channel without provider credentials (the website chat): one row, connected */
+  async createWebchatChannel(organizationId: number, name = "Website chat"): Promise<Channel> {
+    const [row] = await db
+      .insert(channels)
+      .values({ organizationId, type: "webchat", name, status: ChannelStatus.CONNECTED, isActive: true })
+      .returning();
+    return row;
+  }
+
+  /** Puts a disconnected channel without provider credentials (the website chat) back in service */
+  async reconnectWebchatChannel(id: number, organizationId: number): Promise<Channel | null> {
+    const [row] = await db
+      .update(channels)
+      .set({ status: ChannelStatus.CONNECTED, isActive: true, lastError: null, updatedAt: new Date() })
+      .where(and(eq(channels.id, id), eq(channels.organizationId, organizationId), eq(channels.type, "webchat")))
+      .returning();
+    return row || null;
+  }
+
   async markDisconnected(id: number, organizationId: number): Promise<Channel | null> {
     const [updated] = await db
       .update(channels)

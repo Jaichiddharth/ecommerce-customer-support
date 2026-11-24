@@ -62,6 +62,16 @@ export interface ActionNodeData extends BaseNodeData {
   updateValue?: string;
 }
 
+export interface AiAgentNodeData extends BaseNodeData {
+  /** What the customer gets when the agent hands over: its own message (default), yours, or nothing. */
+  handoverReply?: 'agent' | 'custom' | 'none';
+  handoverMessage?: string;
+  /** Send the agent's suggested next steps as WhatsApp reply buttons (default on) */
+  quickReplies?: boolean;
+  /** Resolve the ticket when the customer ends the chat ("No, that's all", "bye") (default on) */
+  resolveOnEnd?: boolean;
+}
+
 export interface FlowControlNodeData extends BaseNodeData {
   controlType?: 'end';
 }
@@ -70,6 +80,7 @@ export type AutomationNodeData =
   | TriggerNodeData
   | ConditionNodeData
   | ActionNodeData
+  | AiAgentNodeData
   | FlowControlNodeData;
 
 // ─── Workflow graph persistence type ─────────────────────────────────────────

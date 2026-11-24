@@ -82,6 +82,14 @@ export interface MessageMetadata {
   consentConfirmation?: ConsentStatus;
   /** Set on the team-only system note that records a ticket change (the ticket's audit log) */
   ticketEvent?: TicketEvent;
+  /** Tappable options sent under a text message (e.g. the AI agent's "Track my order", "No, that's all") */
+  quickReplies?: string[];
+  /** Website chat: what the widget shows with the AI's reply (product cards, a "Continue on WhatsApp" button) */
+  widget?: {
+    products?: Array<{ title: string; price: string | null; compareAtPrice: string | null; imageUrl: string | null; url: string | null; buyUrl: string | null; available: boolean; variant?: string | null }>;
+    whatsappUrl?: string | null;
+    page?: string | null;
+  };
   [key: string]: unknown;
 }
 

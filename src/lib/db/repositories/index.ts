@@ -11,3 +11,4 @@ export * from "./whatsapp-flow.repository";
 export * from "./automation.repository";
 export * from "./campaign.repository";
 export * from "./commerce.repository";
+export * from "./ai-agent.repository";

@@ -392,6 +392,25 @@ const sendWhatsAppTextMessage = async (
  * With Meta's default product policy (CLOUD_API_FALLBACK), a WABA that hasn't accepted the Marketing Messages
  * terms is still delivered through Cloud API; status webhooks then report pricing category `marketing` instead of
  * `marketing_lite`. https://developers.facebook.com/documentation/business-messaging/whatsapp/marketing-messages/send-marketing-messages
+ * Send an interactive message (reply buttons or a list) built by ./quick-replies; within the 24h window only
+ */
+const sendWhatsAppInteractiveMessage = async (
+  phoneNumberId: string,
+  accessToken: string,
+  to: string,
+  interactive: Record<string, unknown>
+) => {
+  log.debug('Sending interactive message', { phoneNumberId, to, type: interactive.type });
+  const response = await graphHttp.post(
+    `/${phoneNumberId}/messages`,
+    { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive', interactive },
+    { headers: bearer(accessToken), operation: 'whatsapp.send_interactive' }
+  );
+  return response.data;
+};
+
+/**
+ * Send a WhatsApp template message (Marketing, Utility, Auth)
  */
 const sendWhatsAppTemplateMessage = async (
   phoneNumberId: string,
@@ -699,6 +718,7 @@ export const metaApi = {
   wabaHasPhoneNumber,
   generateMetaAuthToken,
   sendWhatsAppTextMessage,
+  sendWhatsAppInteractiveMessage,
   sendWhatsAppTemplateMessage,
   sendWhatsAppReactionMessage,
   uploadWhatsAppMedia,

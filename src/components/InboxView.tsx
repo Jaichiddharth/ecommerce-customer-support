@@ -235,7 +235,11 @@ const mapApiMessage = (m: any, channel: string): Message => {
     aiAction: m.metadata?.aiAction ?? null,
     consent: m.metadata?.consent ?? null,
     ticketEvent: m.metadata?.ticketEvent ?? null,
-    templateButtons: Array.isArray(m.metadata?.template?.buttons) ? m.metadata.template.buttons : undefined,
+    templateButtons: Array.isArray(m.metadata?.template?.buttons)
+      ? m.metadata.template.buttons
+      : Array.isArray(m.metadata?.quickReplies) // options sent under a text (e.g. by the AI agent)
+        ? m.metadata.quickReplies.map((text: string) => ({ type: 'QUICK_REPLY', text }))
+        : undefined,
     repliedToId: m.repliedToId != null ? String(m.repliedToId) : null,
     repliedTo: m.repliedTo ?? null,
     flowResponse: Array.isArray(m.metadata?.flowResponse?.answers)
@@ -949,6 +953,17 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     );
   };
 
+  // Hands the ticket (back) to the AI agent, or pauses it; the server records who switched it
+  const handleAiMode = (handledBy: 'ai' | 'human') => {
+    if (!activeConv || !canUpdateInbox) return;
+    updateConversation(
+      activeConv,
+      { handledBy },
+      handledBy === 'ai' ? { handledBy, needsHuman: false } : { handledBy },
+      handledBy === 'ai' ? 'AI agent will reply to this customer' : 'AI agent paused for this ticket'
+    );
+  };
+
   // Teammates for the assignee menu; loaded once, and again when the menu opens after a failed load
   const fetchTeammates = useCallback(async () => {
     setTeammatesStatus('loading');
@@ -1109,6 +1124,51 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
     if (textareaRef.current) textareaRef.current.style.height = '';
   };
 
+  const sendWebchatReply = async () => {
+    if (!activeConv) return;
+    if (selectedFile) {
+      gooeyToast.error("Files can't be sent in the website chat yet. Send a link instead.");
+      return;
+    }
+    const messageText = inputMessage.trim();
+    if (!messageText) return;
+    setIsSending(true);
+    const convId = convKeyFor(activeConv.customer.id);
+    const tempId = `msg-${Date.now()}`;
+    const optimisticMsg: Message = {
+      id: tempId,
+      sender: 'agent',
+      senderId: dbUser?.id ?? null,
+      senderName: dbUser?.name ?? null,
+      channel: 'webchat',
+      text: messageText,
+      timestamp: formatTime(),
+      createdAt: new Date().toISOString(),
+      status: MessageStatus.SENT,
+      type: 'text',
+      mediaType: 'text',
+    };
+    setMessagesMap((prev) => ({ ...prev, [convId]: [...(prev[convId] || []), optimisticMsg] }));
+    resetComposerInput();
+    try {
+      await apiClient.post('/api/channels/webchat/send', {
+        channelId: activeConv.channel?.id ?? activeConv.customer.channelId,
+        customerId: activeConv.customer.id,
+        text: messageText,
+      });
+      fetchMessagesForCustomer(activeConv.customer.id, activeChannelType);
+      refreshConversationsSoon();
+    } catch (err) {
+      const apiError = notifyError(err, { where: 'InboxView.sendWebchatReply', title: 'Message not sent' });
+      setMessagesMap((prev) => ({
+        ...prev,
+        [convId]: (prev[convId] || []).map((m) => (m.id === tempId ? { ...m, status: MessageStatus.FAILED, errorMessage: apiError.message } : m)),
+      }));
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   const handleSend = async () => {
     if (!canUpdateInbox) {
       gooeyToast.error('You do not have permission to reply or send messages in conversations.');
@@ -1133,6 +1193,12 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
         return;
       }
       gooeyToast.error(`Replying on ${CHANNEL_LABELS[activeChannelType] || activeChannelType} isn't available yet.`);
+      return;
+    }
+
+    // Website chat: the reply is saved on the visitor's ticket and the widget picks it up (no provider, no phone)
+    if (activeChannelType === 'webchat') {
+      await sendWebchatReply();
       return;
     }
 
@@ -2524,6 +2590,7 @@ export const InboxView: React.FC<InboxViewProps> = ({ selectedConversationId, on
               onInsertProductText={productTextBlocked ? undefined : handleInsertProductText}
               shareDisabledReason={shareDisabledReason}
               onConsentChange={setCustomerOptedOut}
+              onAiModeChange={canUpdateInbox ? handleAiMode : undefined}
             />
         </div >
       </div >

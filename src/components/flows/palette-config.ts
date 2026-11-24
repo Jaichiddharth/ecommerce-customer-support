@@ -56,6 +56,14 @@ export const PALETTE_ITEMS: PaletteItem[] = [
 
   // ── Actions ───────────────────────────────────────────────────────────────
   {
+    type: 'action_ai_agent',
+    label: 'AI Agent Reply',
+    category: 'actions',
+    description: 'Your AI agent answers the message (FAQ, order status), or hands over to your team.',
+    icon: 'Sparkles',
+    keywords: ['ai', 'bot', 'agent', 'gpt', 'faq', 'wismo', 'order status', 'auto reply', 'handover'],
+  },
+  {
     type: 'action_send_message',
     label: 'Send Message',
     category: 'actions',

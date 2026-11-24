@@ -9,9 +9,11 @@
     "lint": "eslint",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:apply": "node --env-file-if-exists=.env.local --env-file-if-exists=.env scripts/apply-sql.mjs",
     "db:seed": "node --env-file-if-exists=.env.local --env-file-if-exists=.env scripts/seed-org.mjs",
     "test:isolation": "tsx --env-file-if-exists=.env.local --env-file-if-exists=.env scripts/test-tenant-isolation.ts",
-    "test": "npm run test:isolation"
+    "test:ai-guardrails": "tsx --env-file-if-exists=.env.local --env-file-if-exists=.env scripts/test-ai-guardrails.ts",
+    "test": "npm run test:isolation && npm run test:ai-guardrails"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1127.0",

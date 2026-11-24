@@ -26,6 +26,8 @@ type Props = NodeProps & { data: AutomationNodeData & NodeUiData };
 export const BRANCH_META: Record<BranchHandle, { label: string; left: string; color: string; soft: string }> = {
   true: { label: 'True', left: '30%', color: '#16a34a', soft: '#ecfdf3' },
   false: { label: 'False', left: '70%', color: '#dc2626', soft: '#fef2f2' },
+  replied: { label: 'Replied', left: '30%', color: '#16a34a', soft: '#ecfdf3' },
+  handover: { label: 'Handover', left: '70%', color: '#d97706', soft: '#fef3e2' },
 };
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation();

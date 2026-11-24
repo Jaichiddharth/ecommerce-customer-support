@@ -1,0 +1,32 @@
+# Local stack: Postgres with pgvector + the UnoCX AI service.
+# If your Next.js app already has Postgres, delete the `db` service, install pgvector there
+# (CREATE EXTENSION vector;) and point DATABASE_URL at it. UnoCX only touches the `ai` schema.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: unocx
+      POSTGRES_PASSWORD: unocx
+      POSTGRES_DB: unocx
+    # 5433 on the host so it never clashes with a local Postgres on 5432 (override with AI_DB_PORT)
+    ports: ["${AI_DB_PORT:-5433}:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U unocx"]
+      interval: 5s
+      retries: 10
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://unocx:unocx@db:5432/unocx
+    ports: ["8000:8000"]
+    volumes:
+      # Edit help content on your machine; re-run the seed script to load it (no rebuild needed)
+      - ./knowledge:/srv/knowledge
+      # Order CSVs for WISMO testing (scripts.load_orders)
+      - ./data:/srv/data
+    depends_on:
+      db: {condition: service_healthy}
+volumes:
+  pgdata:

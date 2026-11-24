@@ -1,0 +1,126 @@
+### UnoCX AI Service - example requests
+### Open in VS Code with the "REST Client" extension (or JetBrains HTTP client) and click "Send Request".
+### Postman/Insomnia users: import docs/openapi.json instead.
+
+@base = http://localhost:8000
+@token = dev-token
+@ws = ws_unocx
+
+### Health (no token needed)
+GET {{base}}/health
+
+### Chat - single JSON reply
+POST {{base}}/v1/chat
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "workspace_id": "{{ws}}",
+  "conversation_id": "demo-1",
+  "user": { "id": "u_1", "name": "Priya Sharma", "email": "priya@example.com" },
+  "page": { "path": "/help/returns", "title": "Returns" },
+  "messages": [ { "role": "user", "content": "How long do refunds take?" } ],
+  "settings": { "company_name": "UnoCX", "language": "match_customer" }
+}
+
+### Chat - follow-up in the same conversation (send the full history)
+POST {{base}}/v1/chat
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "workspace_id": "{{ws}}",
+  "conversation_id": "demo-1",
+  "messages": [
+    { "role": "user", "content": "How long do refunds take?" },
+    { "role": "assistant", "content": "Prepaid orders are refunded within 5–7 business days after the quality check." },
+    { "role": "user", "content": "and for COD orders?" }
+  ]
+}
+
+### Chat - streaming (server-sent events: meta, delta..., done)
+POST {{base}}/v1/chat/stream
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "workspace_id": "{{ws}}",
+  "conversation_id": "demo-2",
+  "messages": [ { "role": "user", "content": "Do you ship to Dubai?" } ]
+}
+
+### Handover example (returns action.type = "form")
+POST {{base}}/v1/chat
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "workspace_id": "{{ws}}",
+  "conversation_id": "demo-3",
+  "user": { "name": "Ravi Kumar", "email": "ravi@example.com" },
+  "messages": [ { "role": "user", "content": "I want to talk to a human" } ]
+}
+
+### Feedback (use a run_id from a chat response)
+POST {{base}}/v1/feedback
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "workspace_id": "{{ws}}", "run_id": "run_REPLACE_ME", "helpful": true }
+
+### Add a FAQ source
+POST {{base}}/v1/knowledge/sources
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "workspace_id": "{{ws}}", "type": "faq", "title": "Store FAQ",
+  "content": "Q: Do you have a loyalty card?\nA: No, we use loyalty points in your online account."
+}
+
+### Add a website source (crawls pages under this path)
+POST {{base}}/v1/knowledge/sources
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "workspace_id": "{{ws}}", "type": "url", "title": "Help centre", "uri": "https://example.com/help/" }
+
+### Upload a PDF
+POST {{base}}/v1/knowledge/upload
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=b
+
+--b
+Content-Disposition: form-data; name="workspace_id"
+
+{{ws}}
+--b
+Content-Disposition: form-data; name="title"
+
+Size guide
+--b
+Content-Disposition: form-data; name="file"; filename="size-guide.pdf"
+Content-Type: application/pdf
+
+< ../knowledge/size-guide.pdf
+--b--
+
+### List sources and their status
+GET {{base}}/v1/knowledge/sources?workspace_id={{ws}}
+Authorization: Bearer {{token}}
+
+### Re-sync a source after the content changed
+POST {{base}}/v1/knowledge/sources/ks_REPLACE_ME/sync?workspace_id={{ws}}
+Authorization: Bearer {{token}}
+
+### Keyword flows
+GET {{base}}/v1/flows?workspace_id={{ws}}
+Authorization: Bearer {{token}}
+
+### Quality metrics from real conversations (last 7 days)
+GET {{base}}/v1/insights/quality?workspace_id={{ws}}&days=7
+Authorization: Bearer {{token}}
+
+### Content gaps: questions the assistant couldn't answer
+GET {{base}}/v1/insights/gaps?workspace_id={{ws}}&days=30
+Authorization: Bearer {{token}}

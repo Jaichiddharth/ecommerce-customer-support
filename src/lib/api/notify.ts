@@ -14,6 +14,7 @@ const TITLE_BY_SOURCE: Record<ErrorSource, string> = {
   shopify: 'Shopify error',
   woocommerce: 'WooCommerce error',
   database: 'Server problem',
+  ai: 'AI agent error',
   network: 'Connection problem',
   internal: 'Something went wrong',
 };

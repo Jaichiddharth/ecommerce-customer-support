@@ -3,13 +3,13 @@
 import React from 'react';
 import {
   MessageCircle, Hash, Bell, GitBranch, Search, UserCheck,
-  Send, FileText, UserPlus, PenLine, StopCircle, MessageSquareText, Workflow, Filter, Hourglass,
+  Send, FileText, UserPlus, PenLine, StopCircle, MessageSquareText, Workflow, Filter, Hourglass, Sparkles,
 } from 'lucide-react';
 import { getPaletteItem } from './palette-config';
 
 const ICON_MAP: Record<string, React.FC<{ className?: string }>> = {
   MessageCircle, Hash, Bell, GitBranch, Search, UserCheck,
-  Send, FileText, UserPlus, PenLine, StopCircle, MessageSquareText, Filter, Hourglass,
+  Send, FileText, UserPlus, PenLine, StopCircle, MessageSquareText, Filter, Hourglass, Sparkles,
 };
 
 /** Icon for a step type (falls back to a generic workflow glyph for unknown types). */

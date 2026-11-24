@@ -41,6 +41,7 @@ import { WhatsAppNumberHealth } from './settings/WhatsAppNumberHealth';
 import { ChannelShopifyStore, useChannelStores } from './settings/ChannelShopifyStore';
 import { ChannelWooCommerceStore, useChannelWooStores } from './settings/ChannelWooCommerceStore';
 import type { CommerceChannelStoreStatus, WooCommerceStoreInfo } from '@/lib/woocommerce/types';
+import { WebchatChannelSection } from './settings/WebchatChannelCard';
 import type { ShopifyChannelStoreStatus, ShopifyStoreInfo } from '@/lib/shopify/types';
 import { TeamRolesSection } from './settings/TeamRolesSection';
 import { ConsentPrivacySection } from './settings/ConsentPrivacySection';
@@ -363,6 +364,8 @@ function ChannelsSection() {
     });
 
   const whatsapp = channels.filter((c) => c.type === 'whatsapp');
+  const webchat = channels.find((c) => c.type === 'webchat' && c.status !== 'disconnected') ?? channels.find((c) => c.type === 'webchat') ?? null;
+  const canEditChannels = can('inbox', 'update');
   const attention = channels.filter(needsReconnect).length;
 
   if (loading) {
@@ -482,6 +485,25 @@ function ChannelsSection() {
             ))}
           </div>
         )}
+      </section>
+
+      {/* Website chat */}
+      <section>
+        <div className="mb-3">
+          <h2 className="text-sm font-semibold text-slate-900">Website chat</h2>
+          <p className="text-xs text-slate-500">A chat widget for any website. Visitors talk to your AI agent; every chat feeds the shared inbox.</p>
+        </div>
+        <WebchatChannelSection
+          channel={webchat}
+          expanded={!!webchat && expandedIds.has(webchat.id)}
+          onToggle={() => webchat && toggle(webchat.id)}
+          onDisconnect={requestDisconnect}
+          canEdit={canEditChannels}
+          onChanged={async (id) => {
+            await fetchChannels({ quiet: true });
+            if (id) setExpandedIds((prev) => new Set(prev).add(id));
+          }}
+        />
       </section>
 
       {/* Coming soon */}

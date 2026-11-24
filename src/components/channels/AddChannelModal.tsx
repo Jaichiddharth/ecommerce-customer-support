@@ -7,9 +7,11 @@ import {
   Lock,
   Info,
   Loader2,
+  Globe,
 } from 'lucide-react';
 import { useWhatsAppConnect } from '../whatsapp/useWhatsAppConnect';
 import { gooeyToast } from '@/components/ui/goey-toaster';
+import { connectWebchat } from '../settings/WebchatChannelCard';
 
 export interface AddChannelModalProps {
   isOpen: boolean;
@@ -17,7 +19,7 @@ export interface AddChannelModalProps {
   onSuccess?: (channelData: any) => void;
 }
 
-type ChannelKey = 'whatsapp' | 'instagram' | 'messenger';
+type ChannelKey = 'whatsapp' | 'webchat' | 'instagram' | 'messenger';
 
 export const AddChannelModal: React.FC<AddChannelModalProps> = ({
   isOpen,
@@ -25,6 +27,18 @@ export const AddChannelModal: React.FC<AddChannelModalProps> = ({
   onSuccess,
 }) => {
   const [selectedChannel, setSelectedChannel] = useState<ChannelKey>('whatsapp');
+  const [addingWebchat, setAddingWebchat] = useState(false);
+
+  // Website chat needs no sign-in: add the channel, then open its settings (install code, look, products)
+  const handleAddWebchat = async () => {
+    setAddingWebchat(true);
+    const id = await connectWebchat();
+    setAddingWebchat(false);
+    if (id === null) return;
+    if (onSuccess) onSuccess({ channelId: id, type: 'webchat' });
+    onClose();
+    window.location.assign(`/settings?channel=${id}`);
+  };
 
   const { handleConnect, loading } = useWhatsAppConnect({
     storeId: 'pingcart-store.myshopify.com',
@@ -130,7 +144,7 @@ export const AddChannelModal: React.FC<AddChannelModalProps> = ({
           </div>
 
           {/* Channel Selection Cards in Landscape Grid (3 Columns) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
             {/* Card 1: WhatsApp Business (Active / Clickable) */}
             <div
               onClick={handleSelectWhatsApp}
@@ -169,6 +183,41 @@ export const AddChannelModal: React.FC<AddChannelModalProps> = ({
                   <Check className="w-3 h-3 stroke-[2.5]" /> Ready to connect
                 </span>
                 <span className="text-[10px] text-slate-400">Cloud API</span>
+              </div>
+            </div>
+
+            {/* Card: Website chat (Active / Clickable) */}
+            <div
+              onClick={() => setSelectedChannel('webchat')}
+              className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${selectedChannel === 'webchat'
+                ? 'border-[#3440a8] bg-[#f0f3ff]/80 shadow-xs'
+                : 'border-slate-200 hover:border-slate-300 bg-white'
+                }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${selectedChannel === 'webchat' ? 'border-[#3440a8] bg-white' : 'border-slate-300 bg-white'}`}>
+                      {selectedChannel === 'webchat' && <div className="w-2 h-2 rounded-full bg-[#3440a8]" />}
+                    </div>
+                    <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-[#3440a8]">
+                      <Globe className="w-4 h-4" />
+                    </div>
+                  </div>
+                  <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-[#3440a8] border border-indigo-100">
+                    New
+                  </span>
+                </div>
+                <h3 className="font-bold text-slate-900 text-sm">Website chat</h3>
+                <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                  A chat widget for any website. Your AI agent welcomes visitors and helps them shop; chats land in the inbox.
+                </p>
+              </div>
+              <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
+                <span className="text-emerald-700 font-semibold flex items-center gap-1 text-[11px]">
+                  <Check className="w-3 h-3 stroke-[2.5]" /> Ready to add
+                </span>
+                <span className="text-[10px] text-slate-400">One script tag</span>
               </div>
             </div>
 
@@ -286,6 +335,18 @@ export const AddChannelModal: React.FC<AddChannelModalProps> = ({
               <span>Continue</span>
             )}
           </button> */}
+
+          {selectedChannel === 'webchat' && (
+            <button
+              type="button"
+              onClick={handleAddWebchat}
+              disabled={addingWebchat}
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#3440a8] hover:bg-[#2b358c] text-white text-xs font-semibold rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-75 shrink-0"
+            >
+              {addingWebchat ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe className="w-4 h-4" />}
+              {addingWebchat ? 'Adding…' : 'Add website chat'}
+            </button>
+          )}
 
           {selectedChannel === 'whatsapp' && (
             <button

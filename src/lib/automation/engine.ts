@@ -1,4 +1,4 @@
-import { automationRepository, customerRepository, messageRepository, whatsappFlowRepository } from "../db/repositories";
+import { automationRepository, conversationRepository, customerRepository, messageRepository, whatsappFlowRepository } from "../db/repositories";
 import {
   AutomationRunStatus,
   WaFlowExecutionStatus,
@@ -9,8 +9,12 @@ import {
   type AutomationRunContext,
   type Channel,
   type Customer,
+  type Ticket,
+  ConversationHandler,
+  TicketStatus,
   sanitizeTemplateButtons,
 } from "../db/schema";
+import { isClosedTicketStatus } from "@/types/ticket";
 import { whatsAppService } from "../services/channels/whatsapp.service";
 import { whatsappFlowSendService } from "../services/whatsapp-flows/flow-send.service";
 import { matchConsentKeyword, normalizeKeyword } from "../services/consent.service";
@@ -22,6 +26,9 @@ import { AppError, toAppError } from "@/lib/errors";
 import { getObject } from "@/lib/storage/s3";
 import { automationMediaOf, automationMediaPrefix } from "./media";
 import { createLogger } from "@/lib/logger";
+import { aiAgentService, type AgentReply } from "../services/ai-agent.service";
+import { HANDOVER_REASON_LABELS } from "@/lib/ai-agent/policy";
+import { publish } from "@/lib/realtime";
 
 /**
  * Automation runtime for graphs built in the node-based Automation Builder.
@@ -70,11 +77,17 @@ const REPLAY_MAX_AGE_MS = 60 * 60_000;
 
 export const SEND_FLOW_NODE = "action_send_whatsapp_flow";
 export const WAIT_FLOW_NODE = "flow_wait_flow_submission";
+export const AI_AGENT_NODE = "action_ai_agent";
+/** Messages of the current ticket the AI agent reads (newest last), and how far back. */
+const AI_HISTORY_MESSAGES = 12;
+const AI_HISTORY_MAX_AGE_MS = 24 * 60 * 60_000;
+/** Extra answers for messages the customer sent while the agent was replying (the engine drops their triggers). */
+const AI_FOLLOW_UP_PASSES = 2;
 /** How long Wait for Flow Submission waits when the Flow send has no response window. */
 const DEFAULT_FLOW_WAIT_MS = 24 * 60 * 60_000;
 
 type StepResult =
-  | { kind: "next"; handle?: string } // follow the outgoing edge (optionally a specific handle)
+  | { kind: "next"; handle?: string; outcome?: string } // follow the outgoing edge (optionally a specific handle)
   | { kind: "stop"; outcome: string } // finish the run successfully
   | { kind: "wait"; run: Partial<AutomationRun> }; // persist the wait and return
 
@@ -464,7 +477,7 @@ export class AutomationEngine {
 
         const result = await this.execute(node, x);
         attempt = 0; // a later step that fails starts its own retry count
-        this.record(x, node, result.kind === "stop" ? result.outcome : result.kind === "wait" ? "waiting" : "done");
+        this.record(x, node, result.kind === "wait" ? "waiting" : result.outcome ?? "done");
 
         if (result.kind === "wait") {
           await automationRepository.updateRunningRun(run.id, {
@@ -584,10 +597,170 @@ export class AutomationEngine {
     return { flow: response, flowDisplay };
   }
 
+  // ── AI Agent Reply ─────────────────────────────────────────────────────
+
+  /**
+   * Answers the customer with the workspace's AI agent and follows Replied or Handover.
+   *
+   * - Stays quiet (ends the run) while the conversation is with the team: the agent handed it over
+   *   earlier, or a teammate took it. Otherwise the customer would hear from both.
+   * - The agent reads the current ticket's recent messages, so it also answers what the customer added
+   *   while it was replying (those messages can't start their own run while this one is open).
+   * - Paused agent, an attachment it can't read, or an AI service failure → Handover without its message,
+   *   so the automation's own fallback (e.g. Assign Conversation) runs instead of a silent failure.
+   */
+  private async aiAgentReply(node: AutomationGraphNode, x: Exec): Promise<StepResult> {
+    const orgId = x.run.organizationId;
+    const triggerId = x.run.context.trigger.messageId ?? null;
+    const trigger = triggerId ? await messageRepository.findById(triggerId, orgId) : null;
+    let ticket = trigger?.ticketId ? await conversationRepository.findById(trigger.ticketId, orgId) : null;
+    if (ticket && (await conversationRepository.isWithTeam(ticket))) {
+      return { kind: "stop", outcome: "with the team: AI stayed quiet" };
+    }
+
+    let answered = 0;
+    let lastSeen = 0;
+    for (let pass = 0; pass <= AI_FOLLOW_UP_PASSES; pass++) {
+      const history = await this.aiHistory(x, ticket?.id ?? null);
+      if (pass > 0 && history.lastCustomerMessageId <= lastSeen) break; // nothing new since the last answer
+      lastSeen = history.lastCustomerMessageId;
+      if (pass === 0 && !history.messages.length) return this.aiHandover(node, x, ticket, "Sent an attachment the AI agent can't read");
+
+      let reply: AgentReply | null;
+      try {
+        reply = await aiAgentService.replyToCustomer({
+          organizationId: orgId,
+          conversationId: `wa_${x.customer.id}_${ticket?.id ?? 0}`,
+          channel: "whatsapp",
+          user: { id: x.customer.shopifyCustomerId, name: x.customer.name, email: x.customer.email, phone: x.customer.phone },
+          messages: history.messages,
+          // Order answers come from the store this WhatsApp number is connected to
+          orders: { profileId: x.customer.primaryCustomerId ?? x.customer.id, channelId: trigger?.channelId ?? x.customer.channelId ?? null },
+        });
+      } catch (err) {
+        log.warn("AI agent could not reply; following the Handover path", { err, runId: x.run.id, nodeId: node.id });
+        if (answered) break; // the customer already has an answer; the follow-up is best effort
+        return this.aiHandover(node, x, ticket, "AI agent unavailable");
+      }
+      if (!reply) return answered ? { kind: "next", handle: "replied", outcome: "replied" } : this.aiHandover(node, x, ticket, "AI agent is paused");
+
+      if (reply.outcome === "handover") {
+        const reason = HANDOVER_REASON_LABELS[reply.handover_reason ?? ""] ?? "Needs a person";
+        return this.aiHandover(node, x, ticket, reason, reply);
+      }
+
+      const text = reply.reply.trim();
+      if (text) await this.sendAiMessage(node, x, text, reply);
+      answered++;
+      ticket = ticket
+        ? (await conversationRepository.update(ticket.id, orgId, {
+            handledBy: ConversationHandler.AI,
+            needsHuman: false,
+            aiConfidence: reply.confidence ?? null,
+            aiModel: reply.usage?.model ?? null,
+          })) ?? ticket
+        : null;
+      if (ticket) publish(orgId, { type: "conversation.updated", conversationId: ticket.id, customerId: x.customer.id });
+      // "No, that's all" / "bye": nothing is left open, so the ticket can close itself
+      if (reply.ended) {
+        if (ticket && node.data.resolveOnEnd !== false) ticket = await this.resolveEndedChat(ticket);
+        return { kind: "next", handle: "replied", outcome: "replied: customer ended the chat" };
+      }
+    }
+    return { kind: "next", handle: "replied", outcome: answered > 1 ? `replied (${answered} answers)` : "replied" };
+  }
+
+  /** Hands the conversation to the team: the chosen handover message, the ticket flagged and noted. */
+  private async aiHandover(node: AutomationGraphNode, x: Exec, ticket: Ticket | null, reason: string, reply?: AgentReply): Promise<StepResult> {
+    const d = node.data;
+    const mode = d.handoverReply === "custom" || d.handoverReply === "none" ? d.handoverReply : "agent";
+    const text = mode === "custom" ? render(String(d.handoverMessage ?? ""), x).trim() : mode === "agent" ? reply?.reply.trim() ?? "" : "";
+    if (text) await this.sendAiMessage(node, x, text, reply);
+    if (ticket) {
+      await conversationRepository.update(ticket.id, x.run.organizationId, {
+        handledBy: ConversationHandler.AI,
+        needsHuman: true,
+        aiSummary: reply?.handover_summary?.slice(0, 2000) ?? null,
+      });
+      // Team-only note in the thread; also refreshes open inboxes
+      await conversationRepository.logEvent(ticket, { action: "ai_handover", actorType: "system", actorId: null, actorName: "AI agent", reason });
+    }
+    return { kind: "next", handle: "handover", outcome: `handover: ${reason}` };
+  }
+
+  /** Resolves the ticket after the customer ended the chat with the AI agent; their next message opens a new one */
+  private async resolveEndedChat(ticket: Ticket): Promise<Ticket> {
+    if (isClosedTicketStatus(ticket.status)) return ticket;
+    const resolved = await conversationRepository.update(ticket.id, ticket.organizationId, { status: TicketStatus.RESOLVED });
+    if (!resolved) return ticket;
+    await conversationRepository.logEvent(resolved, {
+      action: "resolved",
+      actorType: "system",
+      actorId: null,
+      actorName: "AI agent",
+      previousStatus: ticket.status,
+      status: resolved.status,
+    });
+    publish(ticket.organizationId, { type: "conversation.updated", conversationId: ticket.id, customerId: ticket.customerId });
+    return resolved;
+  }
+
+  private async sendAiMessage(node: AutomationGraphNode, x: Exec, text: string, reply?: AgentReply) {
+    const preloaded = await this.preloaded(x);
+    // The agent's suggested next steps as tappable options ("Track my order", "No, that's all"); not on a handover
+    const quickReplies =
+      node.data.quickReplies !== false && reply && reply.outcome !== "handover" && !reply.ended ? reply.suggestions ?? [] : [];
+    await this.quickRetry(() =>
+      whatsAppService.sendMessage({
+        organizationId: x.run.organizationId,
+        customerId: x.customer.id,
+        to: x.customer.phone ?? "",
+        text,
+        quickReplies,
+        senderType: "ai",
+        senderName: "AI agent",
+        metadata: {
+          automation: { automationId: x.automation.id, runId: x.run.id, nodeId: node.id },
+          aiAgent: reply ? { runId: reply.run_id, outcome: reply.outcome, route: reply.route, confidence: reply.confidence } : undefined,
+        },
+        preloaded,
+      })
+    );
+  }
+
+  /**
+   * The current ticket's recent text messages as a chat for the agent (customer → user; teammates, the AI
+   * and automations → assistant), newest last and ending with the customer. Empty when the customer's
+   * latest message has no text (e.g. a photo).
+   */
+  private async aiHistory(x: Exec, ticketId: number | null) {
+    const since = Date.now() - AI_HISTORY_MAX_AGE_MS;
+    const { messages: page } = await messageRepository.listPageByCustomer(x.customer.id, x.run.organizationId, { limit: 30 });
+    const relevant = page.filter(
+      (m) => !m.isInternalNote && (ticketId === null || m.ticketId === ticketId) && m.createdAt.getTime() >= since,
+    );
+    const lastCustomer = [...relevant].reverse().find((m) => m.senderType === "customer" && m.mediaType !== "system");
+    const lastCustomerMessageId = lastCustomer?.id ?? 0;
+    if (!lastCustomer?.textContent?.trim()) return { messages: [], lastCustomerMessageId };
+
+    const chat: { role: "user" | "assistant"; content: string }[] = [];
+    for (const m of relevant) {
+      const content = m.textContent?.trim();
+      if (!content || content.startsWith("[Template:")) continue;
+      if (m.senderType === "customer" && m.mediaType !== "system") chat.push({ role: "user", content });
+      else if (m.senderType === "agent" || m.senderType === "ai") chat.push({ role: "assistant", content });
+      if (m.id === lastCustomer.id) break;
+    }
+    return { messages: chat.slice(-AI_HISTORY_MESSAGES), lastCustomerMessageId };
+  }
+
   private async execute(node: AutomationGraphNode, x: Exec): Promise<StepResult> {
     const d = node.data;
     // An opted-out contact receives nothing until they reply START: end the run quietly instead of failing at the send
-    if (x.customer.isOptedOut && (d.type === "action_send_message" || d.type === "action_send_template" || d.type === SEND_FLOW_NODE)) {
+    if (
+      x.customer.isOptedOut &&
+      (d.type === "action_send_message" || d.type === "action_send_template" || d.type === SEND_FLOW_NODE || d.type === AI_AGENT_NODE)
+    ) {
       return { kind: "stop", outcome: "contact opted out" };
     }
     switch (d.type) {
@@ -755,6 +928,9 @@ export class AutomationEngine {
         const wakeAt = execution?.expiresAt ?? new Date(Date.now() + DEFAULT_FLOW_WAIT_MS);
         return { kind: "wait", run: { waitingFor: { kind: "flow_submission", executionId, nodeId: node.id }, wakeAt } };
       }
+
+      case AI_AGENT_NODE:
+        return this.aiAgentReply(node, x);
 
       case "flow_end":
         return { kind: "stop", outcome: "end" };

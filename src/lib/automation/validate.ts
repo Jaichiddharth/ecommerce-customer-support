@@ -1,5 +1,6 @@
 import { normalizeKeywords } from "./keywords";
-import { automationMediaOf } from "./media";import {
+import { automationMediaOf } from "./media";
+import {
   CONTACT_UPDATE_FIELDS,
   NO_VALUE_OPERATORS,
   OPERATOR_LABELS,
@@ -42,10 +43,28 @@ interface GraphEdge {
 const RUNNABLE_TRIGGERS = new Set(["trigger_incoming_message", "trigger_keyword"]);
 export const SEND_FLOW = "action_send_whatsapp_flow";
 export const WAIT_FLOW = "flow_wait_flow_submission";
+/** Replies with the workspace's AI agent (see engine.ts › aiAgentReply). */
+export const AI_AGENT = "action_ai_agent";
+
+/**
+ * Steps with named outputs, in the order they're drawn (left → right). Every other step has one
+ * unnamed output (End has none). Each named output must be connected.
+ */
+export const BRANCH_OUTPUTS: Record<string, { handle: string; label: string }[]> = {
+  condition_if_else: [
+    { handle: "true", label: "True" },
+    { handle: "false", label: "False" },
+  ],
+  [AI_AGENT]: [
+    { handle: "replied", label: "Replied" },
+    { handle: "handover", label: "Handover" },
+  ],
+};
 
 /** Text fields the engine fills variables into, per step type. */
 export const VARIABLE_FIELDS: Record<string, string[]> = {
   action_send_message: ["messageContent"],
+  [AI_AGENT]: ["handoverMessage"],
   action_update_contact: ["updateValue"],
   [SEND_FLOW]: ["flowBody"],
 };
@@ -75,6 +94,14 @@ export function nodeConfigFieldIssues(type: string, d: Record<string, unknown>, 
     case "trigger_incoming_message":
     case "flow_end":
     case WAIT_FLOW:
+      break;
+
+    case AI_AGENT:
+      // The agent itself is set up on the AI agent page; only a custom handover message is optional here
+      if (d.handoverReply === "custom") {
+        if (!text(d, "handoverMessage")) push("handoverMessage", "Enter the message to send when the agent hands over.");
+        else checkVariables("handoverMessage");
+      }
       break;
 
     case "trigger_keyword":
@@ -312,10 +339,11 @@ export function validateAutomation(
     }
 
     // Every path must finish on an End step, so where an automation stops is always explicit on the canvas
-    if (type === "condition_if_else") {
-      for (const handle of ["true", "false"] as const) {
+    const branches = BRANCH_OUTPUTS[type];
+    if (branches) {
+      for (const { handle, label } of branches) {
         if (!out.some((e) => e.sourceHandle === handle)) {
-          add(n, `Connect the ${handle.toUpperCase()} path to a next step, or to an End step if nothing should happen.`);
+          add(n, `Connect the ${label} path to a next step, or to an End step if nothing should happen.`);
         }
       }
     } else if (type !== "flow_end") {
