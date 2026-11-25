@@ -45,6 +45,7 @@ import { WebchatChannelSection } from './settings/WebchatChannelCard';
 import type { ShopifyChannelStoreStatus, ShopifyStoreInfo } from '@/lib/shopify/types';
 import { TeamRolesSection } from './settings/TeamRolesSection';
 import { ConsentPrivacySection } from './settings/ConsentPrivacySection';
+import { BillingUsageSection } from './settings/BillingUsageSection';
 import { RoutingHoursSection } from './settings/RoutingHoursSection';
 import { GeneralSection } from './settings/GeneralSection';
 
@@ -564,7 +565,7 @@ const SECTIONS: { key: Section; label: string; subtitle: string; icon: LucideIco
   { key: 'routing', label: 'Routing & hours', subtitle: 'Assign conversations automatically and set business hours and away messages.', icon: Route },
   { key: 'consent', label: 'Consent & privacy', subtitle: 'Opt-out keywords, confirmation messages and data retention.', icon: ShieldCheck },
   { key: 'languages', label: 'Languages', subtitle: 'The languages your AI agent and templates reply in.', icon: Languages, soon: true },
-  { key: 'billing', label: 'Billing & usage', subtitle: 'Your plan, seats, AI resolutions and invoices.', icon: CreditCard, soon: true },
+  { key: 'billing', label: 'Billing & usage', subtitle: 'Estimate your monthly AI and WhatsApp costs.', icon: CreditCard },
   { key: 'api', label: 'API & webhooks', subtitle: 'API keys and webhooks to connect UnoCX to your own systems.', icon: Webhook, soon: true },
 ];
 
@@ -722,6 +723,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenConversation }
               {activeSection === 'team' && !isAgentOrViewer && <TeamRolesSection />}
               {activeSection === 'routing' && <RoutingHoursSection />}
               {activeSection === 'consent' && <ConsentPrivacySection />}
+              {activeSection === 'billing' && <BillingUsageSection />}
             </>
           )}
         </main>

@@ -13,7 +13,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 from . import agent
-from .config import get_settings
+from .config import PRICES, get_settings
 from .db import conn
 from .ingest import sync_source
 from .language import detect_language
@@ -131,21 +131,31 @@ def overview(workspace_id: str, days: int = Query(30, ge=7, le=180), chart_days:
 
 
 @router.get("/v1/insights/usage")
-def usage(workspace_id: str):
-    """Month to date: AI resolutions (for the plan meter), speed, tokens and model cost."""
-    p = {"ws": workspace_id}
-    month = "created_at >= date_trunc('month', now())"
+def usage(workspace_id: str, days: int | None = Query(None, ge=1, le=365)):
+    """AI resolutions (for the plan meter), speed, tokens and model cost: month to date, or the last `days` days.
+
+    Also returns the model prices (USD per 1M tokens) the cost is worked out with, for the cost calculator.
+    """
+    p = {"ws": workspace_id, "days": days}
+    window = ("created_at > now() - make_interval(days => %(days)s)" if days
+              else "created_at >= date_trunc('month', now())")
     with conn() as c:
-        res = c.execute(_conv_cte(month) + "SELECT count(*) FILTER (WHERE resolved) AS resolutions,"
+        res = c.execute(_conv_cte(window) + "SELECT count(*) FILTER (WHERE resolved) AS resolutions,"
                         " count(*) AS conversations FROM scored", p).fetchone()
         runs = c.execute(f"""
             SELECT round(avg(latency_ms))::int AS avg_latency_ms,
               round(avg(input_tokens + output_tokens) FILTER (WHERE model IS NOT NULL))::int AS tokens_per_reply,
+              round(avg(input_tokens) FILTER (WHERE model IS NOT NULL))::int AS input_tokens_per_reply,
+              round(avg(output_tokens) FILTER (WHERE model IS NOT NULL))::int AS output_tokens_per_reply,
+              count(*) AS replies,
               count(*) FILTER (WHERE model IS NOT NULL) AS llm_replies
-            FROM ai.agent_runs WHERE {REAL} AND {month}""", p).fetchone()
-        cost = c.execute(f"SELECT coalesce(sum(cost_usd), 0) AS usd FROM ai.usage_log WHERE workspace_id = %(ws)s AND {month}",
+            FROM ai.agent_runs WHERE {REAL} AND {window}""", p).fetchone()
+        cost = c.execute(f"SELECT coalesce(sum(cost_usd), 0) AS usd FROM ai.usage_log WHERE workspace_id = %(ws)s AND {window}",
                          p).fetchone()
-    return {**res, **runs, "cost_usd": float(cost["usd"])}
+    prices = {m: {"input": i, "output": o} for m, (i, o) in PRICES.items() if not m.startswith("fake")}
+    s = get_settings()
+    return {**res, **runs, "cost_usd": float(cost["usd"]), "days": days, "prices": prices,
+            "models": {"standard": s.chat_model, "advanced": s.chat_model_advanced}}
 
 
 # ---------------------------------------------------------------- knowledge

@@ -13,3 +13,4 @@ export * from "./consent.service";
 export * from "./ai-agent.service";
 export * from "./ai-widget.service";
 export * from "./ai-sample-data.service";
+export * from "./billing.service";
