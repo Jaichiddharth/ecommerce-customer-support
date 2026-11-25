@@ -87,7 +87,7 @@ ORDER_NO_RE = re.compile(r"\b#?\s*(UX)\s*-?\s*(\d{6})\b|\border\s*(?:no\.?|numbe
 UUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
 # Store order numbers ("#1001", "SO-1001", "1001-A"): only after a "#" or the word "order", so phone
 # numbers and amounts in a message are never taken for one
-_NUMBER = r"[a-z]{0,6}-?\d{3,12}(?:-[a-z0-9]{1,4})?"
+_NUMBER = r"[a-z]{0,6}-?\d{3,12}(?:-[a-z0-9]{1,10}){0,3}"   # "#1001", "SO-1001", "CA-2017-152156"
 STORE_ORDER_RE = re.compile(
     rf"#\s*({_NUMBER})\b|\border\s*(?:no\.?|number|num|id)?\s*[:#]?\s*#?\s*({_NUMBER})\b", re.I)
 
@@ -108,10 +108,12 @@ def _mentions(text: str, number: str) -> bool:
     """Whether the message contains this order number as a whole token: '#1001' matches "any news on 1001?"
     and "#1001"; 'SO1001' also matches "so-1001" / "SO 1001". Never part of a longer number, and not with a
     different prefix ("SO-1001" is not '#1001')."""
-    parts = re.findall(r"[a-z]+|\d+", _norm(number))
+    # Parts as the number is written ("CA-2017-152156" -> ca, 2017, 152156), so separators inside it may be typed
+    # or left out ("CA 2017 152156", "ca2017152156")
+    parts = re.findall(r"[a-z]+|\d+", (number or "").lower())
     if not parts or not any(p.isdigit() and len(p) >= 3 for p in parts):
         return False
-    pattern = r"[\s#-]*".join(map(re.escape, parts))
+    pattern = r"[\s#/_-]*".join(map(re.escape, parts))
     return re.search(rf"(?<![a-z0-9])(?<![a-z]-){pattern}(?![a-z0-9])", (text or "").lower()) is not None
 
 

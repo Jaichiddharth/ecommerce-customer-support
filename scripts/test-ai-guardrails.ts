@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { sql } from "drizzle-orm";
 import { DEFAULT_POLICY, normalizePolicy, toServiceSettings } from "../src/lib/ai-agent/policy";
-import { parseSampleOrders } from "../src/lib/ai-agent/sample-data";
+import { parseSampleOrders, parseSampleProducts } from "../src/lib/ai-agent/sample-data";
 
 async function main() {
   // 1. defaults and validation
@@ -49,8 +49,39 @@ ORD-1,Linen shirt,14/11/2026,C1,Asha,+919800000001,"Flat 4B, 12 MG Road",Near Me
   const parsed = parseSampleOrders(csv, "csv");
   const addr = parsed.items[0].orders[0].shipping_address;
   assert.deepEqual(addr, { name: "Asha", line1: "Flat 4B, 12 MG Road", line2: "Near Metro", city: "Bengaluru", province: "Karnataka", zip: "560001", country: null, phone_last4: "0001" });
-  assert.ok(parsed.columns?.addresses.includes("Billing Address"), "billing address is not kept");
+  // Test data keeps every column of the file (it's an uploaded test set, not a live store)
+  assert.equal(parsed.items[0].orders[0].details?.["Billing Address"], "Office, 5 Park St");
+  assert.ok(parsed.columns?.kept.includes("Billing Address"));
   console.log("✓ shipping address settings and sample data");
+
+  // 2c. any CSV as test data: no order number column, old dates moved forward, item rows, any products file
+  const kaggle = `Row ID,Order Date,Ship Date,Ship Mode,Segment,Category,Product Name,Sales,Payment Mode
+1,08-11-2016,11-11-2016,Second Class,Consumer,Furniture,Bookcase,261.96,COD
+2,12-06-2016,16-06-2016,Standard Class,Corporate,Office Supplies,Labels,14.62,Online`;
+  const anyCsv = parseSampleOrders(kaggle, "csv", { shiftDates: true });
+  const orders = anyCsv.items.flatMap((c) => c.orders);
+  assert.deepEqual(orders.map((o) => o.order_number).sort(), ["#1001", "#1002"], "rows are numbered when there's no order id");
+  assert.equal(anyCsv.columns?.numbered, true);
+  const newest = orders.find((o) => o.details?.["Product Name"] === "Bookcase")!;
+  assert.equal(newest.details?.["Payment Mode"], "COD");
+  assert.ok(Date.now() - new Date(newest.order_date).getTime() < 3 * 86_400_000, "newest order moved to yesterday");
+  assert.equal(newest.details?.["Order Date"], newest.order_date.slice(0, 10), "date columns show the moved date");
+  assert.ok((anyCsv.columns?.dateShiftDays ?? 0) > 3000);
+  const asIs = parseSampleOrders(kaggle, "csv", { shiftDates: false }).items.flatMap((c) => c.orders);
+  assert.ok(asIs.every((o) => o.order_date.startsWith("2016")), "dates kept as in the file when not moved");
+
+  const lines = `Order ID,Order Date,Product,Category,Quantity,Region
+A-1,2026-11-20,Pen,Office,2,West
+A-1,2026-11-20,Desk,Furniture,1,West`;
+  const grouped = parseSampleOrders(lines, "csv").items[0].orders[0];
+  assert.equal(grouped.details?.Region, "West", "shared columns are order details");
+  assert.deepEqual(grouped.item_details?.map((i) => i.Category), ["Office", "Furniture"], "differing columns are per item");
+
+  const products = parseSampleProducts(`Product ID,Product Title,Brand,Color,Size,Rating,Price
+P1,Cotton tee,Acme,Red,M,4.5,499`, "csv");
+  assert.equal(products.items[0].title, "Cotton tee");
+  assert.deepEqual(products.items[0].details, { "Product ID": "P1", Brand: "Acme", Color: "Red", Size: "M", Rating: "4.5" });
+  console.log("✓ any CSV as test data (all columns, numbering, date shift)");
 
   // 3. shared rate limit
   if (!process.env.DATABASE_URL) {

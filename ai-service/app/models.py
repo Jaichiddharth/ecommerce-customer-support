@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 Outcome = Literal["answered", "clarify", "handover", "blocked"]
 HandoverReason = Literal[
@@ -177,6 +177,24 @@ class CommerceOrder(BaseModel):
     tracking_number: str | None = Field(default=None, max_length=100)
     tracking_url: str | None = Field(default=None, max_length=500)
     shipping_address: CommerceAddress | None = None
+    # Test data only (AI agent > Test data): every column of the uploaded file for this order, by its header as
+    # written, and one entry per item row for columns that differ between items. Connected stores don't send these.
+    details: dict[str, str] | None = None
+    item_details: list[dict[str, str]] | None = Field(default=None, max_length=200)
+
+    @field_validator("details")
+    @classmethod
+    def _cap_details(cls, v):
+        if not v:
+            return v
+        return {str(k)[:100]: str(val)[:500] for k, val in list(v.items())[:150]}
+
+    @field_validator("item_details")
+    @classmethod
+    def _cap_items(cls, v):
+        if not v:
+            return v
+        return [{str(k)[:100]: str(val)[:300] for k, val in list(d.items())[:60]} for d in v[:200]]
 
 
 class CommerceStore(BaseModel):
@@ -212,6 +230,15 @@ class CatalogProduct(BaseModel):
     image_url: str | None = Field(default=None, max_length=800)
     buy_url: str | None = Field(default=None, max_length=500)   # straight to checkout with this product
     available: bool = True
+    # Test data only: every other column of the uploaded products file (brand, size, colour, rating...)
+    details: dict[str, str] | None = None
+
+    @field_validator("details")
+    @classmethod
+    def _cap_details(cls, v):
+        if not v:
+            return v
+        return {str(k)[:60]: str(val)[:200] for k, val in list(v.items())[:40]}
 
 
 class SalesSettings(BaseModel):

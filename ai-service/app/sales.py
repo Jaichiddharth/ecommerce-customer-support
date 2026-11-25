@@ -64,7 +64,10 @@ def catalog_lines(catalog: list[CatalogProduct]) -> str:
             price += f" (was {p.compare_at_price})"
         stock = "in stock" if p.available else "sold out"
         desc = f" | {p.description.strip()[:240]}" if p.description else ""
-        out.append(f"[{p.ref}] {p.title} | {price} | {stock}{desc}")
+        extra = ""
+        if p.details:   # test data: the file's other columns (brand, size, colour, rating...)
+            extra = " | " + "; ".join(f"{k}: {v}" for k, v in p.details.items() if str(v).strip())[:600]
+        out.append(f"[{p.ref}] {p.title} | {price} | {stock}{desc}{extra}")
     return "\n".join(out)
 
 

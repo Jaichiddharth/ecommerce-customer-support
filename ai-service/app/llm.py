@@ -152,7 +152,9 @@ class FakeProvider:
                               self.chat_model, 50, 5)
         # Stand-in for layer 3: when the prompt allows order lookups and the question mentions the
         # customer's own order, answer ORDER_STATUS like the real model is instructed to.
-        if "\nPRODUCTS:\n" in messages[0]["content"]:      # shopping assistant: recommend matching products
+        if "\nORDER RECORD:\n" in messages[0]["content"]:   # order details: the record line the question names
+            text = self._order_detail(messages[0]["content"], question)
+        elif "\nPRODUCTS:\n" in messages[0]["content"]:      # shopping assistant: recommend matching products
             text = self._recommend(messages[0]["content"], question)
         elif ORDER_TOKEN in messages[0]["content"] and re.search(
                 r"\b(my|mera|meri)\b.*\b(order|parcel|package|delivery|shipment|stuff|purchase|items?|saman)\b",
@@ -170,6 +172,21 @@ class FakeProvider:
         for piece in re.findall(r"\S+\s*", res.text):
             yield piece
         yield res
+
+    @staticmethod
+    def _order_detail(system: str, question: str) -> str:
+        record = system.split("ORDER RECORD:\n", 1)[1]
+        number = record.splitlines()[0].split(":", 1)[-1].strip()
+        q = set(re.findall(r"[a-z0-9]+", question.lower())) - {"order", "number", "status", "my", "the", "what", "was"}
+        best, hits = None, 0
+        for line in record.splitlines()[2:]:   # the line whose name shares the most words with the question
+            key, _, value = line.partition(":")
+            n = len(set(re.findall(r"[a-z0-9]+", key.lower())) & q)
+            if n > hits:
+                best, hits = (key.strip(), value.strip()), n
+        if best:
+            return f"For order {number}, the {best[0].lower()} is {best[1]}."
+        return f"I don't have that detail for order {number}. I can connect you with our team."
 
     @staticmethod
     def _recommend(system: str, question: str) -> str:

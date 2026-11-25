@@ -54,6 +54,14 @@ def test_prefixed_store_numbers():
     assert src.extract_order_ref("so1001?") == "SO-1001"
 
 
+def test_multi_part_numbers_from_datasets():
+    """Order IDs with several separators (Kaggle-style "CA-2017-152156") match as typed, not cut at a hyphen."""
+    src = commerce.ProvidedOrders(ctx(store(orders=[order("CA-2017-152156"), order("CA-2017-138688")])))
+    assert src.extract_order_ref("Where is my order CA-2017-152156?") == "CA-2017-152156"
+    assert src.extract_order_ref("order ca 2017 138688") == "CA-2017-138688"
+    assert src.extract_order_ref("ca2017152156 please") == "CA-2017-152156"
+
+
 def test_customer_and_orders_newest_first():
     src = commerce.ProvidedOrders(ctx(store(orders=[order("#1001", days_ago=9), order("#1002", days_ago=1)])))
     cust = src.find_customer("org_1", None)

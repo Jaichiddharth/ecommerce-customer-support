@@ -8,8 +8,10 @@ import { AppError } from "@/lib/errors";
 import { aiAgentRepository } from "@/lib/db/repositories";
 import { aiRequest, workspaceIdFor } from "@/lib/ai-agent/service-client";
 import {
+  orderDetailChecks,
   ordersToChecks,
   parseSampleOrders,
+  productDetailChecks,
   parseSampleProducts,
   productsToChecks,
   sampleOrderCount,
@@ -21,8 +23,47 @@ import {
 import { aiAgentService } from "./ai-agent.service";
 
 export type SampleKind = "orders" | "products";
-const MAX_FILE_CHARS = 10_000_000;
+const MAX_FILE_CHARS = 20_000_000;
 const SOURCE: Record<SampleKind, "sample_orders" | "sample_products"> = { orders: "sample_orders", products: "sample_products" };
+
+/** Every column of the test data as a table (first rows), for AI agent > Test data */
+export interface SampleTable {
+  headers: string[];
+  rows: string[][];
+  /** Rows in the data (the table shows the first ones) */
+  total: number;
+}
+
+const TABLE_ROWS = 100;
+
+function ordersTable(customers: SampleCustomer[]): SampleTable | null {
+  const orders = customers.flatMap((c) => c.orders);
+  if (!orders.some((o) => o.details || o.item_details)) return null;
+  const headers: string[] = [];
+  const seen = new Set<string>();
+  const add = (k: string) => { if (!seen.has(k)) { seen.add(k); headers.push(k); } };
+  for (const o of orders.slice(0, 500)) {
+    Object.keys(o.details ?? {}).forEach(add);
+    (o.item_details ?? []).forEach((i) => Object.keys(i).forEach(add));
+  }
+  const rows = orders.slice(0, TABLE_ROWS).map((o) => [
+    o.order_number,
+    o.partially_shipped ? "Partly shipped" : o.status,
+    ...headers.map((h) => o.details?.[h] ?? [...new Set((o.item_details ?? []).map((i) => i[h]).filter(Boolean))].join(" · ")),
+  ]);
+  return { headers: ["Order", "Status (worked out)", ...headers], rows, total: orders.length };
+}
+
+function productsTable(items: SampleProduct[]): SampleTable | null {
+  if (!items.some((p) => p.details)) return null;
+  const headers: string[] = [];
+  const seen = new Set<string>();
+  for (const p of items.slice(0, 500)) for (const k of Object.keys(p.details ?? {})) if (!seen.has(k)) { seen.add(k); headers.push(k); }
+  const rows = items.slice(0, TABLE_ROWS).map((p) => [
+    p.title, p.price ?? "", p.available ? "In stock" : "Sold out", ...headers.map((h) => p.details?.[h] ?? ""),
+  ]);
+  return { headers: ["Title", "Price", "Stock", ...headers], rows, total: items.length };
+}
 
 export interface SampleDataView {
   orders: {
@@ -31,12 +72,14 @@ export interface SampleDataView {
     preview: { order: string; customer: string; status: string; items: string; date: string; tracking: string | null }[];
     fileName: string | null;
     updatedAt: Date;
+    table: SampleTable | null;
   } | null;
   products: {
     count: number;
     preview: { title: string; price: string | null; compareAtPrice: string | null; available: boolean; imageUrl: string | null }[];
     fileName: string | null;
     updatedAt: Date;
+    table: SampleTable | null;
   } | null;
 }
 
@@ -81,6 +124,7 @@ export class AiSampleDataService {
               })),
             fileName: orders.fileName,
             updatedAt: orders.updatedAt,
+            table: ordersTable(customers),
           }
         : null,
       products: products
@@ -89,6 +133,7 @@ export class AiSampleDataService {
             preview: items.slice(0, 8).map((p) => ({ title: p.title, price: p.price, compareAtPrice: p.compare_at_price, available: p.available, imageUrl: p.image_url })),
             fileName: products.fileName,
             updatedAt: products.updatedAt,
+            table: productsTable(items),
           }
         : null,
     };
@@ -99,7 +144,7 @@ export class AiSampleDataService {
     if (!format) throw AppError.validation("Choose a CSV or JSON file.", "format");
     const text = typeof body?.text === "string" ? body.text : "";
     if (!text.trim()) throw AppError.validation("The file is empty.", "text");
-    if (text.length > MAX_FILE_CHARS) throw AppError.validation("The file is too large (max 10 MB).", "text");
+    if (text.length > MAX_FILE_CHARS) throw AppError.validation("The file is too large (max 20 MB).", "text");
     const fileName = typeof body?.fileName === "string" ? body.fileName.slice(0, 200) : null;
 
     let items: SampleCustomer[] | SampleProduct[];
@@ -108,7 +153,8 @@ export class AiSampleDataService {
     let columns: ColumnReport | null = null;
     try {
       if (kind === "orders") {
-        const parsed = parseSampleOrders(text, format);
+        // Old datasets: dates moved forward so the newest order is recent (unless the upload says not to)
+        const parsed = parseSampleOrders(text, format, { shiftDates: body?.shiftDates !== false });
         items = parsed.items;
         skipped = parsed.skipped;
         count = sampleOrderCount(parsed.items);
@@ -130,7 +176,9 @@ export class AiSampleDataService {
     let checksError: string | null = null;
     try {
       await this.deleteChecks(user, kind);
-      const checks = kind === "orders" ? ordersToChecks(items as SampleCustomer[], "sample_orders") : productsToChecks(items as SampleProduct[]);
+      const checks = kind === "orders"
+        ? [...ordersToChecks(items as SampleCustomer[], "sample_orders"), ...orderDetailChecks(items as SampleCustomer[], "sample_orders")]
+        : [...productsToChecks(items as SampleProduct[]), ...productDetailChecks(items as SampleProduct[])];
       if (checks.length) checksCreated = ((await aiAgentService.createTestCases(user, checks)) as { created: string[] }).created.length;
     } catch (err) {
       checksError = err instanceof AppError ? err.message : "The checks couldn't be generated.";

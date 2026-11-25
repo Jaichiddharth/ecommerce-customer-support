@@ -13,11 +13,14 @@ import { parseCsv } from "./csv";
 
 type Node = Record<string, any>;
 
-export const MAX_SAMPLE_ORDERS = 2000;
-export const MAX_SAMPLE_PRODUCTS = 1000;
+export const MAX_SAMPLE_ORDERS = 5000;
+export const MAX_SAMPLE_PRODUCTS = 2000;
 const MAX_ORDERS_PER_CUSTOMER = 50;
 export const MAX_ORDER_CHECKS = 50;
+/** Checks that ask about another column of the order (payment mode, category, discount...) */
+export const MAX_DETAIL_CHECKS = 25;
 export const MAX_PRODUCT_CHECKS = 30;
+export const MAX_PRODUCT_DETAIL_CHECKS = 15;
 const CATALOG_SIZE = 6;
 const SAMPLE_STORE = { ref: "sample:orders", platform: "shopify", name: "Sample orders" };
 
@@ -40,6 +43,8 @@ export interface SampleProduct {
   available: boolean;
   /** Tags and product type, for matching visitors' words */
   keywords: string;
+  /** Test data only: every other column of the file (brand, size, colour, rating...), by its header as written */
+  details?: Record<string, string>;
 }
 
 export interface ParseResult<T> {
@@ -204,7 +209,7 @@ const DELIVERY_ALIASES: Record<string, string> = { intransit: "in_transit", outf
 const get = (r: Node, ...keys: string[]) => keys.map((k) => r[k]).find((v) => v !== undefined && v !== null && String(v).trim() !== "");
 
 /** Shopify's Orders export CSV: one row per line item, the order's details on its first row */
-function shopifyOrdersCsv(rows: Node[]): { order: AgentOrder; who: ReturnType<typeof jsonCustomerOf> }[] {
+function shopifyOrdersCsv(rows: Node[], headers?: Map<string, string>): { order: AgentOrder; who: ReturnType<typeof jsonCustomerOf> }[] {
   const byName = new Map<string, { first: Node; lines: Node[] }>();
   for (const r of rows) {
     const name = str(r.name, 60);
@@ -235,6 +240,7 @@ function shopifyOrdersCsv(rows: Node[]): { order: AgentOrder; who: ReturnType<ty
     const email = str(first.email);
     const phone = str(get(first, "phone", "billingphone", "shippingphone"), 30);
     const who = { ref: email ?? phone ?? `guest:${name}`, name: str(get(first, "billingname", "shippingname"), 100), email, phone };
+    if (headers) Object.assign(order, rowDetails(lines, headers, (r, k) => String(r[k] ?? "").trim()));
     return { order, who };
   });
 }
@@ -278,16 +284,52 @@ const ORDER_COLUMNS = {
 } as const;
 type OrderField = keyof typeof ORDER_COLUMNS;
 
-/** Columns a file has, kept in the AI agent's order data or not, by their header as written in the file */
+/** How a CSV's columns were used, by their header as written in the file. Every column is kept (test data). */
 export interface ColumnReport {
+  /** Read for order-status answers (order number, dates, status, courier, tracking, customer...) */
   used: string[];
-  /** Not needed for order-status answers (product ids, categories, prices, segments...) */
-  ignored: string[];
-  /** Addresses that are not kept (billing and other non-shipping addresses) */
-  addresses: string[];
+  /** Every other column: kept with the order, so the test chat can answer questions about it */
+  kept: string[];
+  /** The file had no order number column: rows were numbered #1001, #1002... */
+  numbered: boolean;
+  /** Days every date was moved forward so the newest order is recent (null: dates as in the file) */
+  dateShiftDays: number | null;
 }
 
-const ADDRESS = /address|street|city|state|province|region|country|pincode|postal|zip|postcode|landmark/;
+export interface SampleParseOptions {
+  /** Move every date forward by the same number of days so the newest order is from yesterday (old datasets) */
+  shiftDates?: boolean;
+}
+
+const DAY_MS = 86_400_000;
+
+/** A date column's value moved by `shiftMs`, written as YYYY-MM-DD (with the time when the file had one) */
+function shiftedText(raw: string, shiftMs: number, dayFirst: boolean): string {
+  const iso = parseDate(raw, dayFirst);
+  if (!iso) return raw;
+  const d = new Date(new Date(iso).getTime() + shiftMs).toISOString();
+  return /\d{1,2}:\d{2}/.test(raw) ? `${d.slice(0, 10)} ${d.slice(11, 16)}` : d.slice(0, 10);
+}
+
+/**
+ * Every column of an order's rows, by header as written: values shared by all its rows go in `details`, values that
+ * differ between rows (one row per item) in `item_details`, one entry per row.
+ */
+function rowDetails(lines: Node[], headers: Map<string, string>, value: (r: Node, key: string) => string) {
+  const details: Record<string, string> = {};
+  const varying: [string, string][] = [];
+  for (const [key, label] of headers) {
+    const vals = lines.map((l) => value(l, key));
+    const distinct = new Set(vals.filter((v) => v !== ""));
+    if (distinct.size === 0) continue;
+    if (distinct.size === 1 && vals.every((v) => v === vals[0] || v === "")) details[label] = [...distinct][0].slice(0, 500);
+    else varying.push([key, label]);
+  }
+  const item_details = varying.length
+    ? lines.map((l) => Object.fromEntries(varying.map(([k, label]) => [label, value(l, k).slice(0, 300)]).filter(([, v]) => v !== "")))
+    : undefined;
+  return { details, item_details };
+}
 
 /**
  * Dates as stores and spreadsheets write them: ISO, day-first (22/11/2026, 22-11-26, 22.11.2026) or month-first
@@ -340,7 +382,11 @@ const STATUS_RANK: Record<AgentOrderStatus, number> = { Pending: 0, Shipped: 1, 
  * some of its items have shipped. Without a status column the status comes from the dates (shipped, delivered,
  * cancelled, returned).
  */
-function genericOrdersCsv(rows: Node[], headers: Map<string, string>): { entries: { order: AgentOrder | null; who: ReturnType<typeof jsonCustomerOf> }[]; columns: ColumnReport } {
+function genericOrdersCsv(
+  rows: Node[],
+  headers: Map<string, string>,
+  opts: SampleParseOptions = {},
+): { entries: { order: AgentOrder | null; who: ReturnType<typeof jsonCustomerOf> }[]; columns: ColumnReport } {
   const present = new Set(headers.keys());
   const colsFor = (f: OrderField) => ORDER_COLUMNS[f].filter((k) => present.has(k)) as string[];
   const col = Object.fromEntries((Object.keys(ORDER_COLUMNS) as OrderField[]).map((f) => [f, colsFor(f)])) as Record<OrderField, string[]>;
@@ -351,9 +397,24 @@ function genericOrdersCsv(rows: Node[], headers: Map<string, string>): { entries
     else col.customerRef = col.customerRef.filter((c) => c !== "customer");
   }
   if (col.orderTotal.length) col.lineTotal = [];
-  const dayFirst = detectDayFirst(rows, [...col.orderDate, ...col.shippingDate, ...col.expected, ...col.delivered, ...col.cancelled, ...col.returned]);
+  const dateCols = [...col.orderDate, ...col.shippingDate, ...col.expected, ...col.delivered, ...col.cancelled, ...col.returned];
+  const dayFirst = detectDayFirst(rows, dateCols);
   const val = (r: Node, f: OrderField) => col[f].map((c) => r[c]).find((v) => v !== undefined && v !== null && String(v).trim() !== "");
-  const when = (r: Node, f: OrderField) => parseDate(val(r, f), dayFirst);
+  // Old datasets: move every date forward together so the newest order is from yesterday, which gives the mix of
+  // statuses a live store has (being prepared, shipped, delivered) instead of everything delivered years ago
+  let shiftMs = 0;
+  if (opts.shiftDates) {
+    const newest = rows.reduce((max, r) => {
+      const d = parseDate(val(r, "orderDate"), dayFirst);
+      return d && d > max ? d : max;
+    }, "");
+    const gap = newest ? Date.now() - DAY_MS - new Date(newest).getTime() : 0;
+    if (gap > 3 * DAY_MS) shiftMs = Math.round(gap / DAY_MS) * DAY_MS;
+  }
+  const when = (r: Node, f: OrderField) => {
+    const d = parseDate(val(r, f), dayFirst);
+    return d && shiftMs ? new Date(new Date(d).getTime() + shiftMs).toISOString() : d;
+  };
   const num = (v: unknown) => { const n = Number(String(v ?? "").replace(/[^\d.-]/g, "")); return v !== undefined && v !== "" && Number.isFinite(n) ? n : null; };
   const now = Date.now();
   const past = (iso: string | null) => !!iso && new Date(iso).getTime() <= now;
@@ -372,11 +433,20 @@ function genericOrdersCsv(rows: Node[], headers: Map<string, string>): { entries
   const fallbackUsed = new Set<string>();
   const groups = new Map<string, Node[]>();
   const noNumber: Node[] = [];
-  for (const r of rows) {
-    const n = str(val(r, "number"), 60);
-    if (!n) { noNumber.push(r); continue; }
-    groups.set(n, [...(groups.get(n) ?? []), r]);
-  }
+  // No order number column (many open datasets): each row is one order, numbered #1001, #1002...
+  const numbered = col.number.length === 0;
+  rows.forEach((r, i) => {
+    const n = numbered ? String(1001 + i) : str(val(r, "number"), 60);
+    if (!n) { noNumber.push(r); return; }
+    const g = groups.get(n);
+    if (g) g.push(r);
+    else groups.set(n, [r]);
+  });
+  const dateKeys = new Set(dateCols);
+  const cell = (r: Node, key: string) => {
+    const v = String(r[key] ?? "").trim();
+    return v && shiftMs && dateKeys.has(key) ? shiftedText(v, shiftMs, dayFirst) : v;
+  };
 
   const entries = Array.from(groups.entries()).map(([number, lines]) => {
     const first = lines[0];
@@ -432,23 +502,21 @@ function genericOrdersCsv(rows: Node[], headers: Map<string, string>): { entries
         city: val(first, "shipCity"), province: val(first, "shipProvince"), zip: val(first, "shipZip"),
         country: val(first, "shipCountry"), phone: val(first, "shipPhone") ?? phone,
       }),
+      // Test data: every column, so the test chat can answer about any of them
+      ...rowDetails(lines, headers, cell),
     };
     return { order: order as AgentOrder | null, who };
   });
   for (const r of noNumber) entries.push({ order: null, who: { ref: "", name: null, email: null, phone: null } });
 
   const usedKeys = new Set([...(Object.keys(col) as OrderField[]).filter((f) => f !== "itemFallback").flatMap((f) => col[f]), ...fallbackUsed]);
-  const columns: ColumnReport = { used: [], ignored: [], addresses: [] };
-  for (const [key, label] of headers) {
-    if (usedKeys.has(key)) columns.used.push(label);
-    else if (ADDRESS.test(key)) columns.addresses.push(label);
-    else columns.ignored.push(label);
-  }
+  const columns: ColumnReport = { used: [], kept: [], numbered, dateShiftDays: shiftMs ? Math.round(shiftMs / DAY_MS) : null };
+  for (const [key, label] of headers) (usedKeys.has(key) ? columns.used : columns.kept).push(label);
   return { entries, columns };
 }
 
 /** Sample orders from a CSV or JSON file, grouped by customer */
-export function parseSampleOrders(text: string, format: "csv" | "json"): ParseResult<SampleCustomer> {
+export function parseSampleOrders(text: string, format: "csv" | "json", opts: SampleParseOptions = {}): ParseResult<SampleCustomer> {
   let entries: { order: AgentOrder | null; who: ReturnType<typeof jsonCustomerOf> }[];
   let columns: ColumnReport | undefined;
   if (format === "json") {
@@ -463,13 +531,10 @@ export function parseSampleOrders(text: string, format: "csv" | "json"): ParseRe
     });
   } else {
     const { rows, headers } = csvTable(text);
-    if (headers.has("lineitemname") && headers.has("name")) entries = shopifyOrdersCsv(rows);
-    else if (ORDER_COLUMNS.number.some((c) => headers.has(c))) ({ entries, columns } = genericOrdersCsv(rows, headers));
-    else {
-      throw new Error(
-        `Couldn't find an order number column (looked for "Order ID", "Order number", "Order no"…). Columns in this file: ${Array.from(headers.values()).slice(0, 12).join(", ")}.`,
-      );
-    }
+    if (!rows.length) throw new Error("The file has a header row but no data rows.");
+    if (headers.has("lineitemname") && headers.has("name")) entries = shopifyOrdersCsv(rows, headers);
+    // Any other CSV: an order number column groups rows into orders; without one, each row is an order
+    else ({ entries, columns } = genericOrdersCsv(rows, headers, opts));
   }
   let skipped = 0;
   const customers = new Map<string, SampleCustomer>();
@@ -540,7 +605,7 @@ function findProducts(doc: unknown): Node[] {
 }
 
 /** Shopify's Products export CSV: one row per variant/image, the product's details on its first row */
-function shopifyProductsCsv(rows: Node[]): (SampleProduct | null)[] {
+function shopifyProductsCsv(rows: Node[], headers: Map<string, string>): (SampleProduct | null)[] {
   const byHandle = new Map<string, Node[]>();
   for (const r of rows) {
     const h = str(r.handle, 200);
@@ -550,7 +615,13 @@ function shopifyProductsCsv(rows: Node[]): (SampleProduct | null)[] {
   return Array.from(byHandle.values()).map((group) => {
     const first = group.find((r) => str(r.title)) ?? group[0];
     if (String(first.status ?? "active").toLowerCase() === "archived") return null;
-    return restProduct({
+    const details: Record<string, string> = {};
+    for (const [key, label] of headers) {
+      if (["title", "bodyhtml"].includes(key)) continue;
+      const vals = [...new Set(group.map((r) => String(r[key] ?? "").trim()).filter(Boolean))];
+      if (vals.length) details[label] = vals.join(", ").slice(0, 200);
+    }
+    const product = restProduct({
       title: first.title,
       body_html: first.bodyhtml,
       product_type: first.type || first.productcategory,
@@ -564,12 +635,40 @@ function shopifyProductsCsv(rows: Node[]): (SampleProduct | null)[] {
         inventory_policy: r.variantinventorypolicy,
       })),
     }, null);
+    return product ? { ...product, details } : null;
   });
 }
 
-function templateProductsCsv(rows: Node[]): (SampleProduct | null)[] {
+/** Product columns read into the product itself; every other column is kept in `details` */
+const PRODUCT_READ = new Set(["title", "name", "product", "productname", "currency", "price", "sellingprice", "mrp", "compareatprice",
+  "originalprice", "wasprice", "available", "instock", "stock", "availability", "url", "link", "producturl", "imageurl", "image",
+  "imagesrc", "description", "details", "bodyhtml"]);
+
+/** The column that names the product: a usual title column, else the first one whose header says name/title/product */
+function titleKey(headers: Map<string, string>): string | null {
+  for (const k of ["title", "name", "product", "productname"]) if (headers.has(k)) return k;
+  const keys = [...headers.keys()].filter((k) => !/(id|code|sku|no|number|url|link|image)$/.test(k));
+  for (const re of [/title/, /name/, /product/]) {
+    const k = keys.find((x) => re.test(x));
+    if (k) return k;
+  }
+  return null;
+}
+
+function productDetails(r: Node, headers: Map<string, string>, skip: Set<string>): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const [key, label] of headers) {
+    const v = String(r[key] ?? "").trim();
+    if (v && !skip.has(key)) out[label] = v.slice(0, 200);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function templateProductsCsv(rows: Node[], headers: Map<string, string>): (SampleProduct | null)[] {
+  const tKey = titleKey(headers) ?? [...headers.keys()][0];
+  const skip = new Set([...PRODUCT_READ, tKey]);
   return rows.map((r) => {
-    const title = str(get(r, "title", "name", "product", "productname"));
+    const title = str(r[tKey]) ?? str(get(r, "title", "name", "product", "productname"));
     if (!title) return null;
     const currency = str(get(r, "currency"), 10);
     const price = get(r, "price", "sellingprice", "mrp");
@@ -587,6 +686,7 @@ function templateProductsCsv(rows: Node[]): (SampleProduct | null)[] {
       buy_url: null,
       available: !["no", "false", "0", "soldout", "outofstock", "n"].includes(avail),
       keywords: [get(r, "type", "category", "producttype"), get(r, "tags"), get(r, "vendor", "brand")].filter(Boolean).join(" ").slice(0, 300),
+      details: productDetails(r, headers, skip),
     };
   });
 }
@@ -600,11 +700,11 @@ export function parseSampleProducts(text: string, format: "csv" | "json"): Parse
     if (!raw.length) throw new Error("Couldn't find any products (objects with a title) in this file.");
     found = raw.map((p) => restProduct(p, null));
   } else {
-    const rows = csvObjects(text);
-    const cols = new Set(Object.keys(rows[0] ?? {}));
-    if (cols.has("handle") && cols.has("variantprice")) found = shopifyProductsCsv(rows);
-    else if (["title", "name", "product", "productname"].some((c) => cols.has(c))) found = templateProductsCsv(rows);
-    else throw new Error('Couldn\'t find a product title column. Use the template, or a Shopify products export ("Handle" and "Variant Price" columns).');
+    const { rows, headers } = csvTable(text);
+    if (!rows.length) throw new Error("The file has a header row but no data rows.");
+    // Shopify's export, else any CSV: the title/name column (or the first column) names each product
+    if (headers.has("handle") && headers.has("variantprice")) found = shopifyProductsCsv(rows, headers);
+    else found = templateProductsCsv(rows, headers);
   }
   const items = found.filter((p): p is SampleProduct => !!p).slice(0, MAX_SAMPLE_PRODUCTS);
   if (!items.length) throw new Error("No products with a title were found in this file.");
@@ -630,7 +730,7 @@ export function searchSampleProducts(products: SampleProduct[], text: string, n 
   const scored = products
     .map((p, i) => {
       const title = p.title.toLowerCase();
-      const meta = `${p.keywords} ${p.description ?? ""}`.toLowerCase();
+      const meta = `${p.keywords} ${p.description ?? ""} ${Object.values(p.details ?? {}).join(" ")}`.toLowerCase();
       const score = q.reduce((s, w) => s + (title.includes(w) ? 3 : 0) + (meta.includes(w) ? 1 : 0), 0);
       return { p, i, score };
     })
@@ -649,6 +749,7 @@ export const toCatalogItem = (p: SampleProduct, i: number) => ({
   image_url: p.image_url,
   buy_url: p.buy_url,
   available: p.available,
+  ...(p.details ? { details: p.details } : {}),
 });
 
 // ---------------------------------------------------------------- checks generated from sample data
@@ -662,6 +763,43 @@ const STATUS_WORDS: Record<AgentOrderStatus, string> = {
   Returned: "returned",
 };
 const ORDER_QUESTIONS = ["Where is my order {n}?", "What's the status of order {n}?", "Has my order {n} shipped yet?"];
+
+/** Columns a detail check shouldn't ask about: status, dates, ids and contact details (other checks cover those) */
+const NOT_ASKED = /order ?(id|no|num|number|ref)|row ?id|^id$|index|date|time|status|customer|name|email|phone|mobile|address|street|city|pin|zip|postal|tracking|courier|awb|url|link|image/i;
+
+/** Columns worth a check: short readable values ("Second Class", "COD", "Furniture", "261.96") */
+function askable(details: Record<string, string> | undefined): [string, string][] {
+  return Object.entries(details ?? {}).filter(([k, v]) => !NOT_ASKED.test(k) && v.length >= 1 && v.length <= 40 && /[\p{L}\p{N}]/u.test(v));
+}
+
+const DETAIL_QUESTIONS = ["What is the {k} of my order {n}?", "Can you tell me the {k} for order {n}?", "For my order {n}, what was the {k}?"];
+
+/** Checks that ask about another column of the customer's order: the answer must quote the file's value */
+export function orderDetailChecks(customers: SampleCustomer[], source?: "sample_orders") {
+  const out = [];
+  const keyUse = new Map<string, number>();
+  for (const c of customers) {
+    for (const o of c.orders) {
+      if (out.length >= MAX_DETAIL_CHECKS) return out;
+      const fields = askable(o.details);
+      if (!fields.length) continue;
+      // Spread the checks over the columns: the least-asked column of this order
+      const [k, v] = [...fields].sort((a, b) => (keyUse.get(a[0]) ?? 0) - (keyUse.get(b[0]) ?? 0))[0];
+      keyUse.set(k, (keyUse.get(k) ?? 0) + 1);
+      out.push({
+        question: DETAIL_QUESTIONS[out.length % DETAIL_QUESTIONS.length].replace("{k}", k.toLowerCase()).replace("{n}", o.order_number),
+        expected: `Says the ${k} of ${o.order_number} is ${v}`,
+        category: "Order details",
+        expectOutcome: "answered",
+        mustInclude: [v],
+        asUser: { id: c.ref, ...(c.name ? { name: c.name } : {}), ...(c.email ? { email: c.email } : {}), ...(c.phone ? { phone: c.phone } : {}) },
+        commerce: sampleCommerce(c),
+        ...(source ? { source } : {}),
+      });
+    }
+  }
+  return out;
+}
 
 /** One order-status check per order (latest order of each customer first), each carrying the customer's orders */
 export function ordersToChecks(customers: SampleCustomer[], source?: "sample_orders") {
@@ -680,6 +818,31 @@ export function ordersToChecks(customers: SampleCustomer[], source?: "sample_ord
     commerce: sampleCommerce(c),
     ...(source ? { source } : {}),
   }));
+}
+
+/** Shopping checks about another column of a product ("What's the brand of the Cotton tee?") */
+export function productDetailChecks(products: SampleProduct[]) {
+  const out = [];
+  const keyUse = new Map<string, number>();
+  const step = Math.max(1, Math.floor(products.length / MAX_PRODUCT_DETAIL_CHECKS));
+  for (let i = 0; i < products.length && out.length < MAX_PRODUCT_DETAIL_CHECKS; i += step) {
+    const p = products[i];
+    const fields = askable(p.details);
+    if (!fields.length) continue;
+    const [k, v] = [...fields].sort((a, b) => (keyUse.get(a[0]) ?? 0) - (keyUse.get(b[0]) ?? 0))[0];
+    keyUse.set(k, (keyUse.get(k) ?? 0) + 1);
+    const catalog = [toCatalogItem(p, 0), ...searchSampleProducts(products, p.title).filter((c) => c.title !== p.title).slice(0, CATALOG_SIZE - 1)];
+    out.push({
+      question: `What's the ${k.toLowerCase()} of the ${p.title}?`,
+      expected: `Says the ${k} of the ${p.title} is ${v}`,
+      category: "Product details",
+      expectOutcome: "answered",
+      mustInclude: [v],
+      catalog: catalog.map((c, j) => ({ ...c, ref: `P${j + 1}` })),
+      source: "sample_products" as const,
+    });
+  }
+  return out;
 }
 
 /** Shopping checks: a visitor asks for a product; the assistant must offer it (or say it's sold out) */

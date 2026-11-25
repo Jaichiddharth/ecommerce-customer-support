@@ -22,6 +22,13 @@ export interface ByoTest {
 
 export type SampleKind = 'orders' | 'products';
 
+/** Every column of the test data (first rows) */
+export interface SampleTable {
+  headers: string[];
+  rows: string[][];
+  total: number;
+}
+
 export interface SampleData {
   orders: {
     count: number;
@@ -29,12 +36,14 @@ export interface SampleData {
     preview: { order: string; customer: string; status: string; items: string; date: string; tracking: string | null }[];
     fileName: string | null;
     updatedAt: string;
+    table: SampleTable | null;
   } | null;
   products: {
     count: number;
     preview: { title: string; price: string | null; compareAtPrice: string | null; available: boolean; imageUrl: string | null }[];
     fileName: string | null;
     updatedAt: string;
+    table: SampleTable | null;
   } | null;
 }
 
@@ -45,8 +54,8 @@ export interface SampleUpload {
   skipped: number;
   checksCreated: number;
   checksError: string | null;
-  /** CSV orders: which of the file's columns were read */
-  columns: { used: string[]; ignored: string[]; addresses: string[] } | null;
+  /** CSV orders: how the file's columns were used (all are kept) */
+  columns: { used: string[]; kept: string[]; numbered: boolean; dateShiftDays: number | null } | null;
 }
 
 export interface WidgetConfig {
@@ -306,7 +315,7 @@ export const aiAgentApi = {
   removeByo: async () => (await apiClient.delete(`${base}/byo`)).data.config as AgentConfig,
 
   sampleData: async () => (await apiClient.get(`${base}/sample-data`)).data.sample as SampleData,
-  uploadSampleData: async (kind: SampleKind, body: { format: 'csv' | 'json'; text: string; fileName: string }) =>
+  uploadSampleData: async (kind: SampleKind, body: { format: 'csv' | 'json'; text: string; fileName: string; shiftDates?: boolean }) =>
     (await apiClient.put(`${base}/sample-data/${kind}`, body)).data as SampleUpload,
   removeSampleData: async (kind: SampleKind) => (await apiClient.delete(`${base}/sample-data/${kind}`)).data.sample as SampleData,
 

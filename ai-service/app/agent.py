@@ -30,7 +30,7 @@ from .models import ChatRequest, ChatResponse, Citation, Usage
 from .embed_cache import embed_query
 from .retrieval import search
 from .persona import LENGTH_WORDS, voice
-from . import address, commerce, dialogue, gaps, intent, order_issues, retention, sales, tools, topics, wismo
+from . import address, commerce, dialogue, gaps, intent, order_details, order_issues, retention, sales, tools, topics, wismo
 from .router import cache_lookup, match_flow
 
 log = logging.getLogger("unocx.agent")
@@ -366,6 +366,12 @@ def _prepare(req: ChatRequest) -> ChatResponse | Plan:
                               prev_offer=dialogue.last_offer(ctx.prev_run), change_url=pol.address_change_url)
         if addr:
             return _address_reply(ctx, addr)
+
+    # 3b-. any other detail of the customer's own order (test data carrying all of its file's columns)
+    if pol.wismo_enabled and order_details.has_details():
+        details = _order_details_reply(ctx, order_question)
+        if details:
+            return details
 
     # 3b. order status (WISMO): answered from order data, no LLM call. Signed-in customers only.
     order = None
@@ -1046,6 +1052,39 @@ def _identified_customer(req: ChatRequest) -> dict | None:
     except Exception:
         log.exception("customer lookup failed")
         return None
+
+
+def _order_details_reply(ctx: Ctx, question: str) -> ChatResponse | None:
+    """A question about one of the order's columns (payment mode, category, discount...): answered by a short model
+    call that sees only this customer's order. None when it's not that kind of question (wismo answers status)."""
+    req = ctx.req
+    if order_issues.detect_issue(question) or address.intent(question) is not None:
+        return None
+    cust = _identified_customer(req)
+    if not cust:
+        return None
+    order = order_details.pick_order(req.workspace_id, cust, question)
+    if not order or not order.get("details") or not order_details.asks_about(question, order):
+        return None
+    prev_user = [g.mask_secrets(m.content)[0] for m in req.messages[:-1] if m.role == "user"]
+    ctx.language = _allowed_language(req, conversation_language(question, prev_user))
+    try:
+        res = order_details.answer(order, question, reply_instruction(req.settings.language, ctx.language),
+                                   req.settings.policy.model_tier)
+    except Exception:
+        log.exception("order details answer failed")
+        return None
+    log_usage(req.workspace_id, "order_details", res.model, res.input_tokens, res.output_tokens)
+    pol, s = req.settings.policy, get_settings()
+    text, _, _ = g.postprocess_reply((res.text or "").strip(), set(), pol.max_reply_chars or s.max_reply_chars)
+    if not text:
+        return None
+    ctx.customer = cust
+    ctx.tool = {"name": "order_details", "matched": True, "orders": [order["order_number"]]}
+    ctx.flags += ["order_lookup", "order_details"]
+    usage = Usage(model=res.model, input_tokens=res.input_tokens, output_tokens=res.output_tokens,
+                  cost_usd=0.0 if ctx.byo else round(res.cost, 6))
+    return _final(ctx, "answered", "tool", text, usage=usage)
 
 
 def _order_reply(ctx: Ctx, question: str, matched_by: str, usage: Usage | None = None) -> ChatResponse:

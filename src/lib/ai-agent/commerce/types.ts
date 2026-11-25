@@ -48,6 +48,13 @@ export interface AgentOrder {
   tracking_url: string | null;
   /** Null when unknown, or the store hasn't granted access to addresses */
   shipping_address?: AgentAddress | null;
+  /**
+   * Test data only (AI agent > Test data): every column of the uploaded file for this order, by its header as
+   * written. Columns whose value differs between the order's item rows are in `item_details`, one entry per item.
+   * Orders from connected stores never carry these.
+   */
+  details?: Record<string, string>;
+  item_details?: Record<string, string>[];
 }
 
 export interface AgentStoreOrders {
