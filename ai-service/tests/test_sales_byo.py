@@ -32,6 +32,15 @@ def test_pick_products_strips_tags_and_keeps_order():
     assert "[P" not in text and "shirt." in text
 
 
+def test_pick_products_by_name_when_tags_are_missing():
+    """The model copies its earlier (untagged) replies: products named exactly still become links"""
+    cat = [CatalogProduct(**p) for p in CATALOG]
+    text, picked = sales.pick_products("1. Silk scarf - sold out for now.\n2. denim jacket - warm.\n3. Linen shirt [P1] - airy.", cat)
+    assert [p.ref for p in picked] == ["P3", "P2", "P1"]
+    _, none = sales.pick_products("Shirts and jackets are popular this season.", cat)
+    assert none == []
+
+
 def test_catalog_lines_show_sale_price_and_stock():
     lines = sales.catalog_lines([CatalogProduct(**p) for p in CATALOG])
     assert "₹1,499 (was ₹1,999)" in lines and "sold out" in lines

@@ -1172,9 +1172,12 @@ export class ShopifyService {
   ): Promise<{ items: Candidate[]; matchedTerm: boolean }> {
     if (store.status === ShopifyStoreStatus.REAUTH_REQUIRED) throw new AppError("SHOPIFY_AUTH_FAILED", { details: { storeId: store.id }, expected: true });
     const run = async (words: string, tagged = false) => {
+      // Only products on the website: an active product not published to the Online Store has no product page
+      // (its link and checkout link would both fail for the visitor)
+      const base = "status:active AND published_status:published";
       const filter = tagged
-        ? `status:active AND (${BESTSELLER_TAGS.map((t) => `tag:${quoteSearchValue(t)}`).join(" OR ")})`
-        : words ? `status:active AND (${words.split(" AND ").map((w) => `(title:${w} OR tag:${w} OR product_type:${w})`).join(" OR ")})` : "status:active";
+        ? `${base} AND (${BESTSELLER_TAGS.map((t) => `tag:${quoteSearchValue(t)}`).join(" OR ")})`
+        : words ? `${base} AND (${words.split(" AND ").map((w) => `(title:${w} OR tag:${w} OR product_type:${w})`).join(" OR ")})` : base;
       const data = await this.query<{ shop: { currencyCode: string }; products: { nodes: Node[] } }>(store, "agent_candidates", AGENT_CANDIDATES_QUERY, {
         first: Math.min(50, first),
         query: filter,

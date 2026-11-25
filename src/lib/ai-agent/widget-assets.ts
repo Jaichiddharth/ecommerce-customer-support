@@ -152,6 +152,7 @@ main{flex:1;overflow-y:auto;padding:16px 14px;background:#f6f7fb;display:flex;fl
 .who{align-self:flex-start;font-size:11px;color:#64748b;margin:2px 0 -6px 4px}
 .m a.pl{color:var(--c);font-weight:650;text-decoration:underline;text-underline-offset:2px}
 .m a.bl{color:#fff;background:var(--c);text-decoration:none;font-size:12px;font-weight:650;border-radius:999px;padding:1px 8px;white-space:nowrap}
+.m .so{color:#64748b;background:#f1f5f9;font-size:12px;font-weight:650;border-radius:999px;padding:1px 8px;white-space:nowrap}
 .m a.wl{color:#128c4a;font-weight:700;text-decoration:none}
 .cv{font-size:12px;color:#475569}
 .m.f{border-color:#fecaca;color:#991b1b}
@@ -234,7 +235,8 @@ footer{text-align:center;font-size:11px;color:#94a3b8;padding:0 0 8px;background
     if (full && p.price) node.appendChild(document.createTextNode(" — " + p.price + (p.compareAtPrice ? " (was " + p.compareAtPrice + ")" : "")));
     if (full && p.variant) node.appendChild(document.createTextNode(", " + p.variant));
     if (p.available && safeUrl(p.buyUrl)) { node.appendChild(document.createTextNode(" · ")); link(node, "Buy now", p.buyUrl, "bl"); }
-    else if (!p.available) node.appendChild(document.createTextNode(" (sold out)"));
+    // Sold out: no Buy now (checkout would fail); the name still opens the product page (other variants, back-in-stock)
+    else if (!p.available) { node.appendChild(document.createTextNode(" · ")); node.appendChild(el("span", "so", "Sold out")); }
   }
   /**
    * One bubble per reply: the text with its links clickable, each recommended product's name made a link (with

@@ -115,16 +115,31 @@ _TAG = re.compile(r"\s*\[(P\d{1,2})\]")
 
 
 def pick_products(text: str, catalog: list[CatalogProduct]) -> tuple[str, list[CatalogProduct]]:
-    """Reply text without the [P1] tags, and the tagged products in the order the reply mentions them."""
+    """Reply text without the [P1] tags, and the products it recommends in the order it mentions them.
+
+    A product counts when the reply tags it ("Linen shirt [P1]") or, when the model left the tag out (it copies
+    its earlier, untagged replies from the history), names it exactly as in PRODUCTS.
+    """
     by_ref = {p.ref.upper(): p for p in catalog}
-    picked: list[CatalogProduct] = []
-    for ref in _TAG.findall(text or ""):
-        p = by_ref.get(ref.upper())
-        if p and p not in picked and len(picked) < MAX_RECOMMENDED:
-            picked.append(p)
+    found: dict[str, tuple[int, CatalogProduct]] = {}
+    for m in _TAG.finditer(text or ""):
+        p = by_ref.get(m.group(1).upper())
+        if p and p.ref not in found:
+            found[p.ref] = (m.start(), p)
     clean = _TAG.sub("", text or "")
     clean = re.sub(r"[ \t]+([.,!?;:])", r"\1", clean)
-    return re.sub(r"[ \t]{2,}", " ", clean).strip(), picked
+    clean = re.sub(r"[ \t]{2,}", " ", clean).strip()
+    low = clean.lower()
+    # Positions in the cleaned text, so tagged and named products sort together
+    for p in catalog:
+        title = (p.title or "").strip().lower()
+        k = low.find(title) if len(title) >= 3 else -1
+        if k >= 0:
+            found[p.ref] = (k, p)
+        elif p.ref in found:
+            found[p.ref] = (len(low), found[p.ref][1])   # tagged under another wording: keep it, after the named ones
+    picked = [p for _, p in sorted(found.values(), key=lambda x: x[0])][:MAX_RECOMMENDED]
+    return clean, picked
 
 
 def suggestions(req: ChatRequest) -> list[str]:
